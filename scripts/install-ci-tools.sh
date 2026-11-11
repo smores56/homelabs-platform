@@ -41,7 +41,9 @@ install -m 0755 "$tmp/tofu/tofu" "$dest/tofu"
 
 fetch "https://github.com/vectordotdev/vector/releases/download/v${VECTOR_VERSION}/vector-${VECTOR_VERSION}-x86_64-unknown-linux-gnu.tar.gz" \
   vector.tar.gz "$VECTOR_SHA256"
-tar -xzf "$tmp/vector.tar.gz" -C "$tmp" vector-x86_64-unknown-linux-gnu/bin/vector
+# The archive stores members as ./vector-.../bin/vector, so extracting a named
+# member fails; unpack the tree and install from it.
+tar -xzf "$tmp/vector.tar.gz" -C "$tmp"
 install -m 0755 "$tmp/vector-x86_64-unknown-linux-gnu/bin/vector" "$dest/vector"
 
 "$dest/kustomize" version
