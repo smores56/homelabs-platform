@@ -127,7 +127,7 @@ then drives every case with `kubectl --dry-run=server` and `kubectl auth can-i`.
 66 assertions (recorded run, 2026-11-11, kube-apiserver v1.36.2, etcd 3.6.13):
 
 - 6 stage applies plus the Flux component apply;
-- 30 fixture admissions: 10 allowed, 20 denied, each denial matched to the policy
+- 30 fixture admissions: 7 allowed, 23 denied, each denial matched to the policy
   named in `fixtures/expectations.tsv` by its denier string;
 - 27 `can-i` probes from `tests/policies/rbac.tsv`, run as
   `system:serviceaccount:tenant-apps:tenant-apps-reconciler`;
