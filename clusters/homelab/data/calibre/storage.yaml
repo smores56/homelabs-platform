@@ -1,0 +1,19 @@
+# Bound to /mnt/data/books by the PV claimRef in platform/storage. The library is
+# the claim root; Calibre-Web's own configuration and user database live in
+# `cwa-config/` inside it so one claim carries both.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: calibre-data
+  namespace: calibre
+  labels:
+    app.kubernetes.io/name: calibre
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: data
+    homelabs.dev/managed-by: platform
+spec:
+  accessModes: ["ReadWriteOnce"]
+  storageClassName: data-local
+  resources:
+    requests:
+      storage: 5Ti

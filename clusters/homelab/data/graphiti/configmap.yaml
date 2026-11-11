@@ -1,0 +1,53 @@
+# Mirror of the host's graphiti-mcp-config.yaml
+# (modules/features/ai/memory/service.nix) against Neuralwatt instead of the
+# loopback gateway. The two differences are deliberate:
+#
+#   - api_url is the public API, because the cluster has no key-holding proxy;
+#   - the key is a placeholder the init container replaces from the Secret. The
+#     image's config loader takes the key from the file, and graphiti-core will
+#     not fall back to OPENAI_API_KEY once a value is present, so rendering the
+#     file is how the real key stays out of ConfigMap data.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: graphiti-config
+  namespace: graphiti
+  labels:
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: data
+data:
+  config.yaml.tmpl: |
+    server:
+      transport: "http"
+      port: 8184
+
+    llm:
+      provider: "openai"
+      model: "deepseek-v4.1-flash"
+      temperature: 0.0
+      max_tokens: 16384
+      structured_output_mode: "json_schema"
+      providers:
+        openai:
+          api_key: "__NEURALWATT_API_KEY__"
+          api_url: "https://api.neuralwatt.com/v1"
+
+    embedder:
+      provider: "openai"
+      model: "qwen3-embedding-8b"
+      dimensions: 4096
+      providers:
+        openai:
+          api_key: "__NEURALWATT_API_KEY__"
+          api_url: "https://api.neuralwatt.com/v1"
+
+    database:
+      provider: "falkordb"
+      providers:
+        falkordb:
+          uri: "redis://graphiti-falkordb:6379"
+          database: "default_db"
+
+    graphiti:
+      group_id: "global"
+      user_id: "maki"

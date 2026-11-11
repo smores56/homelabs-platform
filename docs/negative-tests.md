@@ -93,21 +93,22 @@ namespace on one port.
 ### What runs automatically (static, CI job `policy checks`)
 
 `tests/policies/check.sh` runs with no cluster and no credentials on every push
-and pull request. 192 assertions (recorded run, 2026-11-11):
+and pull request. 277 assertions (recorded run, 2026-11-11):
 
 | Family | Assertions |
 | --- | --- |
 | `kustomize build clusters/homelab` renders, every `clusters/` and `tests/` YAML file parses (`yq`) | 2 |
-| Policy/binding pairing, names, `failurePolicy: Fail` | 45 |
-| Each binding selects exactly the namespaces in `tests/policies/bindings.tsv`, resolved against the real namespace labels | 9 |
-| Each fixture's expected policy really contains the CEL field the fixture violates | 23 |
-| RBAC deny list, wildcard-free rules, no cluster-scoped objects, only the tenant SA bound | 9 |
-| Rendered controller `args` match the reviewed flag table (`docs/flux.md`) | 13 |
-| No insecure kubeconfig flags anywhere in manifests or scripts | 1 |
-| NetworkPolicy shape: default-deny both directions, DNS to `kube-system`, broker-only tenant egress, immich from `ingress` only, no extra data flows | 12 |
-| Stage DAG (`dependsOn`), stage service accounts, apply order | 34 |
+| Policy/binding pairing, names, `failurePolicy: Fail` | 55 |
+| Each binding selects exactly the namespaces in `tests/policies/bindings.tsv`, resolved against the real namespace labels | 11 |
+| Each fixture's expected policy really contains the CEL field the fixture violates | 25 |
+| RBAC: one `data-workload` per data namespace, tenant identity, deny list, wildcard-free rules, no cluster-scoped objects | 10 |
+| Rendered controller `args` match the reviewed flag table (`docs/flux.md`), gotk patch JSON, no insecure kubeconfig flags | 14 |
+| NetworkPolicy shape: default-deny and DNS in every tier namespace, broker-only tenant egress, per-app ingress HTTP, exact per-namespace flow sets, ingress egress to the four Services and the edge | 26 |
+| Storage: `data-local` class, PV paths/claimRefs/node affinity, one PVC per namespace, no `hostPath`, dump schedule/timezone/deadline/path, hostname-to-Service contract | 39 |
+| Data workload shape: `data-workload` identity, `managed-by=platform`, uid 1000, limits, probes | 5 |
+| Stage DAG (`dependsOn`), stage service accounts, apply order | 42 |
 | `gotk-sync.yaml` equals `bootstrap.sh --print-sync`, bootstrap flags, tenant Kustomization pins | 13 |
-| Fixture/expectation table completeness and `# expect:` headers | 31 |
+| Fixture/expectation table completeness and `# expect:` headers | 35 |
 
 The static half cannot evaluate CEL: it proves the expression *mentions* the
 field and that the binding reaches the intended namespaces. Enforcement is the
@@ -122,19 +123,21 @@ nix shell nixpkgs#etcd nixpkgs#kubernetes nixpkgs#openssl nixpkgs#kustomize \
 
 `tests/policies/apiserver.sh` boots etcd plus `kube-apiserver` on loopback ports
 (no kubelet, no container runtime, no root). The checker applies the real
-`gotk-components.yaml` (for the Flux CRDs), then the six platform stages in order,
-then drives every case with `kubectl --dry-run=server` and `kubectl auth can-i`.
-66 assertions (recorded run, 2026-11-11, kube-apiserver v1.36.2, etcd 3.6.13):
+`gotk-components.yaml` (for the Flux CRDs), then the seven platform stages it can
+apply without a kubelet in order, then drives every case with
+`kubectl --dry-run=server` and `kubectl auth can-i`.
+71 assertions (recorded run, 2026-11-11, kube-apiserver v1.36.2, etcd 3.6.13):
 
-- 6 stage applies plus the Flux component apply;
-- 30 fixture admissions: 7 allowed, 23 denied, each denial matched to the policy
+- 7 stage applies (namespaces, rbac, policies, network, secrets, storage,
+  tenants) plus the Flux component apply;
+- 34 fixture admissions: 9 allowed, 25 denied, each denial matched to the policy
   named in `fixtures/expectations.tsv` by its denier string;
 - 27 `can-i` probes from `tests/policies/rbac.tsv`, run as
   `system:serviceaccount:tenant-apps:tenant-apps-reconciler`;
 - 2 live attempts over the API (create a Secret, create a Kustomization), both
   `forbidden`.
 
-Result: `static+runtime: 258 passed, 0 failed`.
+Result: `static+runtime: 348 passed, 0 failed`.
 
 Two deliberate deviations from a production cluster, both so a failure is
 attributable:
@@ -163,7 +166,7 @@ attributable:
 ### Runtime result
 
 Executed on 2026-11-11 in the agent VM against the ephemeral control plane:
-`tests/policies/check.sh --runtime` → `static+runtime: 258 passed, 0 failed`.
+`tests/policies/check.sh --runtime` → `static+runtime: 348 passed, 0 failed`.
 The same checker runs without `--runtime` in CI, so a regression in any static
 assertion fails the pull request that introduces it.
 
@@ -216,8 +219,8 @@ step 9.
 1. Complete `docs/manual-steps.md` step 9 (install ESO, resume
    `platform-observability-secrets`) and step 10 (digest pinning).
 2. Emit the fixture as a data-app log line, e.g. from the Immich server pod:
-   `kubectl -n data exec deploy/immich-server -- printenv` is not enough; use the
-   app's own logger or `kubectl -n data logs` on a pod that printed it. The
+   `kubectl -n immich exec deploy/immich-server -- printenv` is not enough; use the
+   app's own logger or `kubectl -n immich logs` on a pod that printed it. The
    fixture text is `tests/observability/fixtures/immich-planted.json`.
 3. Query the tenant through the gateway, using the same contract the broker has:
 
@@ -239,3 +242,80 @@ step 9.
 Not executed: needs the live cluster (no kubelet, Loki or ESO here). Static half
 passes: `tests/observability/check.sh` → `observability: 29 passed, 0 failed`,
 Vector 0.61.0, Python 3.13.
+
+## A data app cannot mount another app's share, and dumps land before restic
+
+SDLC #580. Property under test: a pod in one data namespace cannot mount a
+PVC from another data namespace (so Immich cannot read the music or books
+library even after a compromise), a data PVC cannot be dynamically provisioned
+or named outside its namespace, and the nightly database dumps are complete on
+the share before the host's restic walk starts.
+
+### What runs automatically (CI job `policy checks`)
+
+Static, in `tests/policies/check.sh` (no cluster, no credentials):
+
+- `data-pvc-scope` is bound to every data namespace and its CEL mentions the
+  name prefix it enforces; `data-pvc-storage` likewise for the StorageClass.
+- Fixture `data-pod-foreign-pvc.yaml` (an `immich` pod mounting
+  `navidrome-data`) expects `deny data-pvc-scope`; `data-pod-own-pvc.yaml`
+  (same pod, `immich-data`) expects allow; `data-pvc-bad-storage.yaml`
+  (`storageClassName: standard`) expects `deny data-pvc-storage`.
+- Fixture `immich-dump-pod.yaml` — the pod an `immich-dump` job creates — is
+  admitted, so a policy tightening that broke the dump path fails CI.
+- Every PV path is one of the guest's four virtiofs paths, every PV carries
+  `reclaimPolicy: Retain`, `storageClassName: data-local`, node affinity
+  `kubernetes.io/hostname: cluster`, and a `claimRef` naming exactly one app
+  claim; each data namespace has exactly one PVC named `<namespace>-data`.
+- No manifest under `clusters/homelab/data/` or `clusters/homelab/ingress/`
+  contains `hostPath`.
+- Both dump CronJobs run at `45 2 * * *` in `Europe/Berlin`, with
+  `concurrencyPolicy: Forbid` and `activeDeadlineSeconds: 1800` (complete by
+  03:15, before restic's 03:30 + 15 minute delay), mount the app's own claim,
+  and write `/data/db-dumps/<app>.{dump,rdb}`.
+- Every data workload runs as `data-workload`, carries
+  `homelabs.dev/managed-by=platform`, runs as uid 1000 (the share's host owner),
+  and sets limits and a probe; the dump jobs are exempt from the probe rule.
+- The four `Ingress` hosts resolve to the expected Service and port, so the
+  routing contract T7 mirrors cannot drift.
+
+Runtime, `tests/policies/check.sh --runtime` (throwaway kube-apiserver): the new
+fixtures are admitted/denied by the real API server, including the two new deny
+cases. Recorded run 2026-11-11: `static+runtime: 348 passed, 0 failed`.
+
+### What cannot run here
+
+No CNI, so a NetworkPolicy is stored and shape-checked, not enforced; no
+kubelet, so `local` PVs never bind and the pods' init containers never create
+their subdirectories; no ESO, so `immich-db` and `neuralwatt-api-key` do not
+exist and the pods stay unstarted; no scheduler, so the CronJobs are only
+inspected.
+
+### Manual runtime test (live cluster)
+
+```sh
+# 1. the isolation policies, against the real API server
+cluster-kubectl -n immich apply --dry-run=server -f tests/policies/fixtures/data-pod-foreign-pvc.yaml
+#    expected: Error from server (Forbidden): ... data-pvc-scope ...
+cluster-kubectl -n immich apply --dry-run=server -f tests/policies/fixtures/data-pod-own-pvc.yaml
+#    expected: pod/immich-server created (server dry run)
+
+# 2. the storage contract
+cluster-kubectl get pv                     # four PVs, each Bound to its own claim
+cluster-kubectl -n immich get pvc          # immich-data Bound
+
+# 3. the dump path, end to end
+cluster-kubectl -n immich create job --from=cronjob/immich-dump dump-now
+cluster-kubectl -n immich logs job/dump-now     # "immich dump written to /data/db-dumps/immich.dump"
+sudo ls -l /var/lib/data/immich/db-dumps/immich.dump    # the same file, through the share
+
+# 4. restic timing: the latest local snapshot holds that night's dump
+sudo restic -r /var/backup/restic ls latest /var/lib/data/immich/db-dumps
+```
+
+### Runtime result
+
+Static and API-server halves recorded above (2026-11-11). The node-level half —
+PV binding, NetworkPolicy enforcement, the CronJob actually writing through the
+share, and restic snapshotting that file — needs the live `cluster` guest and is
+recorded in `docs/data-migration.md` "Verification on the live cluster".

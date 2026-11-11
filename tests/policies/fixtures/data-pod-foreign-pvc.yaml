@@ -1,0 +1,29 @@
+# expect: deny data-pvc-scope
+apiVersion: v1
+kind: Pod
+metadata:
+  name: immich-server
+  namespace: immich
+  labels:
+    app.kubernetes.io/name: immich
+    homelabs.dev/managed-by: platform
+spec:
+  serviceAccountName: data-workload
+  automountServiceAccountToken: false
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: immich
+      image: ghcr.io/immich-app/immich-server@sha256:0000000000000000000000000000000000000000000000000000000000000000
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: ["ALL"]
+  volumes:
+    - name: library
+      persistentVolumeClaim:
+        claimName: navidrome-data

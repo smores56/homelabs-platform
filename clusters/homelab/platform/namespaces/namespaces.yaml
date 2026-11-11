@@ -5,6 +5,11 @@
 # flux-system is not declared here: the bootstrap install manifests already
 # contain it, and clusters/homelab/kustomization.yaml patches the expected
 # labels onto that object. Declaring it twice would collide in one build.
+#
+# The data tier is one namespace per application (smores56/sdlc#580). Each one
+# is bound to exactly one virtiofs share (docs/data-migration.md), and the
+# `data-pvc-scope` policy keeps a pod inside its own namespace's PVC names, so
+# a compromised Immich cannot mount the music or books library.
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -48,13 +53,54 @@ metadata:
     pod-security.kubernetes.io/audit: restricted
     pod-security.kubernetes.io/warn: restricted
 ---
+# data tier, one namespace per app. `immich` mounts /mnt/data/immich in the
+# cluster guest; the PV claimRef in platform/storage/ pins the mapping.
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: data
+  name: immich
   labels:
     app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tenant: data
+    homelabs.dev/tenant: immich
+    homelabs.dev/tier: data
+    homelabs.dev/managed-by: platform
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: navidrome
+  labels:
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tenant: navidrome
+    homelabs.dev/tier: data
+    homelabs.dev/managed-by: platform
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: calibre
+  labels:
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tenant: calibre
+    homelabs.dev/tier: data
+    homelabs.dev/managed-by: platform
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: graphiti
+  labels:
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tenant: graphiti
     homelabs.dev/tier: data
     homelabs.dev/managed-by: platform
     pod-security.kubernetes.io/enforce: restricted

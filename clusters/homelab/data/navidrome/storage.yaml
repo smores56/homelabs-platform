@@ -1,0 +1,17 @@
+# Bound to /mnt/data/music by the PV claimRef in platform/storage.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: navidrome-data
+  namespace: navidrome
+  labels:
+    app.kubernetes.io/name: navidrome
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: data
+    homelabs.dev/managed-by: platform
+spec:
+  accessModes: ["ReadWriteOnce"]
+  storageClassName: data-local
+  resources:
+    requests:
+      storage: 5Ti

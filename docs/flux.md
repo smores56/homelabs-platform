@@ -115,16 +115,21 @@ policy bindings treat it like the rest of the platform tier.
 
 ## Stage ordering
 
-`clusters/homelab/platform/kustomization.yaml` applies six Flux Kustomizations;
+`clusters/homelab/platform/kustomization.yaml` applies ten Flux Kustomizations;
 each one's `dependsOn` is asserted by `tests/policies/check.sh`.
 
 ```text
 platform-namespaces   namespaces + RuntimeClass gvisor
-└── platform-rbac     tenant service account, Role, RoleBinding, data SA
+└── platform-rbac     tenant service account, Role, RoleBinding, data SAs
     └── platform-policies   ValidatingAdmissionPolicies + bindings
 platform-network      NetworkPolicies            (dependsOn namespaces)
 platform-secrets      sops contract ConfigMap    (dependsOn namespaces, policies)
     └── platform-secrets-eso   ESO objects, suspended
+platform-storage      StorageClass + static PVs  (dependsOn namespaces)
+platform-data-apps    Immich, Navidrome, Calibre, Graphiti
+                      (dependsOn policies, network, storage)
+platform-ingress      cloudflared + routing contract (dependsOn namespaces, network)
+platform-observability
 platform-tenants      GitRepository + tenant Kustomization
                       (dependsOn policies, network, secrets)
 ```

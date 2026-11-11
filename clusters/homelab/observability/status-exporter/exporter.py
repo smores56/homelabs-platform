@@ -130,10 +130,14 @@ def render(samples: list[str], success: bool) -> str:
 
 
 class KubernetesClient:
-    """Read-only client for the in-cluster API, scoped by its RoleBinding."""
+    """Read-only client for the in-cluster API, scoped by its RoleBindings.
 
-    def __init__(self, namespace: str, sa_dir: str = SA_DIR) -> None:
-        self.namespace = namespace
+    The data tier is one namespace per app, so the client reads a list: the
+    exporter holds one RoleBinding per namespace and cannot see any other.
+    """
+
+    def __init__(self, namespaces: list[str], sa_dir: str = SA_DIR) -> None:
+        self.namespaces = namespaces
         self.token = open(os.path.join(sa_dir, "token"), encoding="utf-8").read().strip()
         with open(os.path.join(sa_dir, "ca.crt"), "rb") as handle:
             self.context = ssl.create_default_context(cafile=None)
@@ -151,14 +155,17 @@ class KubernetesClient:
             return json.loads(response.read().decode("utf-8"))
 
     def collect(self) -> list[str]:
-        pods = self.get(f"/api/v1/namespaces/{self.namespace}/pods").get("items", [])
-        deployments = self.get(
-            f"/apis/apps/v1/namespaces/{self.namespace}/deployments"
-        ).get("items", [])
-        statefulsets = self.get(
-            f"/apis/apps/v1/namespaces/{self.namespace}/statefulsets"
-        ).get("items", [])
-        return pod_metrics(pods) + workload_metrics(deployments + statefulsets)
+        samples: list[str] = []
+        for namespace in self.namespaces:
+            pods = self.get(f"/api/v1/namespaces/{namespace}/pods").get("items", [])
+            deployments = self.get(f"/apis/apps/v1/namespaces/{namespace}/deployments").get(
+                "items", []
+            )
+            statefulsets = self.get(f"/apis/apps/v1/namespaces/{namespace}/statefulsets").get(
+                "items", []
+            )
+            samples += pod_metrics(pods) + workload_metrics(deployments + statefulsets)
+        return samples
 
 
 class Cache:
@@ -208,10 +215,11 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main() -> None:
-    namespace = os.environ.get("DATA_NAMESPACE", DEFAULT_NAMESPACE)
+    raw = os.environ.get("DATA_NAMESPACES", os.environ.get("DATA_NAMESPACE", DEFAULT_NAMESPACE))
+    namespaces = [part.strip() for part in raw.split(",") if part.strip()]
     port = int(os.environ.get("EXPORT_PORT", DEFAULT_PORT))
     refresh = float(os.environ.get("REFRESH_SECONDS", DEFAULT_REFRESH_SECONDS))
-    Handler.cache = Cache(KubernetesClient(namespace), refresh)
+    Handler.cache = Cache(KubernetesClient(namespaces), refresh)
     server = ThreadingHTTPServer(("0.0.0.0", port), Handler)
     server.serve_forever()
 

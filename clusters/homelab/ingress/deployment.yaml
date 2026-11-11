@@ -1,0 +1,101 @@
+# The cluster tunnel connector. The token comes from the `cloudflare-tunnel-token`
+# Secret, which ESO projects from the SOPS contract (platform/secrets/eso); a
+# missing Secret leaves the pods unstarted rather than connected to nothing.
+#
+# Two replicas because a single connector is a single point of failure for every
+# hostname the tunnel serves; Cloudflare load-balances across connectors of the
+# same tunnel.
+#
+# Host tunnel vs this one: the host's tunnel (modules/nixos/web-proxy.nix,
+# `smortress`) keeps ssh/llm/chat/agent/memory and is human-owned; this one serves
+# only the routes whose origin moved into the cluster. They are separate tunnels
+# with separate tokens, so cutting one over never touches the other.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cloudflared
+  namespace: ingress
+  labels:
+    app.kubernetes.io/name: cloudflared
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: ingress
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: cloudflared
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: cloudflared
+        app.kubernetes.io/part-of: homelabs
+        homelabs.dev/tier: ingress
+        homelabs.dev/managed-by: platform
+    spec:
+      serviceAccountName: cloudflared
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: cloudflared
+          image: docker.io/cloudflare/cloudflared:2026.10.2
+          args:
+            - tunnel
+            - --no-autoupdate
+            - --protocol
+            - http2
+            - --metrics
+            - 0.0.0.0:2000
+            - run
+          env:
+            - name: TUNNEL_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: cloudflare-tunnel-token
+                  key: tunnel-token
+            - name: TZ
+              value: UTC
+          ports:
+            - name: metrics
+              containerPort: 2000
+          startupProbe:
+            httpGet:
+              path: /ready
+              port: metrics
+            periodSeconds: 10
+            failureThreshold: 30
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: metrics
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /ready
+              port: metrics
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 5
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}

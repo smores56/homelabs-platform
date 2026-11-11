@@ -14,3 +14,5 @@ resources:
   - 07-tenant-flux-sa-pods.yaml
   - 08-data-workload-source.yaml
   - 09-tenant-secret-scope.yaml
+  - 10-data-pvc-scope.yaml
+  - 11-data-pvc-storage.yaml

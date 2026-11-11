@@ -1,0 +1,112 @@
+# The database is the source of truth, so a dump has to be on the share before
+# the host's restic walk. Host restic starts at 03:30 Europe/Berlin (with a 15
+# minute random delay, so up to 03:45); this job runs at 02:45 Europe/Berlin and
+# is bounded to 30 minutes, which leaves 15 minutes of slack. `Persistent` on
+# the host side means a sleeping host still backs up once it wakes, so the dump
+# is written even when the previous night's ran late.
+#
+# Output: /data/db-dumps/immich.dump, i.e. the guest's
+# /mnt/data/immich/db-dumps/immich.dump and the host's
+# /var/lib/data/immich/db-dumps/immich.dump. restic keeps the history; the file
+# name is stable on purpose, matching the host's old restic-db-dump contract.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: immich-dump
+  namespace: immich
+  labels:
+    app.kubernetes.io/name: immich
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: data
+spec:
+  schedule: "45 2 * * *"
+  timeZone: Europe/Berlin
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 600
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 1800
+      ttlSecondsAfterFinished: 86400
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: immich-dump
+            app.kubernetes.io/part-of: homelabs
+            homelabs.dev/tier: data
+            homelabs.dev/managed-by: platform
+        spec:
+          serviceAccountName: data-workload
+          automountServiceAccountToken: false
+          restartPolicy: OnFailure
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
+            seccompProfile:
+              type: RuntimeDefault
+          initContainers:
+            - name: prepare-data
+              image: busybox:1.37.0
+              command: ["sh", "-c", "mkdir -p /data/db-dumps"]
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
+              volumeMounts:
+                - name: data
+                  mountPath: /data
+          containers:
+            - name: dump
+              image: ghcr.io/immich-app/postgres:17-vectorchord0.4.3-pgvector0.8.1
+              env:
+                - name: PGPASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: immich-db
+                      key: password
+                - name: PGHOST
+                  value: immich-postgres
+                - name: PGUSER
+                  value: immich
+                - name: PGDATABASE
+                  value: immich
+                # readOnlyRootFilesystem: pg_dump still wants a writable HOME.
+                - name: HOME
+                  value: /tmp
+              command: ["sh", "-c"]
+              args:
+                - |
+                  set -eu
+                  out=/data/db-dumps/immich.dump
+                  tmp="$out.tmp"
+                  trap 'rm -f "$tmp"' EXIT
+                  pg_dump -Fc --no-owner > "$tmp"
+                  mv "$tmp" "$out"
+                  printf 'immich dump written to %s (%s bytes)\n' "$out" "$(wc -c <"$out")"
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 256Mi
+                limits:
+                  cpu: "2"
+                  memory: 1Gi
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
+              volumeMounts:
+                - name: data
+                  mountPath: /data
+                - name: tmp
+                  mountPath: /tmp
+          volumes:
+            - name: data
+              persistentVolumeClaim:
+                claimName: immich-data
+            - name: tmp
+              emptyDir: {}

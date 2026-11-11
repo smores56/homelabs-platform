@@ -187,13 +187,20 @@ machine with registry access (the agent VM has none):
 
 ```sh
 for ref in prom/prometheus:v3.16.0 grafana/loki:3.7.9 \
-  timberio/vector:0.61.0-debian python:3.13.12-slim busybox:1.37.0; do
+  timberio/vector:0.61.0-debian python:3.13.12-slim busybox:1.37.0 \
+  ghcr.io/immich-app/immich-server:v3.0.3 \
+  ghcr.io/immich-app/immich-machine-learning:v3.0.3 \
+  ghcr.io/immich-app/postgres:17-vectorchord0.4.3-pgvector0.8.1 \
+  deluan/navidrome:0.63.2 crocodilestick/calibre-web-automated:4.0.8 \
+  cloudflare/cloudflared:2026.10.2; do
   printf '%s -> %s\n' "$ref" "$(crane digest "$ref")"
 done
 ```
 
-Then rewrite the four `image:` lines under
-`clusters/homelab/observability/{prometheus,loki,vector,status-exporter,loki-gateway}`
+Then rewrite those `image:` lines under
+`clusters/homelab/observability/{prometheus,loki,vector,status-exporter,loki-gateway}`,
+`clusters/homelab/data/{immich,navidrome,calibre,graphiti}` and
+`clusters/homelab/ingress`
 to `repo@sha256:<digest>` (keep the tag when the registry allows
 `repo:tag@sha256:...`), run `scripts/kustomize-build-all.sh` and
 `tests/observability/check.sh`, and commit. The image-pin assertion in
@@ -240,3 +247,73 @@ kubectl -n observability rollout restart daemonset/vector
 
 Then repeat step 10 so the broker holds the new value, and query the `data`
 tenant through the gateway to confirm (docs/observability.md, "Verification").
+
+## 12. Create the cluster's SOPS-contract Secrets
+
+Two cluster workloads read a credential that Cloudflare or Neuralwatt issued, and
+neither may exist in git: the ESO `kubernetes` provider projects them from a
+Secret that the operator creates with `sops`. Same rule as the host's
+`/run/secrets`: ciphertext lives in the operator's secret store, plaintext only
+in the API server and the pod.
+
+Create the cluster tunnel, or take its token from the T7 work
+(`smores56/sdlc#580` depends on it), and write both files encrypted with the same
+age key the host secrets use:
+
+```sh
+# graphiti: Neuralwatt key for extraction and embeddings
+sops -e -i neuralwatt-api-key.yaml
+# ingress: the tunnel token from T7
+sops -e -i cloudflare-tunnel-token.yaml
+```
+
+Then materialise the two Secrets (SOPS contract names: `*-sops`):
+
+```sh
+kubectl -n graphiti create secret generic neuralwatt-api-key-sops \
+  --from-file=api-key=<(sops -d neuralwatt-api-key.yaml | yq -r .key)
+kubectl -n ingress create secret generic cloudflare-tunnel-token-sops \
+  --from-file=tunnel-token=<(sops -d cloudflare-tunnel-token.yaml | yq -r .token)
+```
+
+Resume the ESO stage (step 8) and confirm the projections, which is what the
+Deployments actually read:
+
+```sh
+kubectl -n graphiti get secret neuralwatt-api-key -o jsonpath='{.data.api-key}' | base64 -d | wc -c
+kubectl -n ingress get secret cloudflare-tunnel-token -o jsonpath='{.data.tunnel-token}' | base64 -d | wc -c
+kubectl -n ingress get deploy cloudflared
+```
+
+Rotation is "rewrite the `*-sops` Secret, wait one refresh interval (1h), roll the
+Deployment"; a lost key is a Neuralwatt/Cloudflare reissue, not a cluster
+restore.
+
+## 13. Cut the data apps over
+
+Order, per-app checks and rollback are in `docs/data-migration.md`. Before the
+first cutover:
+
+1. Install the cluster tunnel's Cloudflare objects (T7): the tunnel itself, the
+   four proxied CNAMEs (`immich`, `music`, `calibre`, `memory`.`sammohr.dev`),
+   and the Access policies. The host tunnel keeps `ssh`, `llm`, `chat`, `agent`
+   and `memory` untouched.
+2. Confirm the storage contract bound:
+
+   ```sh
+   cluster-kubectl get nodes -o wide            # node name is exactly: cluster
+   cluster-kubectl get pv                         # four PVs, STATUS Bound
+   cluster-kubectl -n immich get pvc              # immich-data Bound
+   ```
+
+3. After Immich serves from the cluster, set the Calibre-Web admin password on
+   first login (`admin` / `admin123` is the image default and the route is
+   public with app auth, so this step is required, not optional).
+4. Repoint agent access to Calibre: the broker's `calibre` logical host and the
+   agent `calibredb` wrapper expect calibre-server's content server; Calibre-Web
+   serves OPDS at `/opds`. That change lives in `nix-config` and
+   `homelabs-apps`, not here.
+5. Leave `modules/nixos/{immich,navidrome,memory}.nix` in place until every app
+   has served from the cluster for a week; then enable
+   `clusterDataApps.enable` in nix-config (`docs/kanbei-split.md` in that
+   repository) and, after that has run, delete the modules.

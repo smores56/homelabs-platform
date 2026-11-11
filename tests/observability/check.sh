@@ -150,13 +150,17 @@ if grep -rq 'kind: ClusterRoleBinding' "$exporter_dir" clusters/homelab/observab
 else
   ok "status exporter has no ClusterRoleBinding"
 fi
-eq "$(yq -r '.metadata.namespace' clusters/homelab/observability/rbac-data.yaml)" "data" \
-  "status exporter binding is namespaced to data"
-eq "$(yq -r '.subjects[0].namespace' clusters/homelab/observability/rbac-data.yaml)" \
-  "observability" "the binding names the observability service account"
+# One RoleBinding per data namespace, exactly the namespaces the exporter is
+# configured to scrape (the data tier is one namespace per app).
+eq "$(yq -r '.metadata.namespace' clusters/homelab/observability/rbac-data.yaml | grep -v '^---$' | sort | paste -sd, -)" \
+  "$(yq -r '.spec.template.spec.containers[0].env[] | select(.name == "DATA_NAMESPACES") | .value | split(",") | sort | join(",")' \
+    "$exporter_dir/deployment.yaml")" \
+  "status exporter has one RoleBinding per scraped data namespace"
+eq "$(yq -r '.subjects[0].namespace' clusters/homelab/observability/rbac-data.yaml | grep -v '^---$' | sort -u)" \
+  "observability" "every binding names the observability service account"
 
 # ------------------------------------------------------------ postgres fragment
-postgres=clusters/homelab/data/postgres-config/configmap.yaml
+postgres=clusters/homelab/data/immich/postgres-settings.yaml
 if grep -Fq 'log_error_verbosity = terse' "$postgres" &&
   grep -Fq 'log_min_error_statement = panic' "$postgres"; then
   ok "postgres fragment sets terse verbosity and panic statement logging"
@@ -166,7 +170,7 @@ fi
 
 # ----------------------------------------------------------------- image pins
 if grep -rhoE '^\s+image: \S+' clusters/homelab/observability clusters/homelab/data |
-  grep -vE ':(v?[0-9]+\.[0-9]+\.[0-9]+|sha256:[0-9a-f]{64})' >"$work/unpinned"; then
+  grep -vE '(:v?[0-9][0-9A-Za-z._-]*(@sha256:[0-9a-f]{64})?|@sha256:[0-9a-f]{64})$' >"$work/unpinned"; then
   bad "an observability image is not pinned to a version or digest" "$(cat "$work/unpinned")"
 else
   ok "every observability and data image is version- or digest-pinned"

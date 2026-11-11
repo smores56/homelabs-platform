@@ -1,0 +1,25 @@
+# Navidrome is public with its own auth (mobile Subsonic clients cannot complete
+# a Cloudflare Access login), exactly as on the host. See
+# clusters/homelab/data/immich/ingress.yaml for why the cluster declares
+# Ingress objects although no controller consumes them.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: navidrome
+  namespace: navidrome
+  labels:
+    app.kubernetes.io/name: navidrome
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: data
+spec:
+  rules:
+    - host: music.sammohr.dev
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: navidrome
+                port:
+                  number: 4533

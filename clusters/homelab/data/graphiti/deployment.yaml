@@ -1,0 +1,126 @@
+# Graphiti's MCP server. Stateless: the graph lives in FalkorDB, the config is
+# rendered from the ConfigMap template and the Secret at pod start. The Secret
+# holds the Neuralwatt key (`neuralwatt-api-key`, ESO-projected from the SOPS
+# contract), so no plaintext exists in git or in a ConfigMap.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: graphiti
+  namespace: graphiti
+  labels:
+    app.kubernetes.io/name: graphiti
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: data
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: graphiti
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: graphiti
+        app.kubernetes.io/part-of: homelabs
+        homelabs.dev/tier: data
+        homelabs.dev/managed-by: platform
+    spec:
+      serviceAccountName: data-workload
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        - name: render-config
+          image: busybox:1.37.0
+          env:
+            - name: NEURALWATT_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: neuralwatt-api-key
+                  key: api-key
+          command: ["sh", "-c"]
+          args:
+            - |
+              set -eu
+              sed "s|__NEURALWATT_API_KEY__|$NEURALWATT_API_KEY|g" \
+                /tmpl/config.yaml.tmpl > /etc/graphiti/config.yaml
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: config-template
+              mountPath: /tmpl
+              readOnly: true
+            - name: config
+              mountPath: /etc/graphiti
+      containers:
+        - name: graphiti
+          # Same digest as the host (modules/features/ai/memory/service.nix):
+          # below graphiti-core 0.31.0 the index DDL fails on FalkorDB 6.x.
+          image: zepai/knowledge-graph-mcp:1.1.3-graphiti-0.31.2-standalone@sha256:288b79e987adc71d1f55f9f44d9a62fb0422a80eb6870b0e32abb9ad85c12d69
+          env:
+            - name: SERVER__HOST
+              value: 0.0.0.0
+            - name: EMBEDDING_DIM
+              value: "4096"
+            # Graphiti's queue limit equals the upstream concurrency the host
+            # gateway allows (llm.concurrency = 2); oversubscribing triggers 429.
+            - name: SEMAPHORE_LIMIT
+              value: "2"
+            - name: TZ
+              value: UTC
+          ports:
+            - name: http
+              containerPort: 8184
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+            failureThreshold: 60
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 5
+          resources:
+            requests:
+              cpu: 200m
+              memory: 512Mi
+            limits:
+              cpu: "2"
+              memory: 2Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: config
+              mountPath: /app/mcp/config/config.yaml
+              subPath: config.yaml
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: config-template
+          configMap:
+            name: graphiti-config
+        - name: config
+          emptyDir:
+            medium: Memory
+        - name: tmp
+          emptyDir: {}

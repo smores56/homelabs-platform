@@ -1,0 +1,8 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Storage is cluster-scoped, so it cannot be reconciled by a namespaced identity.
+# The stage runs as kustomize-controller, like the namespaces stage.
+resources:
+  - storageclass.yaml
+  - persistentvolumes.yaml

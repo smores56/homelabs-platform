@@ -1,12 +1,44 @@
-# The only identity data-namespace pods may run as. Platform reconciliation
-# creates those pods (kustomize-controller holds cluster-admin); the tenant
-# service account has no binding in this namespace, so it cannot create
-# anything here. 08-data-workload-source.yaml pins the name.
+# The only identity data-namespace pods may run as, one per data namespace:
+# a service account is namespaced, so `data-workload` must exist in each app's
+# namespace for `08-data-workload-source.yaml` to admit its pods. Platform
+# reconciliation creates those pods (kustomize-controller holds cluster-admin);
+# the tenant service account has no binding in any data namespace, so it cannot
+# create anything here.
 apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: data-workload
-  namespace: data
+  namespace: immich
+  labels:
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: data
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: data-workload
+  namespace: navidrome
+  labels:
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: data
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: data-workload
+  namespace: calibre
+  labels:
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: data
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: data-workload
+  namespace: graphiti
   labels:
     app.kubernetes.io/part-of: homelabs
     homelabs.dev/tier: data

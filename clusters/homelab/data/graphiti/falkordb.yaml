@@ -1,0 +1,97 @@
+# The graph store. AOF on the share, no scheduled RDB saves (a BGSAVE spike on a
+# 15 GiB guest is what the host avoids too); the nightly dump is the portable
+# artifact. No authentication: the boundary is the default-deny NetworkPolicy
+# plus the port that only this namespace's peers may reach.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: graphiti-falkordb
+  namespace: graphiti
+  labels:
+    app.kubernetes.io/name: graphiti-falkordb
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: data
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: graphiti-falkordb
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: graphiti-falkordb
+        app.kubernetes.io/part-of: homelabs
+        homelabs.dev/tier: data
+        homelabs.dev/managed-by: platform
+    spec:
+      serviceAccountName: data-workload
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        - name: prepare-data
+          image: busybox:1.37.0
+          command: ["sh", "-c", "mkdir -p /data/falkordb /data/db-dumps"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      containers:
+        - name: falkordb
+          # Same digest as the host (modules/features/ai/memory/service.nix).
+          image: falkordb/falkordb-server:v4.22.2@sha256:103b70949bc9019dd025e62e077665349b73e96add5c45738e73ddf73eef6220
+          env:
+            # `--dir /data/falkordb` because the working directory inside the
+            # image is not the mount; `--save ""` disables RDB snapshots.
+            - name: REDIS_ARGS
+              value: '--appendonly yes --appendfsync everysec --save "" --dir /data/falkordb'
+            - name: TZ
+              value: UTC
+          ports:
+            - name: falkordb
+              containerPort: 6379
+          readinessProbe:
+            exec:
+              command: ["redis-cli", "ping"]
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            exec:
+              command: ["redis-cli", "ping"]
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 5
+          resources:
+            requests:
+              cpu: 100m
+              memory: 512Mi
+            limits:
+              cpu: "2"
+              memory: 3Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            # FalkorDB writes module state under its own prefix as well as the
+            # configured data dir; keep the image's rootfs writable.
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: graphiti-data
+        - name: tmp
+          emptyDir: {}

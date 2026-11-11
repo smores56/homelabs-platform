@@ -29,7 +29,43 @@ apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: default-deny
-  namespace: data
+  namespace: immich
+  labels:
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: data
+spec:
+  podSelector: {}
+  policyTypes: ["Ingress", "Egress"]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+  namespace: navidrome
+  labels:
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: data
+spec:
+  podSelector: {}
+  policyTypes: ["Ingress", "Egress"]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+  namespace: calibre
+  labels:
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: data
+spec:
+  podSelector: {}
+  policyTypes: ["Ingress", "Egress"]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+  namespace: graphiti
   labels:
     app.kubernetes.io/part-of: homelabs
     homelabs.dev/tier: data

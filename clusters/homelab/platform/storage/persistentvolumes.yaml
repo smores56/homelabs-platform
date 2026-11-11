@@ -1,0 +1,139 @@
+# One static PV per virtiofs share of the `cluster` guest. The guest mounts
+# /var/lib/data/<share> at /mnt/data/<share> (modules/nixos/cluster-vm.nix,
+# `dataShares`), so `local.path` is a path inside the guest's filesystem, not a
+# hostPath: the no-host-access admission policy forbids hostPath and this is its
+# replacement. Node affinity pins each volume to the single node named `cluster`.
+#
+# The node name is the guest's hostname, not discovered at runtime: the T3 module
+# sets `networking.hostName = facts.name` = "cluster" (vm-host.nix), and k3s
+# registers the node under it. Confirm on the host with the helper the module
+# installs:
+#
+#   cluster-kubectl get nodes -o wide
+#
+# If that ever prints another name, the PVs stay Pending and nothing mounts
+# rather than binding to a wrong path.
+#
+# Immich's library, Navidrome's music tree, Calibre's library and Graphiti's
+# graph all live here unchanged; the host's restic job still walks
+# /var/lib/data, which is the same tree through the share.
+
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: immich-share
+  labels:
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: data
+    homelabs.dev/share: immich
+spec:
+  capacity:
+    storage: 5Ti
+  accessModes: ["ReadWriteOnce"]
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: data-local
+  volumeMode: Filesystem
+  # Pre-bound: this claim is the only one that may take this share, so a
+  # mistyped claim name fails to bind instead of landing on a neighbour's data.
+  claimRef:
+    namespace: immich
+    name: immich-data
+  local:
+    path: /mnt/data/immich
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: In
+              values: ["cluster"]
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: navidrome-share
+  labels:
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: data
+    homelabs.dev/share: music
+spec:
+  capacity:
+    storage: 5Ti
+  accessModes: ["ReadWriteOnce"]
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: data-local
+  volumeMode: Filesystem
+  # Pre-bound: this claim is the only one that may take this share, so a
+  # mistyped claim name fails to bind instead of landing on a neighbour's data.
+  claimRef:
+    namespace: navidrome
+    name: navidrome-data
+  local:
+    path: /mnt/data/music
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: In
+              values: ["cluster"]
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: calibre-share
+  labels:
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: data
+    homelabs.dev/share: books
+spec:
+  capacity:
+    storage: 5Ti
+  accessModes: ["ReadWriteOnce"]
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: data-local
+  volumeMode: Filesystem
+  # Pre-bound: this claim is the only one that may take this share, so a
+  # mistyped claim name fails to bind instead of landing on a neighbour's data.
+  claimRef:
+    namespace: calibre
+    name: calibre-data
+  local:
+    path: /mnt/data/books
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: In
+              values: ["cluster"]
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: graphiti-share
+  labels:
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: data
+    homelabs.dev/share: graphiti
+spec:
+  capacity:
+    storage: 5Ti
+  accessModes: ["ReadWriteOnce"]
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: data-local
+  volumeMode: Filesystem
+  # Pre-bound: this claim is the only one that may take this share, so a
+  # mistyped claim name fails to bind instead of landing on a neighbour's data.
+  claimRef:
+    namespace: graphiti
+    name: graphiti-data
+  local:
+    path: /mnt/data/graphiti
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: In
+              values: ["cluster"]

@@ -1,0 +1,15 @@
+# expect: deny data-pvc-storage
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: immich-scratch
+  namespace: immich
+  labels:
+    app.kubernetes.io/name: immich
+    app.kubernetes.io/part-of: homelabs
+spec:
+  accessModes: ["ReadWriteOnce"]
+  storageClassName: standard
+  resources:
+    requests:
+      storage: 1Gi

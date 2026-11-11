@@ -1,0 +1,12 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: ingress
+
+# The cluster tunnel. `cloudflared` dials the Cloudflare edge outbound (there is
+# no inbound path to the guest at all) on TCP 443, forced by --protocol http2
+# because the host's tap firewall forwards only 80/443/DNS/NTP from the cluster
+# (modules/nixos/cluster-vm.nix). Its routes are managed Cloudflare-side (T7),
+# so the connector carries only a token.
+resources:
+  - serviceaccount.yaml
+  - deployment.yaml

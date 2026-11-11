@@ -1,7 +1,7 @@
 # policy	namespaces (sorted, comma separated)
 # The intended selector outcome, asserted against the namespace labels in
 # clusters/homelab (kustomize build, so the flux-system patch is included).
-no-host-access	broker,data,tenant-apps
+no-host-access	broker,calibre,graphiti,immich,navidrome,tenant-apps
 tenant-gvisor	tenant-apps
 tenant-images	tenant-apps
 tenant-scratch-pvc	tenant-apps
@@ -9,4 +9,6 @@ tenant-pvc-naming	tenant-apps
 tenant-flux-guard	tenant-apps
 tenant-flux-sa-pods	tenant-apps
 tenant-secret-scope	tenant-apps
-data-workload-source	data
+data-workload-source	calibre,graphiti,immich,navidrome
+data-pvc-scope	calibre,graphiti,immich,navidrome
+data-pvc-storage	calibre,graphiti,immich,navidrome

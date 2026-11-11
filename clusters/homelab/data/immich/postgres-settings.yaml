@@ -11,10 +11,14 @@
 #   - images whose entrypoint owns the command: mount the key at
 #       /etc/postgresql/conf.d/10-homelabs-data.conf and add
 #       `include_dir = '/etc/postgresql/conf.d'` to postgresql.conf
+#
+# Only Immich runs Postgres in the data tier; Graphiti's store is FalkorDB, whose
+# log carries no row content.
 apiVersion: v1
 kind: ConfigMap
 metadata:
   name: postgres-data-settings
+  namespace: immich
   labels:
     app.kubernetes.io/part-of: homelabs
     homelabs.dev/tier: data

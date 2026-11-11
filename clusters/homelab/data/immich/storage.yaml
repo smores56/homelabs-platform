@@ -1,0 +1,20 @@
+# The whole share is one claim: the app's components use subdirectories of /data
+# (postgres, library, valkey, db-dumps) instead of separate volumes, so the
+# migration moves one host directory and nothing has to be re-laid-out. The PV
+# claimRef in platform/storage pins this claim to /mnt/data/immich.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: immich-data
+  namespace: immich
+  labels:
+    app.kubernetes.io/name: immich
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: data
+    homelabs.dev/managed-by: platform
+spec:
+  accessModes: ["ReadWriteOnce"]
+  storageClassName: data-local
+  resources:
+    requests:
+      storage: 5Ti

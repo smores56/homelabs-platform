@@ -25,10 +25,14 @@ tenant-kustomization-other-target.yaml	tenant-apps	deny	tenant-flux-guard	must t
 tenant-kustomization-foreign-source.yaml	tenant-apps	deny	tenant-flux-guard	same-namespace homelabs-apps GitRepository
 tenant-kustomization-kubeconfig.yaml	tenant-apps	deny	tenant-flux-guard	must not carry a kubeConfig
 tenant-kustomization-foreign-age-key.yaml	tenant-apps	deny	tenant-flux-guard	namespace-local sops-age secret
-data-pod-good.yaml	data	allow	-	-
-data-pod-missing-label.yaml	data	deny	data-workload-source	managed-by=platform
-data-pod-wrong-sa.yaml	data	deny	data-workload-source	data-workload service account
-data-pod-hostpath.yaml	data	deny	no-host-access	hostPath volumes are not allowed
+data-pod-good.yaml	immich	allow	-	-
+data-pod-missing-label.yaml	immich	deny	data-workload-source	managed-by=platform
+data-pod-wrong-sa.yaml	immich	deny	data-workload-source	data-workload service account
+data-pod-hostpath.yaml	immich	deny	no-host-access	hostPath volumes are not allowed
 broker-pod-hostnetwork.yaml	broker	deny	no-host-access	hostNetwork is not allowed
 platform-pod-escalation.yaml	platform	allow	-	-
 observability-pod-hostpath.yaml	observability	allow	-	-
+data-pod-own-pvc.yaml	immich	allow	-	-
+data-pod-foreign-pvc.yaml	immich	deny	data-pvc-scope	PVC names must start with <namespace>-
+immich-dump-pod.yaml	immich	allow	-	-
+data-pvc-bad-storage.yaml	immich	deny	data-pvc-storage	data-local StorageClass

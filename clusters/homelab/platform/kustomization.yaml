@@ -4,15 +4,17 @@ kind: Kustomization
 # The platform stack is a set of Flux Kustomizations, not one flat kustomize
 # build: ordering is expressed with dependsOn so the stages apply in sequence on
 # the cluster (namespaces -> rbac -> admission policy -> network -> secrets ->
-# data config -> observability -> tenant reconciler). This directory therefore
-# builds to Flux objects only; each stage directory builds on its own and is
-# checked individually by scripts/kustomize-build-all.sh.
+# storage -> data apps -> ingress -> observability -> tenant reconciler). This
+# directory therefore builds to Flux objects only; each stage directory builds
+# on its own and is checked individually by scripts/kustomize-build-all.sh.
 resources:
   - kustomizations/namespaces.yaml
   - kustomizations/rbac.yaml
   - kustomizations/policies.yaml
   - kustomizations/network.yaml
   - kustomizations/secrets.yaml
+  - kustomizations/storage.yaml
   - kustomizations/data.yaml
+  - kustomizations/ingress.yaml
   - kustomizations/observability.yaml
   - kustomizations/tenants.yaml

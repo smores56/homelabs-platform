@@ -1,8 +1,10 @@
 # Tenancy
 
-Seven namespaces carry every workload. Each is labelled with the owning tenant,
-a tier, and PSA enforcement, so admission policy, RBAC scope and NetworkPolicy
-all select by label rather than by hard-coded name.
+Ten namespaces carry every workload. Each is labelled with the owning tenant, a
+tier, and PSA enforcement, so admission policy, RBAC scope and NetworkPolicy
+all select by label rather than by hard-coded name. The data tier is one
+namespace per application (smores56/sdlc#580), because each app is bound to one
+virtiofs share and must not be able to reach another app's.
 
 | Namespace | `homelabs.dev/tenant` | `homelabs.dev/tier` | PSA enforce | Contents |
 | --- | --- | --- | --- | --- |
@@ -10,8 +12,11 @@ all select by label rather than by hard-coded name.
 | `platform` | `platform` | `platform` | `baseline` | ESO, policy controllers, platform jobs |
 | `tenant-apps` | `apps` | `tenant` | `restricted` | `homelabs-apps` workloads (nanobot and successors) |
 | `broker` | `broker` | `broker` | `restricted` | Egress broker with per-host tokens |
-| `data` | `data` | `data` | `restricted` | Immich, Navidrome, Calibre, Graphiti |
-| `ingress` | `ingress` | `ingress` | `restricted` | Cluster-side proxy that fronts data apps |
+| `immich` | `immich` | `data` | `restricted` | Immich server, machine-learning, Postgres, Valkey |
+| `navidrome` | `navidrome` | `data` | `restricted` | Navidrome |
+| `calibre` | `calibre` | `data` | `restricted` | Calibre-Web over the books library |
+| `graphiti` | `graphiti` | `data` | `restricted` | Graphiti and FalkorDB |
+| `ingress` | `ingress` | `ingress` | `restricted` | `cloudflared` for the cluster tunnel |
 | `observability` | `observability` | `observability` | `privileged` | Prometheus, Loki, Vector, status exporter |
 
 `platform`/`flux-system` are `baseline` because the reconcilers hold cluster-wide
@@ -31,18 +36,18 @@ applied by the first stage (`docs/flux.md`).
 | `platform` | exempt from `no-host-access` | unrestricted | unrestricted |
 | `tenant` | gVisor, digest-pinned images, scratch PVC only, no `sops-age`, no reconciler SA | broker only, plus DNS | none |
 | `broker` | `no-host-access` | provider APIs (platform-owned) | `tenant` tier on 8080 |
-| `data` | `no-host-access`, platform-managed label + `data-workload` SA | same namespace, DNS | same namespace, `ingress` on immich 2283 |
-| `ingress` | none beyond PSA | `data` immich 2283, DNS | none |
+| `data` (each of `immich`, `navidrome`, `calibre`, `graphiti`) | `no-host-access`, `data-workload-source`, `data-pvc-scope`, `data-pvc-storage` | same namespace, DNS; HTTPS for `immich-machine-learning` and `graphiti` | same namespace, `ingress` on the app's port |
+| `ingress` | none beyond PSA | the four data apps on their ports, Cloudflare edge 443, DNS | none |
 | `observability` | exempt from `no-host-access` | unrestricted | unrestricted |
 
 ## Admission policy
 
-Nine policies, each in its own file with the binding that scopes it
+Eleven policies, each in its own file with the binding that scopes it
 (`clusters/homelab/platform/policies/`, asserted by `tests/policies/check.sh`).
 
 | Policy | Bound to | Rejects |
 | --- | --- | --- |
-| `no-host-access` | `tenant`, `broker`, `data` | `hostNetwork`, `hostPID`, `hostIPC`, `hostPath`, privileged containers, `hostPort`, added capabilities, `allowPrivilegeEscalation` |
+| `no-host-access` | `tenant`, `broker`, `data` (all four namespaces) | `hostNetwork`, `hostPID`, `hostIPC`, `hostPath`, privileged containers, `hostPort`, added capabilities, `allowPrivilegeEscalation` |
 | `tenant-gvisor` | `tenant` | any pod without `spec.runtimeClassName: gvisor` |
 | `tenant-images` | `tenant` | images not pinned by `@sha256:`, floating tags, nanobot from outside `ghcr.io/smores56/homelabs-apps/nanobot@sha256:` |
 | `tenant-scratch-pvc` | `tenant` | pod volumes whose PVC name does not start with the pod's `app.kubernetes.io/name` |
@@ -50,7 +55,9 @@ Nine policies, each in its own file with the binding that scopes it
 | `tenant-flux-guard` | `tenant` | Kustomizations that use another service account, target another namespace, read another GitRepository, carry a `kubeConfig`, or decrypt with another age key |
 | `tenant-flux-sa-pods` | `tenant` | pods running as `tenant-apps-reconciler` |
 | `tenant-secret-scope` | `tenant` | pods mounting or reading the `sops-age` Secret |
-| `data-workload-source` | `data` | pods without `homelabs.dev/managed-by=platform` or not running as `data-workload` |
+| `data-workload-source` | `data` (all four) | pods without `homelabs.dev/managed-by=platform` or not running as `data-workload` |
+| `data-pvc-scope` | `data` (all four) | pods mounting a PVC whose name does not start with their own namespace, i.e. another app's share |
+| `data-pvc-storage` | `data` (all four) | PVCs not named `<namespace>-*` or not claiming `data-local` (no dynamic provisioning in the data tier) |
 
 All policies use `failurePolicy: Fail`. CEL cannot read who sent a request, so
 creator identity is enforced by RBAC (below) and the policies pin the label and
@@ -79,8 +86,9 @@ That Role is the identity kustomize-controller impersonates for the
 nothing else. `can-i` expectations live in `tests/policies/rbac.tsv` and run
 against a real API server in `--runtime` mode.
 
-`data-workload` is the only service account data pods may use; the tenant
-identity has no binding in `data`, `broker` or `platform`.
+`data-workload` is the only service account data pods may use, and it exists in
+each of the four data namespaces (a service account is namespaced). The tenant
+identity has no binding in any data namespace, `broker` or `platform`.
 
 ## NetworkPolicy
 
@@ -88,8 +96,11 @@ identity has no binding in `data`, `broker` or `platform`.
 | --- | --- | --- |
 | `tenant-apps` | both directions | DNS to `kube-system`; TCP 8080 to `broker` tier |
 | `broker` | both directions | DNS; ingress from `tenant` tier on 8080; egress TCP 3100 to `loki-gateway` and 9101 to `status-exporter` in `observability` |
-| `data` | both directions | DNS; same-namespace any port; TCP 2283 from `ingress` namespace to `app.kubernetes.io/name=immich` |
-| `ingress` | both directions | DNS; TCP 2283 to `data` immich |
+| `immich` | both directions | DNS; same-namespace any port; TCP 2283 from `ingress`; HTTPS from the machine-learning pod for model weights |
+| `navidrome` | both directions | DNS; same-namespace any port; TCP 4533 from `ingress` |
+| `calibre` | both directions | DNS; same-namespace any port; TCP 8083 from `ingress` |
+| `graphiti` | both directions | DNS; same-namespace any port; TCP 8184 from `ingress`; HTTPS from the graphiti pod to the Neuralwatt API |
+| `ingress` | both directions | DNS; the four app Services on their ports; TCP 443 to the Cloudflare edge (`cloudflared` only) |
 
 Adding an app flow means adding a policy with its exact port and namespace
 selector. Nothing matches all namespaces, and a missing allow fails closed.
@@ -110,11 +121,19 @@ Two mechanisms, no third:
    namespace without the Secret fails instead of borrowing another key.
    `tenant-apps` is the only current consumer; the contract is spelled out in the
    `sops-contract` ConfigMap in `flux-system` and in `docs/runbook.md`.
-2. **External Secrets, generated only.** `platform/secrets/eso/` shows a
-   namespaced `SecretStore`, a `Password` generator and two `ExternalSecret`
-   shapes. No credential is committed. Those objects are applied by the suspended
+2. **External Secrets, two shapes.** `platform/secrets/eso/` holds a
+   namespaced `SecretStore`, a `Password` generator and `ExternalSecret`s. No
+   credential is committed. Those objects are applied by the suspended
    `platform-secrets-eso` Kustomization, because the operator (and its CRDs) is
    not installed by this repository (`docs/runbook.md`).
+   - *Generated*: `immich-db`, `nanobot-broker-token`, `loki-gateway-token` —
+     a `Password` generator mints the value once.
+   - *Contract*: `neuralwatt-api-key` (in `graphiti`) and
+     `cloudflare-tunnel-token` (in `ingress`) — ESO's `kubernetes` provider
+     projects a SOPS+age Secret (`*-sops`, created by hand, see
+     `docs/manual-steps.md` step 12) under the name the workload reads. The
+     ciphertext is the only source of truth and the projection is what a
+     rotation re-reads (1h refresh).
 
 The `sops-age` key is also why `tenant-secret-scope` exists: the tenant can create
 pods, so without that rule it could mount the age identity and decrypt every

@@ -1,9 +1,0 @@
-apiVersion: kustomize.config.k8s.io/v1beta1
-kind: Kustomization
-namespace: data
-
-# A plain ConfigMap with a fixed name, not a configMapGenerator: data apps are
-# reconciled from homelabs-apps and reference the name across repositories, so
-# a content hash would break every consumer on the next edit.
-resources:
-  - configmap.yaml

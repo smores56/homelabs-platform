@@ -1,0 +1,40 @@
+# The claim side of the same contract: a data PVC is named after its namespace
+# and claims the static `data-local` StorageClass, which has no provisioner. A
+# dynamically provisioned claim therefore cannot appear in a data namespace.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: data-pvc-storage
+  labels:
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: platform
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["persistentvolumeclaims"]
+  validations:
+    - expression: "object.metadata.name.startsWith(object.metadata.namespace + '-')"
+      message: "data PVCs must be named <namespace>-*"
+    - expression: "has(object.spec.storageClassName) && object.spec.storageClassName == 'data-local'"
+      message: "data PVCs must claim the data-local StorageClass"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: data-pvc-storage
+  labels:
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: platform
+spec:
+  policyName: data-pvc-storage
+  validationActions: [Deny]
+  matchResources:
+    namespaceSelector:
+      matchExpressions:
+        - key: homelabs.dev/tier
+          operator: In
+          values: ["data"]

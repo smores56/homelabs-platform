@@ -1,11 +1,67 @@
 # Lives at the observability root, not under status-exporter/: that
 # sub-kustomization sets `namespace: observability`, and the namespace
-# transformer would rewrite this binding out of `data` (its whole point).
+# transformer would rewrite these bindings out of the data namespaces (their
+# whole point). One binding per data namespace, because the data tier is one
+# namespace per app; the ClusterRole grants the same read-only verbs in each.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: observability-status-exporter
-  namespace: data
+  namespace: immich
+  labels:
+    app.kubernetes.io/name: status-exporter
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: data
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: observability-status-exporter
+subjects:
+  - kind: ServiceAccount
+    name: status-exporter
+    namespace: observability
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: observability-status-exporter
+  namespace: navidrome
+  labels:
+    app.kubernetes.io/name: status-exporter
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: data
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: observability-status-exporter
+subjects:
+  - kind: ServiceAccount
+    name: status-exporter
+    namespace: observability
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: observability-status-exporter
+  namespace: calibre
+  labels:
+    app.kubernetes.io/name: status-exporter
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: data
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: observability-status-exporter
+subjects:
+  - kind: ServiceAccount
+    name: status-exporter
+    namespace: observability
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: observability-status-exporter
+  namespace: graphiti
   labels:
     app.kubernetes.io/name: status-exporter
     app.kubernetes.io/part-of: homelabs

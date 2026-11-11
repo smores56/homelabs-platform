@@ -157,12 +157,15 @@ identity. `status-exporter` is the sanctioned view:
 
 The identity is the narrowest shape that can answer those questions: a
 ClusterRole with `get/list/watch` on `pods` and `get/list` on
-`deployments`/`statefulsets`, bound by a **RoleBinding in `data` only**. A
+`deployments`/`statefulsets`, bound by **one RoleBinding per data namespace**
+(`immich`, `navidrome`, `calibre`, `graphiti`; `DATA_NAMESPACES` in the
+Deployment names the same four). A
 ClusterRoleBinding would read every namespace; there is deliberately none, and
 `tests/observability/check.sh` fails if one appears. The binding lives at
 `clusters/homelab/observability/rbac-data.yaml` rather than beside the exporter
 because the exporter's sub-kustomization sets `namespace: observability`, and
-kustomize's namespace transformer would rewrite the binding out of `data`.
+kustomize's namespace transformer would rewrite the bindings out of the data
+namespaces.
 
 The exporter is human-owned (`CODEOWNERS`): nanobot reads its metrics through the
 broker or Prometheus and never runs or edits it. Prometheus scrapes it by static
@@ -171,7 +174,7 @@ target and also picks up pods annotated `prometheus.io/scrape: "true"`.
 ## Postgres guidance for data apps
 
 Every Postgres that stores data-tenant content must not log the content. The
-fragment `clusters/homelab/data/postgres-config/configmap.yaml`
+fragment `clusters/homelab/data/immich/postgres-settings.yaml`
 (`postgres-data-settings`, key `data-settings.conf`) sets:
 
 ```
@@ -202,10 +205,11 @@ Consumption, in order of preference:
 2. **`POSTGRES_INITDB_ARGS`** — does not cover these settings; do not use it as
    the mechanism.
 
-Immich and Graphiti run their own database images, and their manifests are
-reconciled by their owning repositories; the fragment and the two recipes above
-are the contract they include. `platform-data-config` applies the ConfigMap
-before any such app exists (it depends only on `platform-namespaces`).
+Immich is the only data app with a Postgres, so the fragment ships inside
+`clusters/homelab/data/immich/` and is applied with that app in the `immich`
+namespace. A future data app that adds one copies the fragment into its own
+namespace: a ConfigMap cannot be shared across namespaces, and the data tier
+deliberately has no namespace that holds only shared configuration.
 
 ## Verification
 

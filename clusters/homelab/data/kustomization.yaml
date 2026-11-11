@@ -1,0 +1,11 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# One directory per data app, one namespace per directory, one virtiofs share
+# per namespace. There is no shared `data` namespace: a misplaced manifest then
+# fails the data-pvc-scope policy instead of quietly landing next to Immich.
+resources:
+  - immich
+  - navidrome
+  - calibre
+  - graphiti

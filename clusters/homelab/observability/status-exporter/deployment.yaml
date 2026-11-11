@@ -42,8 +42,10 @@ spec:
             - name: metrics
               containerPort: 9101
           env:
-            - name: DATA_NAMESPACE
-              value: data
+            # One namespace per data app; the exporter's RoleBindings cover
+            # exactly these four (observability/rbac-data.yaml).
+            - name: DATA_NAMESPACES
+              value: calibre,graphiti,immich,navidrome
             - name: EXPORT_PORT
               value: "9101"
             - name: REFRESH_SECONDS

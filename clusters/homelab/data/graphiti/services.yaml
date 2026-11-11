@@ -1,0 +1,35 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: graphiti
+  namespace: graphiti
+  labels:
+    app.kubernetes.io/name: graphiti
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: data
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: graphiti
+  ports:
+    - name: http
+      port: 8184
+      targetPort: http
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: graphiti-falkordb
+  namespace: graphiti
+  labels:
+    app.kubernetes.io/name: graphiti-falkordb
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: data
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: graphiti-falkordb
+  ports:
+    - name: falkordb
+      port: 6379
+      targetPort: falkordb

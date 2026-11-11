@@ -1,9 +1,12 @@
-# Stage 5a. The Postgres settings fragment every data app mounts. It only needs
-# the `data` namespace to exist; it must land before any app that includes it.
+# Stage 6. The data apps themselves: Immich, Navidrome, Calibre and Graphiti,
+# one directory each, each bound to its own namespace and share. Admission,
+# network and storage must exist first; the Secrets the pods reference come from
+# ESO (`platform-secrets-eso`, suspended until the operator is installed), so a
+# missing secret leaves a pod unstarted rather than unauthenticated.
 apiVersion: kustomize.toolkit.fluxcd.io/v1
 kind: Kustomization
 metadata:
-  name: platform-data-config
+  name: platform-data-apps
   namespace: flux-system
   labels:
     app.kubernetes.io/part-of: homelabs
@@ -13,9 +16,11 @@ spec:
   retryInterval: 1m
   timeout: 5m
   prune: true
-  path: ./clusters/homelab/data/postgres-config
+  path: ./clusters/homelab/data
   dependsOn:
-    - name: platform-namespaces
+    - name: platform-policies
+    - name: platform-network
+    - name: platform-storage
   sourceRef:
     kind: GitRepository
     name: flux-system

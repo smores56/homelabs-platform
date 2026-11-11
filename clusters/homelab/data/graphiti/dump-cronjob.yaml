@@ -1,0 +1,91 @@
+# A graph dump on the share before host restic runs. FalkorDB is not Postgres, so
+# `pg_dump` cannot apply; `redis-cli --rdb` streams a point-in-time snapshot into
+# /data/db-dumps/graphiti.rdb without touching the server's own AOF. Same timing
+# contract as immich-dump: 02:45 Europe/Berlin, bounded to 30 minutes, host
+# restic at 03:30 (up to 03:45 with its random delay).
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: graphiti-dump
+  namespace: graphiti
+  labels:
+    app.kubernetes.io/name: graphiti
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: data
+spec:
+  schedule: "45 2 * * *"
+  timeZone: Europe/Berlin
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 600
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 1800
+      ttlSecondsAfterFinished: 86400
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: graphiti-dump
+            app.kubernetes.io/part-of: homelabs
+            homelabs.dev/tier: data
+            homelabs.dev/managed-by: platform
+        spec:
+          serviceAccountName: data-workload
+          automountServiceAccountToken: false
+          restartPolicy: OnFailure
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
+            seccompProfile:
+              type: RuntimeDefault
+          initContainers:
+            - name: prepare-data
+              image: busybox:1.37.0
+              command: ["sh", "-c", "mkdir -p /data/db-dumps"]
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
+              volumeMounts:
+                - name: data
+                  mountPath: /data
+          containers:
+            - name: dump
+              image: docker.io/valkey/valkey:9@sha256:3add1a336a920ea54770a001ab6feb3da5fceea96a40373a3a2cd469b815f0b7
+              command: ["sh", "-c"]
+              args:
+                - |
+                  set -eu
+                  out=/data/db-dumps/graphiti.rdb
+                  tmp="$out.tmp"
+                  trap 'rm -f "$tmp"' EXIT
+                  redis-cli -h graphiti-falkordb -p 6379 --rdb "$tmp"
+                  mv "$tmp" "$out"
+                  printf 'graphiti dump written to %s (%s bytes)\n' "$out" "$(wc -c <"$out")"
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 128Mi
+                limits:
+                  cpu: "1"
+                  memory: 512Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
+              volumeMounts:
+                - name: data
+                  mountPath: /data
+                - name: tmp
+                  mountPath: /tmp
+          volumes:
+            - name: data
+              persistentVolumeClaim:
+                claimName: graphiti-data
+            - name: tmp
+              emptyDir: {}

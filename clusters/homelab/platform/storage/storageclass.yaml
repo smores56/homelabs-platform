@@ -1,0 +1,17 @@
+# The one StorageClass the data tier uses. There is deliberately no
+# provisioner: every volume is a static `local` PV whose path is a virtiofs share
+# of the `cluster` guest (persistentvolumes.yaml), so a claim can only bind to a
+# volume this repository declared. `Retain` means deleting a PVC never unlinks
+# data, and `WaitForFirstConsumer` keeps binding in the pod's node — `cluster`
+# is the only node, and the PV node affinity would fail closed anywhere else.
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: data-local
+  labels:
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: data
+provisioner: kubernetes.io/no-provisioner
+reclaimPolicy: Retain
+volumeBindingMode: WaitForFirstConsumer
+allowVolumeExpansion: false

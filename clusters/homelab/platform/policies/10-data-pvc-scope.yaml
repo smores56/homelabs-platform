@@ -1,0 +1,49 @@
+# A data pod may mount only a claim that belongs to its own namespace: every PVC
+# name starts with `<namespace>-`. Each data namespace is bound to exactly one
+# virtiofs share by the PV claimRef in platform/storage/persistentvolumes.yaml,
+# so this rule is what stops Immich (share `immich`) from mounting the music or
+# books library after a compromise. CEL cannot read the PVC's labels from a pod,
+# so the name prefix is the enforceable half; the claimRef pins the other half,
+# and tests/policies/check.sh asserts both.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: data-pvc-scope
+  labels:
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: platform
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["pods"]
+  variables:
+    - name: claims
+      expression: >-
+        has(object.spec.volumes)
+        ? object.spec.volumes.filter(v, has(v.persistentVolumeClaim)).map(v, v.persistentVolumeClaim.claimName)
+        : []
+  validations:
+    - expression: >-
+        variables.claims.all(n, n.startsWith(object.metadata.namespace + '-'))
+      message: "data pods may mount only their own share: PVC names must start with <namespace>-"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: data-pvc-scope
+  labels:
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: platform
+spec:
+  policyName: data-pvc-scope
+  validationActions: [Deny]
+  matchResources:
+    namespaceSelector:
+      matchExpressions:
+        - key: homelabs.dev/tier
+          operator: In
+          values: ["data"]

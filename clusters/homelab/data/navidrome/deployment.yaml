@@ -1,0 +1,121 @@
+# The library mount is read-only: Navidrome indexes the tree and never writes a
+# tag, so a compromised or buggy pod cannot alter the music. Its own database is
+# `navidrome/` on the same share, which is where the host's
+# /var/lib/data/navidrome moves at cutover (docs/data-migration.md).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: navidrome
+  namespace: navidrome
+  labels:
+    app.kubernetes.io/name: navidrome
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: data
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: navidrome
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: navidrome
+        app.kubernetes.io/part-of: homelabs
+        homelabs.dev/tier: data
+        homelabs.dev/managed-by: platform
+    spec:
+      serviceAccountName: data-workload
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        - name: prepare-data
+          image: busybox:1.37.0
+          command: ["sh", "-c", "mkdir -p /data/navidrome"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      containers:
+        - name: navidrome
+          image: docker.io/deluan/navidrome:0.63.2
+          env:
+            - name: ND_MUSICFOLDER
+              value: /music
+            - name: ND_DATAFOLDER
+              value: /data/navidrome
+            - name: ND_CACHEFOLDER
+              value: /cache
+            - name: ND_PORT
+              value: "4533"
+            - name: ND_ADDRESS
+              value: 0.0.0.0
+            - name: ND_ENABLEINSIGHTSCOLLECTOR
+              value: "false"
+            - name: ND_SCANSCHEDULE
+              value: 1h
+            - name: TZ
+              value: UTC
+          ports:
+            - name: http
+              containerPort: 4533
+          startupProbe:
+            httpGet:
+              path: /ping
+              port: http
+            periodSeconds: 10
+            failureThreshold: 30
+          readinessProbe:
+            httpGet:
+              path: /ping
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /ping
+              port: http
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 5
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "2"
+              memory: 1Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: data
+              mountPath: /data
+              subPath: navidrome
+            - name: data
+              mountPath: /music
+              readOnly: true
+            - name: cache
+              mountPath: /cache
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: navidrome-data
+        - name: cache
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}

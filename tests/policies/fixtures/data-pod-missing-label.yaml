@@ -3,7 +3,7 @@ apiVersion: v1
 kind: Pod
 metadata:
   name: immich-server
-  namespace: data
+  namespace: immich
   labels:
     app.kubernetes.io/name: immich
 spec:

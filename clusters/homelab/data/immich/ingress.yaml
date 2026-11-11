@@ -1,0 +1,28 @@
+# The hostname the Cloudflare tunnel routes here (T7 owns the Cloudflare side).
+# No ingress controller is installed in the cluster: k3s's traefik is disabled
+# (modules/nixos/cluster-vm.nix), and cloudflared in token mode reads its routes
+# from the Cloudflare dashboard, so this object is the reviewed contract that
+# dashboard config must match rather than something a controller consumes. The
+# policy check asserts host and backend against the Service, so the two cannot
+# drift.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: immich
+  namespace: immich
+  labels:
+    app.kubernetes.io/name: immich
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: data
+spec:
+  rules:
+    - host: immich.sammohr.dev
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: immich-server
+                port:
+                  number: 2283

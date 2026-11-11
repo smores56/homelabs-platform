@@ -1,0 +1,26 @@
+# Stage 6b. The cluster tunnel: cloudflared in the `ingress` namespace, plus the
+# Ingress objects that record the hostname -> Service contract for the data
+# apps. The tunnel token is a SOPS contract projected by ESO, so this stage
+# deploys a connector that cannot start until the operator has created the
+# Secret (fail closed, like every other credential in this repository).
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: platform-ingress
+  namespace: flux-system
+  labels:
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: platform
+spec:
+  interval: 10m
+  retryInterval: 1m
+  timeout: 5m
+  prune: true
+  path: ./clusters/homelab/ingress
+  dependsOn:
+    - name: platform-namespaces
+    - name: platform-network
+  sourceRef:
+    kind: GitRepository
+    name: flux-system
+  serviceAccountName: kustomize-controller

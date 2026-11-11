@@ -1,0 +1,14 @@
+# The library location is the only setting that must be right before the first
+# request: Calibre-Web writes `cwa-config/app.db` on first boot and reads the
+# library from /calibre-library.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: calibre-web-env
+  namespace: calibre
+  labels:
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: data
+data:
+  CALIBRE_LIBRARY_LOCATION: /calibre-library
+  CWA_PORT: "8083"

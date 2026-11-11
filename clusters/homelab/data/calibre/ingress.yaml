@@ -1,0 +1,23 @@
+# Calibre-Web has its own login, like the host's calibre-server did. See
+# clusters/homelab/data/immich/ingress.yaml for the Ingress-object rationale.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: calibre
+  namespace: calibre
+  labels:
+    app.kubernetes.io/name: calibre
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: data
+spec:
+  rules:
+    - host: calibre.sammohr.dev
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: calibre
+                port:
+                  number: 8083

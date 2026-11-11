@@ -1,0 +1,74 @@
+# Cluster-internal endpoints. The ingress namespace may dial immich-server:2283
+# and nothing else here (platform/network/data-flows.yaml); the database and
+# queue are reachable only from pods in this namespace.
+apiVersion: v1
+kind: Service
+metadata:
+  name: immich-server
+  namespace: immich
+  labels:
+    app.kubernetes.io/name: immich
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: data
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: immich
+  ports:
+    - name: http
+      port: 2283
+      targetPort: http
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: immich-machine-learning
+  namespace: immich
+  labels:
+    app.kubernetes.io/name: immich-machine-learning
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: data
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: immich-machine-learning
+  ports:
+    - name: http
+      port: 3003
+      targetPort: http
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: immich-postgres
+  namespace: immich
+  labels:
+    app.kubernetes.io/name: immich-postgres
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: data
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: immich-postgres
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: immich-valkey
+  namespace: immich
+  labels:
+    app.kubernetes.io/name: immich-valkey
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: data
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: immich-valkey
+  ports:
+    - name: valkey
+      port: 6379
+      targetPort: valkey

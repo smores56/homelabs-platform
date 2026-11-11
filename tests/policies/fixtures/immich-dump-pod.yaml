@@ -1,0 +1,38 @@
+# expect: allow
+# The pod an immich-dump job creates: data-workload identity, the platform label,
+# and the app's own claim. If either policy tightened this pod would stop being
+# admitted, which is the failure the negative tests are for.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: immich-dump-29305045-abcde
+  namespace: immich
+  labels:
+    app.kubernetes.io/name: immich-dump
+    homelabs.dev/managed-by: platform
+spec:
+  serviceAccountName: data-workload
+  automountServiceAccountToken: false
+  restartPolicy: OnFailure
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: dump
+      image: ghcr.io/immich-app/postgres@sha256:0000000000000000000000000000000000000000000000000000000000000000
+      command: ["sh", "-c"]
+      args: ["pg_dump -Fc --no-owner > /data/db-dumps/immich.dump.tmp && mv /data/db-dumps/immich.dump.tmp /data/db-dumps/immich.dump"]
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: ["ALL"]
+      volumeMounts:
+        - name: data
+          mountPath: /data
+  volumes:
+    - name: data
+      persistentVolumeClaim:
+        claimName: immich-data

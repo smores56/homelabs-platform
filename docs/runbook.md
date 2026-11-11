@@ -325,6 +325,16 @@ kubectl -n tenant-apps run probe --image=busybox \
 Expected: rejected with a `violates PodSecurity "restricted"` violation
 (`docs/negative-tests.md`).
 
+### 6. Data apps and the cluster tunnel
+
+`platform-storage`, `platform-data-apps` and `platform-ingress` apply with the
+rest of the stack, but their pods stay unstarted until the operator has done
+`docs/manual-steps.md` steps 8, 12 and 13 (ESO, the SOPS-contract Secrets, and
+the cutover). The per-app order, checks and rollback are in
+`docs/data-migration.md`. Nothing here flips a Cloudflare route: the tunnel and
+its DNS/Access objects are T7, and the host tunnel keeps serving `ssh`, `llm`,
+`chat`, `agent` and `memory` throughout.
+
 ### Required CI contexts
 
 `.github/workflows/ci.yml` now includes the `policy checks` job. The

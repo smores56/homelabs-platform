@@ -198,7 +198,11 @@ for file in "$rbac_dir"/*.yaml; do
   jq -c '.[]' <<<"$(json_of "$file")" >>"$rbac_json"
 done
 
-eq "$(grep -c . "$rbac_json")" "4" "tenant RBAC objects only (2 service accounts, 1 role, 1 binding)"
+eq "$(jq -r 'select(.kind == "ServiceAccount") | .metadata.namespace + ":" + .metadata.name' "$rbac_json" | sort | paste -sd, -)" \
+  "calibre:data-workload,graphiti:data-workload,immich:data-workload,navidrome:data-workload,tenant-apps:tenant-apps-reconciler" \
+  "the RBAC stage holds the tenant identity and one data-workload account per data namespace"
+eq "$(jq -r 'select(.kind == "Role" or .kind == "RoleBinding") | .kind' "$rbac_json" | sort | paste -sd, -)" \
+  "Role,RoleBinding" "the RBAC stage holds no other Role or RoleBinding"
 
 hits=$(jq -r --arg re "^(${deny_resources})$" '
   . as $doc
@@ -284,7 +288,10 @@ for file in "$network_dir"/*.yaml; do
   jq -c '.[]' <<<"$(json_of "$file")" >>"$network_json"
 done
 
-for ns in tenant-apps broker data ingress; do
+# The data tier is one namespace per app, so the same two rules must exist in
+# every one of them: a missing default-deny is a wide-open app.
+data_namespaces=(immich navidrome calibre graphiti)
+for ns in tenant-apps broker ingress "${data_namespaces[@]}"; do
   types=$(jq -r --arg ns "$ns" 'select(.metadata.namespace == $ns and .metadata.name == "default-deny") | (.spec.policyTypes // []) | sort | join(",")' "$network_json")
   eq "$types" "Egress,Ingress" "default-deny covers both directions in $ns"
   dns=$(jq -r --arg ns "$ns" 'select(.metadata.namespace == $ns and .metadata.name == "allow-dns-egress") | .spec.egress[0].to[0].namespaceSelector.matchLabels["kubernetes.io/metadata.name"]' "$network_json")
@@ -295,11 +302,139 @@ eq "$(jq -r 'select(.metadata.namespace == "tenant-apps" and .metadata.name == "
   "broker:8080" "tenant egress is broker-only on 8080"
 eq "$(jq -r 'select(.metadata.namespace == "broker" and .metadata.name == "ingress-tenant-only") | [.spec.ingress[0].from[0].namespaceSelector.matchLabels["homelabs.dev/tier"], .spec.ingress[0].ports[0].port] | join(":")' "$network_json")" \
   "tenant:8080" "broker ingress accepts tenants on 8080"
-eq "$(jq -r 'select(.metadata.namespace == "data" and .metadata.name == "immich-http-from-ingress") | [.spec.ingress[0].from[0].namespaceSelector.matchLabels["kubernetes.io/metadata.name"], .spec.ingress[0].from[0].podSelector.matchLabels["app.kubernetes.io/name"], .spec.ingress[0].ports[0].port] | join(":")' "$network_json")" \
-  "ingress::2283" "immich accepts HTTP from the ingress namespace only"
-eq "$(jq -s -r 'map(select(.metadata.namespace == "data") | .metadata.name) | sort | join(",")' "$network_json")" \
-  "allow-dns-egress,allow-same-namespace,default-deny,immich-http-from-ingress" \
-  "no extra data-namespace flow beyond default-deny, DNS, same-namespace and immich HTTP"
+while IFS=: read -r app port; do
+  eq "$(jq -r --arg ns "$app" --arg name "$app-http-from-ingress" \
+    'select(.metadata.namespace == $ns and .metadata.name == $name) | [.spec.ingress[0].from[0].namespaceSelector.matchLabels["kubernetes.io/metadata.name"], .spec.ingress[0].from[0].podSelector.matchLabels["app.kubernetes.io/name"], .spec.ingress[0].ports[0].port] | join(":")' "$network_json")" \
+    "ingress::$port" "$app accepts HTTP from the ingress namespace only"
+done <<'APPS'
+immich:2283
+navidrome:4533
+calibre:8083
+graphiti:8184
+APPS
+
+# Exact policy sets: an added flow has to be added to this assertion too, which
+# is what keeps "only the intended flows" reviewable.
+eq "$(jq -s -r 'map(select(.metadata.namespace == "immich") | .metadata.name) | sort | join(",")' "$network_json")" \
+  "allow-dns-egress,allow-same-namespace,default-deny,immich-http-from-ingress,immich-ml-public-https" \
+  "immich keeps only default-deny, DNS, same-namespace, ingress HTTP and model-download HTTPS"
+eq "$(jq -s -r 'map(select(.metadata.namespace == "navidrome") | .metadata.name) | sort | join(",")' "$network_json")" \
+  "allow-dns-egress,allow-same-namespace,default-deny,navidrome-http-from-ingress" \
+  "navidrome keeps only default-deny, DNS, same-namespace and ingress HTTP"
+eq "$(jq -s -r 'map(select(.metadata.namespace == "calibre") | .metadata.name) | sort | join(",")' "$network_json")" \
+  "allow-dns-egress,allow-same-namespace,calibre-http-from-ingress,default-deny" \
+  "calibre keeps only default-deny, DNS, same-namespace and ingress HTTP"
+eq "$(jq -s -r 'map(select(.metadata.namespace == "graphiti") | .metadata.name) | sort | join(",")' "$network_json")" \
+  "allow-dns-egress,allow-same-namespace,default-deny,graphiti-http-from-ingress,graphiti-public-https" \
+  "graphiti keeps only default-deny, DNS, same-namespace, ingress HTTP and Neuralwatt HTTPS"
+
+eq "$(jq -r 'select(.metadata.namespace == "ingress" and .metadata.name == "egress-data-apps-only") | [.spec.egress[] | .to[0] | "\(.namespaceSelector.matchLabels["kubernetes.io/metadata.name"]):\(.podSelector.matchLabels["app.kubernetes.io/name"])"] | sort | join(",")' "$network_json")" \
+  "calibre:calibre,graphiti:graphiti,immich:immich,navidrome:navidrome" \
+  "the ingress namespace reaches the four app Services and nothing else"
+eq "$(jq -r 'select(.metadata.namespace == "ingress" and .metadata.name == "egress-tunnel-edge") | [.spec.podSelector.matchLabels["app.kubernetes.io/name"], .spec.egress[0].ports[0].port] | join(":")' "$network_json")" \
+  "cloudflared:443" "cloudflared may reach the Cloudflare edge over TCP 443 only"
+
+# ------------------------------------------------------- data storage contract
+storage_dir=clusters/homelab/platform/storage
+sc="$storage_dir/storageclass.yaml"
+pvs="$storage_dir/persistentvolumes.yaml"
+
+eq "$(yq -r '.provisioner' "$sc")" "kubernetes.io/no-provisioner" "data-local has no provisioner"
+eq "$(yq -r '.reclaimPolicy' "$sc")" "Retain" "data-local retains volumes"
+eq "$(yq -r '.volumeBindingMode' "$sc")" "WaitForFirstConsumer" "data-local binds in the consuming pod's node"
+eq "$(yq -r '.allowVolumeExpansion' "$sc")" "false" "data-local is not expandable"
+
+eq "$(yq -r '.spec.local.path' "$pvs" | grep -v '^---$' | sort | paste -sd, -)" \
+  "/mnt/data/books,/mnt/data/graphiti,/mnt/data/immich,/mnt/data/music" \
+  "every PV path is one of the guest's virtiofs shares"
+eq "$(yq -r '.spec.storageClassName' "$pvs" | grep -v '^---$' | sort -u)" "data-local" "every PV claims data-local"
+eq "$(yq -r '.spec.persistentVolumeReclaimPolicy' "$pvs" | grep -v '^---$' | sort -u)" "Retain" "every PV retains its data"
+eq "$(yq -r '.spec.nodeAffinity.required.nodeSelectorTerms[0].matchExpressions[0].key' "$pvs" | grep -v '^---$' | sort -u)" \
+  "kubernetes.io/hostname" "every PV pins node affinity"
+eq "$(yq -r '.spec.nodeAffinity.required.nodeSelectorTerms[0].matchExpressions[0].values[0]' "$pvs" | grep -v '^---$' | sort -u)" \
+  "cluster" "every PV is bound to the cluster node"
+eq "$(yq -r '.spec.claimRef | [.namespace, .name] | join(":")' "$pvs" | grep -v '^---$' | sort | paste -sd, -)" \
+  "calibre:calibre-data,graphiti:graphiti-data,immich:immich-data,navidrome:navidrome-data" \
+  "each PV is pre-bound to exactly one app claim"
+if grep -rq 'hostPath' clusters/homelab/data clusters/homelab/ingress; then
+  bad "a data or ingress manifest uses hostPath"
+else
+  ok "no data or ingress manifest uses hostPath"
+fi
+
+for ns in "${data_namespaces[@]}"; do
+  eq "$(yq -r '[.metadata.namespace, .metadata.name, .spec.storageClassName] | join(":")' \
+    "clusters/homelab/data/$ns/storage.yaml")" "$ns:$ns-data:data-local" \
+    "$ns has exactly one PVC named $ns-data on data-local"
+done
+
+# ------------------------------------------------------------- dump contract
+# The dumps must be on the share before the host's restic walk (03:30
+# Europe/Berlin, up to 03:45 with its random delay), so the schedule, the
+# timezone and the deadline are all asserted, not just the path.
+while IFS=: read -r app suffix; do
+  cj="clusters/homelab/data/$app/dump-cronjob.yaml"
+  eq "$(yq -r '.spec.schedule' "$cj")" "45 2 * * *" "$app dump runs at 02:45"
+  eq "$(yq -r '.spec.timeZone' "$cj")" "Europe/Berlin" "$app dump uses the host's timezone"
+  eq "$(yq -r '.spec.concurrencyPolicy' "$cj")" "Forbid" "$app dump never overlaps itself"
+  eq "$(yq -r '.spec.jobTemplate.spec.activeDeadlineSeconds' "$cj")" "1800" \
+    "$app dump is bounded to 30 minutes, before restic"
+  eq "$(yq -r '[.spec.jobTemplate.spec.template.spec.volumes[] | select(.persistentVolumeClaim) | .persistentVolumeClaim.claimName] | join(",")' "$cj")" \
+    "$app-data" "$app dump writes into the app's own claim"
+  if grep -Fq "/data/db-dumps/$app.$suffix" "$cj"; then
+    ok "$app dump writes /data/db-dumps/$app.$suffix"
+  else
+    bad "$app dump does not write /data/db-dumps/$app.$suffix"
+  fi
+done <<'DUMPS'
+immich:dump
+graphiti:rdb
+DUMPS
+
+# ------------------------------------------------- data workload manifest shape
+# Admission (data-workload-source) enforces the identity at runtime; this is the
+# pre-merge half, so a manifest that would be denied never reaches review.
+kustomize build clusters/homelab/data >"$work/data-apps.yaml"
+json_of "$work/data-apps.yaml" >"$work/data-apps.json"
+
+jq_workloads='
+  def podspec:
+    if .kind == "CronJob" then .spec.jobTemplate.spec.template.spec
+    elif (.kind == "Deployment" or .kind == "StatefulSet") then .spec.template.spec
+    else null end;
+  def podmeta:
+    if .kind == "CronJob" then .spec.jobTemplate.spec.template.metadata
+    elif (.kind == "Deployment" or .kind == "StatefulSet") then .spec.template.metadata
+    else null end;
+  .[] | select(podspec != null)
+'
+eq "$(jq -r "$jq_workloads | podspec.serviceAccountName // \"none\"" "$work/data-apps.json" | sort -u)" \
+  "data-workload" "every data workload runs as the data-workload service account"
+eq "$(jq -r "$jq_workloads | podmeta.labels[\"homelabs.dev/managed-by\"] // \"none\"" "$work/data-apps.json" | sort -u)" \
+  "platform" "every data workload carries homelabs.dev/managed-by=platform"
+eq "$(jq -r "$jq_workloads | select(podspec.securityContext.runAsUser != 1000) | .metadata.name" "$work/data-apps.json")" \
+  "" "every data pod runs as uid 1000 (the share's host owner through the guest translation)"
+eq "$(jq -r "$jq_workloads | podspec.containers[] | select((.resources.limits // {}) == {}) | .name" "$work/data-apps.json")" \
+  "" "every data container sets resource limits"
+# Probes are for long-running containers; a dump job's own exit code is its
+# liveness signal.
+eq "$(jq -r '.[] | select(.kind == "Deployment" or .kind == "StatefulSet") | .spec.template.spec.containers[] | select((.readinessProbe // .livenessProbe // .startupProbe) == null) | .name' "$work/data-apps.json")" \
+  "" "every long-running data container has at least one probe"
+
+# --------------------------------------------------------- hostname contract
+while IFS=: read -r ns host svc port; do
+  file="clusters/homelab/data/$ns/ingress.yaml"
+  eq "$(yq -r '.spec.rules[0].host' "$file")" "$host" "$host is declared in $ns"
+  eq "$(yq -r '.spec.rules[0].http.paths[0].backend.service.name' "$file")" "$svc" \
+    "$host routes to the $svc Service"
+  eq "$(yq -r '.spec.rules[0].http.paths[0].backend.service.port.number' "$file")" "$port" \
+    "$host routes to port $port"
+done <<'INGRESS'
+immich:immich.sammohr.dev:immich-server:2283
+navidrome:music.sammohr.dev:navidrome:4533
+calibre:calibre.sammohr.dev:calibre:8083
+graphiti:memory.sammohr.dev:graphiti:8184
+INGRESS
 
 # ------------------------------------------------------- stage ordering (DAG)
 declare -A stage_edges=(
@@ -308,7 +443,9 @@ declare -A stage_edges=(
   [platform-policies]="platform-rbac"
   [platform-network]="platform-namespaces"
   [platform-secrets]="platform-namespaces,platform-policies"
-  [platform-data-config]="platform-namespaces"
+  [platform-storage]="platform-namespaces"
+  [platform-data-apps]="platform-network,platform-policies,platform-storage"
+  [platform-ingress]="platform-namespaces,platform-network"
   [platform-observability]="platform-policies"
   [platform-tenants]="platform-network,platform-policies,platform-secrets"
 )
@@ -335,7 +472,7 @@ done
 
 listed=$(yq -o=json -I=0 '.' clusters/homelab/platform/kustomization.yaml |
   jq -r '[.resources[] | sub("^kustomizations/"; "") | sub("\\.yaml$"; "")] | .[]')
-eq "$listed" "$(printf '%s\n' namespaces rbac policies network secrets data observability tenants)" \
+eq "$listed" "$(printf '%s\n' namespaces rbac policies network secrets storage data ingress observability tenants)" \
   "platform/kustomization.yaml lists every stage in apply order"
 missing=$(comm -23 <(find "$stages_dir" -maxdepth 1 -name '*.yaml' -printf '%f\n' | sed 's|\.yaml$||' | sort) \
   <(yq -o=json -I=0 '.' clusters/homelab/platform/kustomization.yaml |
@@ -429,7 +566,7 @@ if ((runtime)); then
   else
     bad "runtime: applying flux components failed" "$(cat "$work/crds.err")"
   fi
-  for stage in namespaces rbac policies network secrets tenants; do
+  for stage in namespaces rbac policies network secrets storage tenants; do
     if kubectl apply -k "clusters/homelab/platform/$stage" >/dev/null 2>"$work/stage.err"; then
       ok "runtime: stage $stage applied"
     else

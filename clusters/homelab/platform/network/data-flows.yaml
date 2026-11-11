@@ -1,17 +1,24 @@
-# Data namespaces are default-deny in both directions. Two flows are opened:
+# Data namespaces are default-deny in both directions. The flows opened here are
+# the complete set, one per app:
 #
 #   1. same-namespace traffic, because Immich talks to its own Postgres and
-#      Redis inside the `data` namespace;
-#   2. Immich HTTP 2283 from the `ingress` namespace only, which is the single
-#      path a cloudflared/ingress proxy may use into a data app.
+#      Valkey and Graphiti to its own FalkorDB;
+#   2. the app's HTTP port from the `ingress` namespace only, which is the one
+#      path cloudflared may use into a data app;
+#   3. HTTPS to the public internet for the two pods that fetch remote content
+#      (`immich-machine-learning` downloads model weights, Graphiti calls the
+#      Neuralwatt API). Port 443 is the only port the cluster guest can open
+#      anyway: modules/nixos/cluster-vm.nix on the host forwards 80/443, DNS and
+#      NTP from the tap and drops everything else.
 #
 # Adding an app means adding a policy with its exact port; nothing here matches
 # all namespaces or all ports.
+
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: allow-same-namespace
-  namespace: data
+  namespace: immich
   labels:
     app.kubernetes.io/part-of: homelabs
     homelabs.dev/tier: data
@@ -29,7 +36,7 @@ apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: immich-http-from-ingress
-  namespace: data
+  namespace: immich
   labels:
     app.kubernetes.io/part-of: homelabs
     homelabs.dev/tier: data
@@ -50,7 +57,177 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: egress-data-immich-only
+  name: allow-same-namespace
+  namespace: navidrome
+  labels:
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: data
+spec:
+  podSelector: {}
+  policyTypes: ["Ingress", "Egress"]
+  ingress:
+    - from:
+        - podSelector: {}
+  egress:
+    - to:
+        - podSelector: {}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: navidrome-http-from-ingress
+  namespace: navidrome
+  labels:
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: data
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: navidrome
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress
+      ports:
+        - protocol: TCP
+          port: 4533
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-same-namespace
+  namespace: calibre
+  labels:
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: data
+spec:
+  podSelector: {}
+  policyTypes: ["Ingress", "Egress"]
+  ingress:
+    - from:
+        - podSelector: {}
+  egress:
+    - to:
+        - podSelector: {}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: calibre-http-from-ingress
+  namespace: calibre
+  labels:
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: data
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: calibre
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress
+      ports:
+        - protocol: TCP
+          port: 8083
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-same-namespace
+  namespace: graphiti
+  labels:
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: data
+spec:
+  podSelector: {}
+  policyTypes: ["Ingress", "Egress"]
+  ingress:
+    - from:
+        - podSelector: {}
+  egress:
+    - to:
+        - podSelector: {}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: graphiti-http-from-ingress
+  namespace: graphiti
+  labels:
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: data
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: graphiti
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress
+      ports:
+        - protocol: TCP
+          port: 8184
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: immich-ml-public-https
+  namespace: immich
+  labels:
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: data
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: immich-machine-learning
+  policyTypes: ["Egress"]
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+      ports:
+        - protocol: TCP
+          port: 443
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: graphiti-public-https
+  namespace: graphiti
+  labels:
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: data
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: graphiti
+  policyTypes: ["Egress"]
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+      ports:
+        - protocol: TCP
+          port: 443
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: egress-data-apps-only
   namespace: ingress
   labels:
     app.kubernetes.io/part-of: homelabs
@@ -62,10 +239,65 @@ spec:
     - to:
         - namespaceSelector:
             matchLabels:
-              kubernetes.io/metadata.name: data
+              kubernetes.io/metadata.name: immich
           podSelector:
             matchLabels:
               app.kubernetes.io/name: immich
       ports:
         - protocol: TCP
           port: 2283
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: navidrome
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: navidrome
+      ports:
+        - protocol: TCP
+          port: 4533
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: calibre
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: calibre
+      ports:
+        - protocol: TCP
+          port: 8083
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: graphiti
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: graphiti
+      ports:
+        - protocol: TCP
+          port: 8184
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: egress-tunnel-edge
+  namespace: ingress
+  labels:
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: ingress
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: cloudflared
+  policyTypes: ["Egress"]
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+      ports:
+        - protocol: TCP
+          port: 443
