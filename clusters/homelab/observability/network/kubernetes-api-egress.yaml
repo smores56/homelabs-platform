@@ -1,0 +1,32 @@
+# Three pods in this namespace talk to the API server. The API server is not a
+# pod (kube-apiserver runs on the host in k3s), so a podSelector cannot express
+# it: the rule is the k3s service CIDR on 443, which is the only range a
+# ClusterIP can live in. `docs/broker.md` records the same range.
+#
+#   vector          watches pods/namespaces to attach metadata and the tier label
+#   prometheus      `kubernetes_sd_configs` pod discovery
+#   status-exporter reads nodes, pods and workloads with its RoleBindings
+#
+# Loki and the gateway have no API access and are not selected here.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: kubernetes-api-egress
+  namespace: observability
+  labels:
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: observability
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/name
+        operator: In
+        values: ["vector", "prometheus", "status-exporter"]
+  policyTypes: ["Egress"]
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 10.43.0.0/16
+      ports:
+        - protocol: TCP
+          port: 443

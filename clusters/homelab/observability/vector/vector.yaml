@@ -3,12 +3,16 @@
 # a property of the namespace: a pod that forgets a label must not be able to
 # opt itself into the raw tenant.
 #
-#   tier=data     -> data_filter     -> data_allowlist (VRL) -> loki-gateway (tenant data)
+#   tier=data     -> data_filter     -> data_allowlist (VRL) -> Loki (X-Scope-OrgID: data)
 #   anything else -> raw_filter      -> Loki directly          (tenant raw)
 #
-# The data sink deliberately has no `tenant_id`: the gateway injects
-# `X-Scope-OrgID: data` after checking the bearer token, so a client cannot
-# choose its tenant. See docs/observability.md for the broker contract.
+# Both sinks write to Loki directly, each with an explicit `tenant_id`, because
+# Loki's write API (`/loki/api/v1/push`) is what Vector speaks. `loki-gateway` is
+# a *read-only* proxy for the broker and the digest: it forces
+# `X-Scope-OrgID: data` and 403s every push, so pointing a sink at it would
+# silently discard the whole data tenant. Writes are constrained by
+# NetworkPolicy (only this DaemonSet may reach Loki on 3100), not by a token.
+# See docs/observability.md for the broker contract.
 api:
   enabled: true
   address: 0.0.0.0:8686
@@ -93,15 +97,15 @@ sinks:
       stream: "{{ stream }}"
     remove_timestamp: false
 
-  # The token is read from the external secret at startup. A missing secret
-  # keeps the pod from starting: no token, no data-tenant writes.
+  # The push API is Loki's own; the tenant is named here and enforced by
+  # `auth_enabled: true`. Only this DaemonSet is allowed to reach Loki on 3100
+  # (observability/network/loki-ingress.yaml), so the header cannot be forged by
+  # a tenant or the broker.
   loki_data:
     type: loki
     inputs: [data_allowlist]
-    endpoint: http://loki-gateway.observability.svc.cluster.local:3100
-    auth:
-      strategy: bearer
-      token: ${LOKI_GATEWAY_TOKEN}
+    endpoint: http://loki.observability.svc.cluster.local:3100
+    tenant_id: data
     encoding:
       codec: json
     labels:

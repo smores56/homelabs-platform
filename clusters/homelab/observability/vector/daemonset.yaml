@@ -67,14 +67,6 @@ spec:
                   fieldPath: spec.nodeName
             - name: VECTOR_LOG
               value: warn
-            # ESO Password generator (observability/loki-gateway/eso). Absent
-            # secret means the pod does not start, so no data line is ever
-            # written without the token the gateway expects.
-            - name: LOKI_GATEWAY_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: loki-gateway-token
-                  key: password
           resources:
             requests:
               cpu: 50m

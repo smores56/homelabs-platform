@@ -1,0 +1,25 @@
+# Default deny in both directions for the observability namespace. The paths
+# below are the complete set and each one is its own file:
+#
+#   vector            -> Loki 3100                    (tenant writes)
+#   loki-gateway      -> Loki 3100                    (read upstream)
+#   prometheus        -> annotated targets            (scrape)
+#   prometheus        -> status-exporter 9101         (scrape)
+#   broker            -> loki-gateway / status-exporter
+#   cluster-digest    -> loki-gateway / status-exporter (platform stage)
+#   vector, prometheus, status-exporter -> Kubernetes API 443
+#
+# Loki, the gateway and the exporter have no egress beyond the above, and no
+# observability pod has public egress: this namespace never reaches Cloudflare,
+# GitHub or Neuralwatt.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+  namespace: observability
+  labels:
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: observability
+spec:
+  podSelector: {}
+  policyTypes: ["Ingress", "Egress"]

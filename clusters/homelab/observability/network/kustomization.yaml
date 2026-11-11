@@ -1,11 +1,17 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
-# The two sanctioned paths out of observability, both from the broker: the
-# gateway (tenant `data` logs) and the status exporter (data workload state).
-# Everything else here is reachable only from inside the cluster, and every
-# untrusted tier is already default-deny with egress to the broker alone.
+# The observability namespace is default-deny in both directions. Every file
+# here is one explicit flow: writes to Loki, reads through the gateway, scrapes,
+# API access, and the two broker paths. The digest's own egress and its two
+# `*-from-digest` ingress policies live with the digest stage
+# (clusters/homelab/platform/digest/), which is applied after this one.
 resources:
+  - default-deny.yaml
+  - dns-egress.yaml
+  - kubernetes-api-egress.yaml
+  - loki-flows.yaml
+  - prometheus-flows.yaml
   - loki-gateway-from-broker.yaml
   - broker-to-loki-gateway.yaml
   - status-exporter-from-broker.yaml

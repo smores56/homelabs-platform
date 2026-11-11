@@ -6,15 +6,14 @@ metadata:
     app.kubernetes.io/name: status-exporter
     app.kubernetes.io/part-of: homelabs
     homelabs.dev/tier: observability
+# Namespace-scoped rules only. It is bound by one RoleBinding per data namespace
+# (observability/rbac-data.yaml), so it cannot read pods anywhere else. The
+# cluster-scoped `nodes` read lives in its own ClusterRole, because a
+# ClusterRoleBinding grants *every* rule of the role it names.
 rules:
   - apiGroups: [""]
     resources: ["pods"]
     verbs: ["get", "list", "watch"]
-  # Cluster-scoped, read-only: the digest reports node readiness, and an agent
-  # never holds this identity.
-  - apiGroups: [""]
-    resources: ["nodes"]
-    verbs: ["get", "list"]
   - apiGroups: ["apps"]
     resources: ["deployments", "statefulsets"]
     verbs: ["get", "list"]

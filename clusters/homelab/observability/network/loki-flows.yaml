@@ -1,0 +1,88 @@
+# Loki's write and read API. Two sources and nothing else:
+#
+#   vector        pushes the `raw` and `data` tenants (it names the tenant with
+#                 `X-Scope-OrgID`, which is why the write path is network-scoped
+#                 rather than token-scoped: only this DaemonSet may reach 3100);
+#   loki-gateway  reads on behalf of the broker and the digest, forcing the
+#                 `data` tenant.
+#
+# Tenants, the broker and Prometheus are not on this list, so a compromised
+# tenant pod cannot plant a line directly in either tenant.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: loki-ingress
+  namespace: observability
+  labels:
+    app.kubernetes.io/name: loki
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: observability
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: loki
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: vector
+      ports:
+        - protocol: TCP
+          port: 3100
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: loki-gateway
+      ports:
+        - protocol: TCP
+          port: 3100
+---
+# The opposite half: Vector is default-deny too, so its push needs an egress
+# rule on its side. One destination, one port.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: vector-egress-loki
+  namespace: observability
+  labels:
+    app.kubernetes.io/name: vector
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: observability
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: vector
+  policyTypes: ["Egress"]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: loki
+      ports:
+        - protocol: TCP
+          port: 3100
+---
+# The gateway is a read proxy: its only egress is Loki's HTTP port.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: loki-gateway-egress-loki
+  namespace: observability
+  labels:
+    app.kubernetes.io/name: loki-gateway
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: observability
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: loki-gateway
+  policyTypes: ["Egress"]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: loki
+      ports:
+        - protocol: TCP
+          port: 3100

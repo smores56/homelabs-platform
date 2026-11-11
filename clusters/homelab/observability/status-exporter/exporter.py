@@ -4,9 +4,11 @@
 Agents (nanobot) never receive `get pods` in a data namespace, so this process
 is the sanctioned, read-only view of what runs there: readiness, restart counts
 and image versions, rendered as Prometheus metrics. It holds one narrowly scoped
-identity: the ClusterRole grants `get/list/watch pods` and `get` on
-deployments/statefulsets, and the RoleBinding exists only in the `data`
-namespace, so the API server refuses every other namespace.
+identity: the workload ClusterRole grants `get/list/watch pods` and `get/list`
+on deployments/statefulsets and is bound by one RoleBinding per data namespace,
+while the cluster-scoped `nodes` read lives in a separate ClusterRole bound by a
+single ClusterRoleBinding. Binding the workload role cluster-wide would hand out
+`pods` everywhere, which is why the roles are split.
 
 Standard library only: the image is a stock python slim, there is no build step,
 and the ConfigMap is generated from this file by kustomize.
@@ -130,7 +132,15 @@ def workload_metrics(workloads: Iterable[dict[str, Any]]) -> list[str]:
     return lines
 
 
-def render_success(success: bool) -> str:
+def render_success(success: bool, last_success_at: float | None = None) -> str:
+    """Exporter self-metrics.
+
+    `last_scrape_timestamp_seconds` is the wall clock of the last *successful*
+    API read, so a consumer (the digest) can compute a real age instead of
+    assuming the refresh interval. 0 means "never succeeded", which is not the
+    same as "just refreshed".
+    """
+    stamp = int(last_success_at or 0)
     return "\n".join(
         [
             "# HELP homelabs_data_status_exporter_up 1 while the exporter serves metrics.",
@@ -142,12 +152,18 @@ def render_success(success: bool) -> str:
             render_sample(
                 "homelabs_data_status_exporter_last_scrape_success", {}, 1 if success else 0
             ),
+            "# HELP homelabs_data_status_exporter_last_scrape_timestamp_seconds "
+            "Unix time of the last successful Kubernetes API read (0 = never).",
+            "# TYPE homelabs_data_status_exporter_last_scrape_timestamp_seconds gauge",
+            render_sample(
+                "homelabs_data_status_exporter_last_scrape_timestamp_seconds", {}, stamp
+            ),
         ]
     )
 
 
-def render(samples: list[str], success: bool) -> str:
-    return "\n".join(samples + [render_success(success), ""])
+def render(samples: list[str], success: bool, last_success_at: float | None = None) -> str:
+    return "\n".join(samples + [render_success(success, last_success_at), ""])
 
 
 class KubernetesClient:
@@ -176,8 +192,8 @@ class KubernetesClient:
             return json.loads(response.read().decode("utf-8"))
 
     def collect(self) -> list[str]:
-        # One cluster-scoped read (the ClusterRole grants `nodes` get/list) so
-        # the digest can report node readiness without an agent ever holding
+        # One cluster-scoped read (the nodes ClusterRole grants `nodes` get/list)
+        # so the digest can report node readiness without an agent ever holding
         # this identity.
         samples: list[str] = node_metrics(self.get("/api/v1/nodes").get("items", []))
         for namespace in self.namespaces:
@@ -200,6 +216,7 @@ class Cache:
         self.refresh_seconds = refresh_seconds
         self.lock = threading.Lock()
         self.fetched_at = 0.0
+        self.last_success_at = 0.0
         self.samples: list[str] = []
         self.success = False
 
@@ -210,9 +227,11 @@ class Cache:
                 try:
                     self.samples = self.client.collect()
                     self.success = True
+                    # Wall clock, not monotonic: consumers compare against UTC.
+                    self.last_success_at = time.time()
                 except Exception:  # noqa: BLE001 - any API/transport error is a failed scrape
                     self.success = False
-            return render(self.samples, self.success)
+            return render(self.samples, self.success, self.last_success_at)
 
 
 class Handler(BaseHTTPRequestHandler):

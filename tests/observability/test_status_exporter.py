@@ -133,15 +133,60 @@ class RenderTest(unittest.TestCase):
         self.assertEqual('m{pod="a\\"b\\\\c"} 1', line)
 
     def test_render_reports_scrape_success(self) -> None:
-        text = exporter.render(["homelabs_data_pod_ready{a=\"b\"} 1"], True)
+        text = exporter.render(["homelabs_data_pod_ready{a=\"b\"} 1"], True, 1794370185)
         self.assertIn("homelabs_data_pod_ready{a=\"b\"} 1", text)
         self.assertIn("homelabs_data_status_exporter_last_scrape_success 1", text)
+        self.assertIn(
+            "homelabs_data_status_exporter_last_scrape_timestamp_seconds 1794370185", text
+        )
         self.assertTrue(text.endswith("\n"))
 
     def test_failed_scrape_still_serves_up(self) -> None:
-        text = exporter.render([], False)
+        text = exporter.render([], False, 0)
         self.assertIn("homelabs_data_status_exporter_up 1", text)
         self.assertIn("homelabs_data_status_exporter_last_scrape_success 0", text)
+        self.assertIn(
+            "homelabs_data_status_exporter_last_scrape_timestamp_seconds 0", text
+        )
+
+
+class CacheTest(unittest.TestCase):
+    """The age the digest reports is only real if this timestamp is honest."""
+
+    class Client:
+        def __init__(self, fail: bool = False) -> None:
+            self.fail = fail
+            self.calls = 0
+
+        def collect(self) -> list[str]:
+            self.calls += 1
+            if self.fail:
+                raise OSError("api unavailable")
+            return ["homelabs_data_status_exporter_up{} 1"]
+
+    def test_successful_scrape_stamps_wall_clock_time(self) -> None:
+        cache = exporter.Cache(self.Client(), refresh_seconds=0)
+        self.assertIn("homelabs_data_status_exporter_last_scrape_success 1", cache.metrics())
+        self.assertGreater(cache.last_success_at, 0)
+        self.assertIn(
+            f"homelabs_data_status_exporter_last_scrape_timestamp_seconds {int(cache.last_success_at)}",
+            cache.metrics(),
+        )
+
+    def test_a_failed_scrape_keeps_the_last_good_timestamp(self) -> None:
+        client = self.Client()
+        cache = exporter.Cache(client, refresh_seconds=0)
+        cache.metrics()
+        good = cache.last_success_at
+        client.fail = True
+        text = cache.metrics()
+        self.assertIn("homelabs_data_status_exporter_last_scrape_success 0", text)
+        # The age keeps growing from the last success instead of resetting, which
+        # is what makes a stale exporter visible downstream.
+        self.assertEqual(good, cache.last_success_at)
+        self.assertIn(
+            f"homelabs_data_status_exporter_last_scrape_timestamp_seconds {int(good)}", text
+        )
 
 
 if __name__ == "__main__":

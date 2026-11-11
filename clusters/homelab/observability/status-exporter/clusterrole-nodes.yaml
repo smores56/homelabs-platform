@@ -1,0 +1,17 @@
+# The one cluster-scoped read the digest needs: node readiness. It is a separate
+# ClusterRole so that the ClusterRoleBinding in clusterrolebinding.yaml cannot
+# carry the pods/workload rules cluster-wide with it (a binding grants every rule
+# of its role). Terminology: pods stay reachable only through the per-data-
+# namespace RoleBindings of `observability-status-exporter`.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: observability-status-exporter-nodes
+  labels:
+    app.kubernetes.io/name: status-exporter
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: observability
+rules:
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list"]

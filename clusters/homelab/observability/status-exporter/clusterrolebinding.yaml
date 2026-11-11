@@ -1,0 +1,25 @@
+# `nodes` is a cluster-scoped resource: a RoleBinding in a data namespace can
+# never grant it, so the node rule needs this binding to be reachable at all.
+# It names the nodes-only ClusterRole, so binding it cluster-wide does not give
+# the exporter `pods` anywhere: those rules stay in the workload ClusterRole and
+# reach exactly the four data namespaces (observability/rbac-data.yaml).
+#
+# Verified at runtime by tests/policies/check.sh --runtime: the exporter's
+# identity may `list nodes` and `get pods` in immich, and may not read pods in
+# kube-system, observability or tenant-apps.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: observability-status-exporter-nodes
+  labels:
+    app.kubernetes.io/name: status-exporter
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: observability
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: observability-status-exporter-nodes
+subjects:
+  - kind: ServiceAccount
+    name: status-exporter
+    namespace: observability

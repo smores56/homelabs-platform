@@ -4,6 +4,8 @@ namespace: observability
 resources:
   - serviceaccount.yaml
   - clusterrole.yaml
+  - clusterrole-nodes.yaml
+  - clusterrolebinding.yaml
   - deployment.yaml
   - service.yaml
 configMapGenerator:

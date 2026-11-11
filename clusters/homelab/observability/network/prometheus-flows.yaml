@@ -1,0 +1,92 @@
+# Prometheus scrapes by pod annotation (`kubernetes-pods`), and NetworkPolicy
+# cannot select an annotation. The egress below is therefore a namespace+port
+# allowlist of every place in this repository that carries
+# `prometheus.io/scrape: "true"`:
+#
+#   observability  vector 8686, status-exporter 9101, prometheus 9090
+#   flux-system    the gotk controllers' 8080 metrics port
+#
+# A new annotated workload means adding its namespace and port here; a scrape
+# that is not listed simply fails closed (target down), never silently widens.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: prometheus-egress-scrape
+  namespace: observability
+  labels:
+    app.kubernetes.io/name: prometheus
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: observability
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: prometheus
+  policyTypes: ["Egress"]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: observability
+      ports:
+        - protocol: TCP
+          port: 8686
+        - protocol: TCP
+          port: 9090
+        - protocol: TCP
+          port: 9101
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: flux-system
+      ports:
+        - protocol: TCP
+          port: 8080
+---
+# Vector exposes its own API/metrics port; only Prometheus may read it.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: vector-ingress-prometheus
+  namespace: observability
+  labels:
+    app.kubernetes.io/name: vector
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: observability
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: vector
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: prometheus
+      ports:
+        - protocol: TCP
+          port: 8686
+---
+# The exporter is scraped by Prometheus (static target and annotation) and read
+# by the broker and the digest through their own policies. Nothing else.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: status-exporter-from-prometheus
+  namespace: observability
+  labels:
+    app.kubernetes.io/name: status-exporter
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: observability
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: status-exporter
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: prometheus
+      ports:
+        - protocol: TCP
+          port: 9101
