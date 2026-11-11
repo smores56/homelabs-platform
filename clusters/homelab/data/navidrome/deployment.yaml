@@ -103,7 +103,6 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /data
-              subPath: navidrome
             - name: data
               mountPath: /music
               readOnly: true

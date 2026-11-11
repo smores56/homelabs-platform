@@ -12,6 +12,9 @@ metadata:
     homelabs.dev/tier: data
 spec:
   replicas: 1
+  # The share is a ReadWriteOnce volume and one Immich may write it.
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app.kubernetes.io/name: immich
