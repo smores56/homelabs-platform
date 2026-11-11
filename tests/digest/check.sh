@@ -271,6 +271,18 @@ document = json.loads(first)
 assert document["schema_version"] == module.SCHEMA_VERSION
 assert document["generated_at"] == "2026-11-11T04:10:00Z"
 assert set(document["source_freshness"]) == {"status_exporter", "loki_gateway"}
+# Freshness is measured, not assumed: the exporter's own scrape timestamp is
+# 15 s before generated_at, and the newest planted entry is 04:03Z.
+assert document["source_freshness"]["status_exporter"] == {
+    "ok": True,
+    "age_seconds": 15,
+    "stale": False,
+}, document["source_freshness"]["status_exporter"]
+assert document["source_freshness"]["loki_gateway"] == {
+    "ok": True,
+    "age_seconds": 420,
+    "stale": False,
+}, document["source_freshness"]["loki_gateway"]
 assert document["nanobot_activity"]["event_count"] == 3
 text = first.decode()
 for needle in ("PROMPT", "Vacation", "IMG_1234", "read_file", "shadow", "diary"):

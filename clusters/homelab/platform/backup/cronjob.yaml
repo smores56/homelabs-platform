@@ -51,7 +51,10 @@ spec:
               type: RuntimeDefault
           containers:
             - name: backup
-              image: docker.io/alpine/git:2.54.0
+              # Digest-pinned from the registry manifest list for 2.54.0
+              # (`crane digest docker.io/alpine/git:2.54.0`; the tag is kept for
+              # readability). Re-pinning is step 9 in docs/manual-steps.md.
+              image: docker.io/alpine/git:2.54.0@sha256:6a1fdb962814ca11508ca8d1bab94375b5b7ac4e4a9a40981c29fc32c02f095d
               command: ["/bin/sh", "-c"]
               args:
                 - |

@@ -12,24 +12,27 @@
         },
         "values": [
           [
-            "1762826400000000000",
+            "1794369600000000000",
             "{\"namespace\":\"immich\",\"timestamp\":\"2026-11-11T04:00:00Z\",\"level\":\"error\",\"component\":\"immich-server\",\"error_code\":\"E1234\",\"status\":\"500\"}"
           ],
           [
-            "1762826460000000000",
+            "1794369660000000000",
             "{\"timestamp\":\"2026-11-11T04:01:00Z\",\"level\":\"info\",\"component\":\"immich-server\",\"message\":\"PROMPT: you are a helpful assistant; here is the user's private letter\"}"
           ]
         ]
       },
       {
-        "stream": {"namespace": "graphiti", "tier": "data"},
+        "stream": {
+          "namespace": "graphiti",
+          "tier": "data"
+        },
         "values": [
           [
-            "1762826520000000000",
+            "1794369720000000000",
             "{\"timestamp\":\"2026-11-11T04:02:00Z\",\"level\":\"warn\",\"component\":\"graphiti\",\"tool_payload\":\"{\\\"tool\\\":\\\"read_file\\\",\\\"path\\\":\\\"/etc/shadow\\\"}\",\"prompt\":\"summarize my diary\"}"
           ],
           [
-            "1762826580000000000",
+            "1794369780000000000",
             "not json at all: Vacation IMG_1234 /home/alice/secret.jpg"
           ]
         ]

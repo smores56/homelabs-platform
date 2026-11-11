@@ -9,12 +9,15 @@ payload do not.
 
 from __future__ import annotations
 
+import contextlib
 import copy
 import importlib.util
+import io
 import json
 import pathlib
 import tempfile
 import unittest
+import unittest.mock
 import urllib.parse
 from datetime import datetime, timezone
 
@@ -163,7 +166,7 @@ class RedactionTest(unittest.TestCase):
                             "stream": {"namespace": "immich"},
                             "values": [
                                 [
-                                    "1762826400000000000",
+                                    "1794369600000000000",
                                     json.dumps(
                                         {"level": "err\x1b[31m" + "x" * 200, "component": "c"}
                                     ),
@@ -210,7 +213,7 @@ class BoundsTest(unittest.TestCase):
     def _many(self, count: int) -> dict:
         values = [
             [
-                str(1762826400000000000 + index),
+                str(1794369600000000000 + index),
                 json.dumps(
                     {
                         "timestamp": f"2026-11-11T04:{index // 60:02d}:{index % 60:02d}Z",
@@ -254,15 +257,86 @@ class BoundsTest(unittest.TestCase):
 
 
 class FreshnessTest(unittest.TestCase):
-    def test_successful_sources_report_zero_or_cached_age(self) -> None:
+    def test_fixture_reports_measured_ages(self) -> None:
         freshness = build()["source_freshness"]
-        self.assertEqual({"ok": True, "age_seconds": 30}, freshness["status_exporter"])
-        self.assertEqual({"ok": True, "age_seconds": 0}, freshness["loki_gateway"])
+        # The fixture's timestamp sample is 15 s before `generated_at`.
+        self.assertEqual(
+            {"ok": True, "age_seconds": 15, "stale": False}, freshness["status_exporter"]
+        )
+        # The newest planted data-tenant entry is 04:03Z, seven minutes earlier.
+        self.assertEqual(
+            {"ok": True, "age_seconds": 420, "stale": False}, freshness["loki_gateway"]
+        )
 
-    def test_failed_sources_report_not_ok_and_null_age(self) -> None:
-        freshness = build(exporter_ok=False, loki_ok=False)["source_freshness"]
-        self.assertEqual({"ok": False, "age_seconds": None}, freshness["status_exporter"])
-        self.assertEqual({"ok": False, "age_seconds": None}, freshness["loki_gateway"])
+    def test_exporter_age_comes_from_its_own_sample(self) -> None:
+        text = exporter_text().replace("1794370185", "1794370140")
+        entry = build(exporter_text=text)["source_freshness"]["status_exporter"]
+        self.assertEqual({"ok": True, "age_seconds": 60, "stale": False}, entry)
+
+    def test_exporter_down_is_not_ok_and_stale(self) -> None:
+        freshness = build(exporter_ok=False)["source_freshness"]
+        self.assertEqual(
+            {"ok": False, "age_seconds": None, "stale": True}, freshness["status_exporter"]
+        )
+
+    def test_failed_last_scrape_is_not_ok_even_when_recent(self) -> None:
+        text = exporter_text().replace(
+            "homelabs_data_status_exporter_last_scrape_success 1",
+            "homelabs_data_status_exporter_last_scrape_success 0",
+        )
+        entry = build(exporter_text=text)["source_freshness"]["status_exporter"]
+        # One failed refresh: the snapshot is still 15 s old, so this is not
+        # stale, but the source is not ok and the run must report the failure.
+        self.assertEqual({"ok": False, "age_seconds": 15, "stale": False}, entry)
+
+    def test_exporter_serving_a_stale_cache_is_not_ok(self) -> None:
+        text = exporter_text().replace("1794370185", "1794369600")
+        entry = build(exporter_text=text)["source_freshness"]["status_exporter"]
+        self.assertEqual({"ok": False, "age_seconds": 600, "stale": True}, entry)
+
+    def test_missing_timestamp_sample_is_not_ok(self) -> None:
+        text = "\n".join(
+            line
+            for line in exporter_text().splitlines()
+            if "last_scrape_timestamp_seconds " not in line
+        )
+        entry = build(exporter_text=text)["source_freshness"]["status_exporter"]
+        self.assertEqual({"ok": False, "age_seconds": None, "stale": True}, entry)
+
+    def test_empty_data_tenant_is_stale_but_the_query_still_succeeds(self) -> None:
+        entry = build(loki_payload={"data": {"result": []}})["source_freshness"][
+            "loki_gateway"
+        ]
+        self.assertEqual({"ok": True, "age_seconds": None, "stale": True}, entry)
+
+    def test_newest_entry_older_than_the_window_is_stale(self) -> None:
+        entry = build(loki_stale_seconds=60)["source_freshness"]["loki_gateway"]
+        self.assertTrue(entry["stale"])
+        self.assertTrue(entry["ok"])
+        self.assertEqual(420, entry["age_seconds"])
+
+    def test_failed_query_is_not_ok(self) -> None:
+        entry = build(loki_ok=False)["source_freshness"]["loki_gateway"]
+        self.assertFalse(entry["ok"])
+
+    def test_digest_ok_folds_every_source(self) -> None:
+        self.assertTrue(digest.digest_ok(build()["source_freshness"]))
+        self.assertFalse(digest.digest_ok(build(exporter_ok=False)["source_freshness"]))
+        self.assertFalse(digest.digest_ok(build(loki_ok=False)["source_freshness"]))
+        # A stale-but-reachable Loki is an alert, not a failed run.
+        empty = build(loki_payload={"data": {"result": []}})["source_freshness"]
+        self.assertTrue(digest.digest_ok(empty))
+        self.assertEqual(
+            ["loki_gateway: newest observation is no timestamp (bound 900s)"],
+            digest.stale_sources(empty, {"status_exporter": 90, "loki_gateway": 900}),
+        )
+
+    def test_stale_sources_reports_the_measured_age(self) -> None:
+        stale = digest.stale_sources(
+            build(loki_stale_seconds=60)["source_freshness"],
+            {"status_exporter": 90, "loki_gateway": 60},
+        )
+        self.assertEqual(["loki_gateway: newest observation is 420s old (bound 60s)"], stale)
 
 
 class PublishTest(unittest.TestCase):
@@ -315,6 +389,62 @@ class PublishTest(unittest.TestCase):
             )
             self.assertEqual(2, code)
             self.assertEqual([], list(pathlib.Path(directory).iterdir()))
+
+
+class MainTest(unittest.TestCase):
+    """The exit code and the stale alert are the only operator-visible signals."""
+
+    def _run(self, responder) -> tuple[int, str, str]:
+        with tempfile.TemporaryDirectory() as directory:
+            token = pathlib.Path(directory) / "token"
+            token.write_text("minted", encoding="utf-8")
+            out, err = io.StringIO(), io.StringIO()
+            with unittest.mock.patch.object(digest, "fetch", responder), unittest.mock.patch.object(
+                digest, "utc_now", lambda: GENERATED_AT
+            ), contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                code = digest.main(
+                    [
+                        "--output",
+                        str(pathlib.Path(directory) / "digest"),
+                        "--token-file",
+                        str(token),
+                    ]
+                )
+        return code, out.getvalue(), err.getvalue()
+
+    def test_healthy_run_exits_zero_and_writes_latest(self) -> None:
+        payload = json.dumps(loki_payload()).encode()
+        text = exporter_text().encode()
+        code, out, err = self._run(
+            lambda url, token="", timeout=10.0: payload if "query_range" in url else text
+        )
+        self.assertEqual(0, code)
+        self.assertEqual("", err)
+        self.assertEqual("2026-11-11T04:10:00Z", json.loads(out)["generated_at"])
+
+    def test_exporter_down_fails_the_run(self) -> None:
+        payload = json.dumps(loki_payload()).encode()
+
+        def responder(url, token="", timeout=10.0):
+            if "query_range" in url:
+                return payload
+            raise OSError("connection refused")
+
+        code, _out, err = self._run(responder)
+        self.assertEqual(1, code)
+        self.assertIn("status exporter read failed", err)
+
+    def test_empty_data_tenant_alerts_without_failing(self) -> None:
+        empty = json.dumps({"data": {"result": []}}).encode()
+        text = exporter_text().encode()
+        code, _out, err = self._run(
+            lambda url, token="", timeout=10.0: empty if "query_range" in url else text
+        )
+        # The document is still produced (a quiet tenant is not a broken run),
+        # but the operator sees why the activity section is empty.
+        self.assertEqual(0, code)
+        self.assertIn("digest: stale source loki_gateway", err)
+        self.assertIn("bound 900s", err)
 
 
 if __name__ == "__main__":

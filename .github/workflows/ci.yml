@@ -114,6 +114,7 @@ jobs:
           shellcheck --version
           shellcheck scripts/*.sh tests/policies/*.sh tests/tofu/*.sh \
             tests/access/*.sh tests/backup/*.sh tests/digest/*.sh \
+            tests/observability/*.sh \
             clusters/homelab/flux-system/bootstrap.sh \
             clusters/homelab/platform/backup/*.sh
 
@@ -209,9 +210,36 @@ jobs:
         run: |
           scripts/install-ci-tools.sh "$RUNNER_TEMP/bin"
           echo "$RUNNER_TEMP/bin" >>"$GITHUB_PATH"
-      # Static half only: no cluster, no credentials. The runtime half boots a
-      # throwaway kube-apiserver and is run by hand (docs/negative-tests.md).
+      # Static half: no cluster, no credentials.
       - name: static policy, RBAC and network checks
         run: tests/policies/check.sh
       - name: repository-mirror script shape tests
         run: tests/backup/check.sh
+
+  policy-admission:
+    name: policy admission runtime
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          persist-credentials: false
+      # A real apiserver is the only thing that evaluates CEL: a static grep can
+      # pass on a policy whose expression is vacuous. This job boots etcd plus
+      # kube-apiserver (tests/policies/apiserver.sh) and drives every fixture and
+      # RBAC row through real admission and authorisation decisions.
+      - name: Install Nix
+        uses: cachix/install-nix-action@91f6a0f59e94dfb2cfed0f4000f36a68ead1d20c # v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+      - name: admission and authorisation against a throwaway control plane
+        run: |
+          nix shell nixpkgs#etcd nixpkgs#kubernetes nixpkgs#kubectl nixpkgs#kustomize \
+            nixpkgs#yq-go nixpkgs#jq nixpkgs#openssl -c \
+            tests/policies/check.sh --runtime
+      # check.sh stops the control plane on exit; this runs even when it is
+      # killed mid-run (cancel, timeout) so no etcd/apiserver survives the job.
+      - name: stop the throwaway control plane
+        if: always()
+        run: tests/policies/apiserver.sh stop || true

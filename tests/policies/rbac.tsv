@@ -57,3 +57,20 @@ create	roles	tenant-apps	no	agent
 delete	pods	tenant-apps	no	agent
 create	pods	tenant-apps	no	agent
 get	events	tenant-apps	no	agent
+# Status exporter identity (system:serviceaccount:observability:status-exporter).
+# The ClusterRole grants `nodes`, which only a ClusterRoleBinding can hand out;
+# the pods/workload rules reach exactly the four data namespaces through
+# observability/rbac-data.yaml. These rows are what proves both halves: the
+# binding works and it does not widen into a cluster-wide pod reader.
+list	nodes	-	yes	exporter
+get	nodes	-	yes	exporter
+get	pods	immich	yes	exporter
+list	pods	graphiti	yes	exporter
+list	deployments.apps	calibre	yes	exporter
+get	statefulsets.apps	navidrome	yes	exporter
+list	pods	kube-system	no	exporter
+get	pods	observability	no	exporter
+list	pods	tenant-apps	no	exporter
+get	secrets	immich	no	exporter
+delete	pods	immich	no	exporter
+create	pods	immich	no	exporter

@@ -37,6 +37,15 @@ MAX_EVENTS = 400
 WINDOW = "15m"
 FIELD_CHARS = 64
 
+# Staleness bounds. The exporter refreshes its cache every 30 s, so three
+# refreshes without a new successful read means it is serving a stale snapshot
+# or has never succeeded; that is a fault and fails the run. The data tenant is
+# written by Vector from container logs, which are bursty: "nothing in the
+# digest window" is worth flagging (an empty activity section must not read as a
+# quiet host), but a quiet homelab at night is not a broken pipeline, so that
+# flag is an alert in the document and on stderr, not a failed run.
+EXPORTER_STALE_SECONDS = 90
+
 DEFAULT_OUTPUT = "/mnt/data/cluster-digest"
 DEFAULT_EXPORTER_URL = "http://status-exporter.observability.svc.cluster.local:9101/metrics"
 DEFAULT_GATEWAY_URL = "http://loki-gateway.observability.svc.cluster.local:3100"
@@ -214,6 +223,125 @@ def _line_timestamp(line: dict[str, Any], fallback_ns: str) -> str:
     except (TypeError, ValueError):
         return ""
     return datetime.fromtimestamp(seconds, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _entry_time(value: Any) -> datetime | None:
+    """Timestamp of one Loki stream entry: the entry header wins.
+
+    Loki's nanosecond header is authoritative and always present; the line's own
+    `timestamp` field is a fallback for entries without one (a non-JSON line).
+    """
+    header = None
+    if isinstance(value, (list, tuple)) and len(value) == 2:
+        try:
+            header = int(value[0])
+        except (TypeError, ValueError):
+            header = None
+        if header is None:
+            try:
+                parsed = json.loads(value[1])
+            except (TypeError, ValueError):
+                parsed = None
+            if isinstance(parsed, dict):
+                raw = parsed.get("timestamp")
+                if isinstance(raw, str) and raw:
+                    try:
+                        return datetime.strptime(raw, "%Y-%m-%dT%H:%M:%SZ").replace(
+                            tzinfo=timezone.utc
+                        )
+                    except ValueError:
+                        return None
+    if header is None:
+        return None
+    return datetime.fromtimestamp(header / 1e9, tz=timezone.utc)
+
+
+def newest_event_time(payload: dict[str, Any]) -> datetime | None:
+    """Newest entry timestamp in the returned streams, or None when empty."""
+    newest: datetime | None = None
+    for stream in (payload.get("data") or {}).get("result") or []:
+        for value in stream.get("values") or []:
+            moment = _entry_time(value)
+            if moment is not None and (newest is None or moment > newest):
+                newest = moment
+    return newest
+
+
+def _sample_value(samples: Iterable[dict[str, Any]], name: str) -> float | None:
+    matches = _by_name(samples, name)
+    return matches[-1]["value"] if matches else None
+
+
+def freshness_report(
+    *,
+    samples: list[dict[str, Any]],
+    loki_payload: dict[str, Any],
+    generated_at: datetime,
+    exporter_ok: bool,
+    loki_ok: bool,
+    exporter_stale_seconds: int = EXPORTER_STALE_SECONDS,
+    loki_stale_seconds: int | None = None,
+    window: str = WINDOW,
+) -> dict[str, Any]:
+    """Measured freshness, never assumed.
+
+    `status_exporter`: `age_seconds` is `generated_at` minus the exporter's own
+    `last_scrape_timestamp_seconds` sample, and `ok` additionally requires
+    `last_scrape_success == 1`. A reachable exporter whose last good read is
+    older than `exporter_stale_seconds` is stale *and* not ok: it is serving a
+    snapshot, so the digest would report an old cluster as current.
+
+    `loki_gateway`: `age_seconds` is `generated_at` minus the newest stored
+    data-tenant entry. `ok` is the query succeeding; `stale` says the query
+    window held nothing (or the newest entry is older than the bound, which is
+    the window by default), which is the signal that the write path
+    (Vector -> Loki) is broken, and is an alert rather than a failed run.
+    """
+    loki_bound = loki_stale_seconds if loki_stale_seconds is not None else _window_seconds(window)
+    success = _sample_value(samples, "homelabs_data_status_exporter_last_scrape_success")
+    stamped = _sample_value(samples, "homelabs_data_status_exporter_last_scrape_timestamp_seconds")
+    exporter_age: int | None = None
+    if exporter_ok and stamped is not None and stamped > 0:
+        exporter_age = max(0, int(generated_at.timestamp() - stamped))
+    exporter_up = bool(exporter_ok and success == 1)
+    exporter_stale = exporter_age is None or exporter_age > exporter_stale_seconds
+
+    newest = newest_event_time(loki_payload)
+    loki_age: int | None = None
+    if newest is not None:
+        loki_age = max(0, int((generated_at - newest).total_seconds()))
+
+    return {
+        "status_exporter": {
+            "ok": exporter_up and not exporter_stale,
+            "age_seconds": exporter_age,
+            "stale": exporter_stale,
+        },
+        "loki_gateway": {
+            "ok": bool(loki_ok),
+            "age_seconds": loki_age,
+            "stale": newest is None or loki_age is None or loki_age > loki_bound,
+        },
+    }
+
+
+def digest_ok(freshness: dict[str, Any]) -> bool:
+    """A run is successful only when every source is `ok` (stale counts for the
+    exporter, whose `ok` already folds it in)."""
+    return all(entry["ok"] for entry in freshness.values())
+
+
+def stale_sources(freshness: dict[str, Any], bounds: dict[str, int]) -> list[str]:
+    """One human-readable line per stale source, for the job log."""
+    messages: list[str] = []
+    for name, entry in sorted(freshness.items()):
+        if not entry["stale"]:
+            continue
+        age = entry["age_seconds"]
+        bound = bounds.get(name, 0)
+        seen = "no timestamp" if age is None else f"{age}s old"
+        messages.append(f"{name}: newest observation is {seen} (bound {bound}s)")
+    return messages
 
 
 def activity_from_loki(payload: dict[str, Any], limit: int = MAX_EVENTS) -> tuple[list[dict[str, str]], int]:
@@ -405,25 +533,28 @@ def build(
     generated_at: datetime,
     exporter_ok: bool = True,
     loki_ok: bool = True,
-    exporter_refresh_seconds: int = 30,
+    exporter_stale_seconds: int = EXPORTER_STALE_SECONDS,
+    loki_stale_seconds: int | None = None,
     max_events: int = MAX_EVENTS,
     max_files: int = MAX_FILES,
     max_bytes: int = MAX_BYTES,
     window: str = WINDOW,
 ) -> dict[str, Any]:
+    samples = parse_prometheus(exporter_text)
     events, seen = activity_from_loki(loki_payload, limit=max_events)
-    freshness = {
-        "status_exporter": {
-            "ok": exporter_ok,
-            # The exporter serves a cached scrape; its own refresh bound is the
-            # honest upper bound on age.
-            "age_seconds": exporter_refresh_seconds if exporter_ok else None,
-        },
-        "loki_gateway": {"ok": loki_ok, "age_seconds": 0 if loki_ok else None},
-    }
+    freshness = freshness_report(
+        samples=samples,
+        loki_payload=loki_payload,
+        generated_at=generated_at,
+        exporter_ok=exporter_ok,
+        loki_ok=loki_ok,
+        exporter_stale_seconds=exporter_stale_seconds,
+        loki_stale_seconds=loki_stale_seconds,
+        window=window,
+    )
     return assemble(
         generated_at=generated_at,
-        cluster=cluster_health(parse_prometheus(exporter_text)),
+        cluster=cluster_health(samples),
         events=events,
         observed_events=seen,
         freshness=freshness,
@@ -495,8 +626,20 @@ def main(argv: list[str] | None = None) -> int:
     except DigestTooLarge as error:
         print(f"digest: {error}", file=sys.stderr)
         return 3
+
+    freshness = document["source_freshness"]
+    for message in stale_sources(
+        freshness,
+        {
+            "status_exporter": EXPORTER_STALE_SECONDS,
+            "loki_gateway": _window_seconds(args.window),
+        },
+    ):
+        # An alert, not a crash: the document is already written and must stay
+        # readable so the host writer and the reader see *why* it is stale.
+        print(f"digest: stale source {message}", file=sys.stderr)
     print(json.dumps(summary, sort_keys=True))
-    return 0 if (exporter_ok and loki_ok) else 1
+    return 0 if digest_ok(freshness) else 1
 
 
 if __name__ == "__main__":

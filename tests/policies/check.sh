@@ -757,6 +757,25 @@ if ((runtime)); then
     fi
   done
 
+  # The status exporter's identity lives in the observability stage, which needs
+  # the ESO CRDs. Its RBAC is four plain objects, so apply exactly those: the
+  # workload ClusterRole, the nodes-only ClusterRole, the ClusterRoleBinding that
+  # makes `nodes` reachable, and the per-data-namespace RoleBindings.
+  exporter_rbac=0
+  while IFS= read -r object; do
+    if kubectl apply -f "clusters/homelab/observability/$object" >/dev/null 2>"$work/exporter.err"; then
+      exporter_rbac=$((exporter_rbac + 1))
+    else
+      bad "runtime: apply observability/$object" "$(cat "$work/exporter.err")"
+    fi
+  done <<'EXPORTER_RBAC'
+status-exporter/clusterrole.yaml
+status-exporter/clusterrole-nodes.yaml
+status-exporter/clusterrolebinding.yaml
+rbac-data.yaml
+EXPORTER_RBAC
+  eq "$exporter_rbac" "4" "runtime: status-exporter RBAC applied (both ClusterRoles, the ClusterRoleBinding, the RoleBindings)"
+
   # PSA would otherwise answer first for host-access fixtures, which would make
   # the assertion pass for the wrong reason. The shipped labels stay restricted;
   # this throwaway cluster relaxes them so each denial is attributable to the
@@ -782,11 +801,13 @@ if ((runtime)); then
 
   tenant_sa="system:serviceaccount:tenant-apps:tenant-apps-reconciler"
   agent_sa="system:serviceaccount:tenant-apps:nanobot"
+  exporter_sa="system:serviceaccount:observability:status-exporter"
   while IFS=$'\t' read -r verb resource ns expect subject; do
     [[ -z $verb || $verb == \#* ]] && continue
     case ${subject:-tenant} in
       tenant) sa=$tenant_sa ;;
       agent) sa=$agent_sa ;;
+      exporter) sa=$exporter_sa ;;
       *)
         bad "unknown rbac subject ${subject:-}"
         continue
