@@ -1,0 +1,50 @@
+# Default deny in both directions for every namespace that holds untrusted or
+# data-bearing workloads. Each allow below is explicit and lives in its own
+# file; a missing allow fails closed.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+  namespace: tenant-apps
+  labels:
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: tenant
+spec:
+  podSelector: {}
+  policyTypes: ["Ingress", "Egress"]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+  namespace: broker
+  labels:
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: broker
+spec:
+  podSelector: {}
+  policyTypes: ["Ingress", "Egress"]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+  namespace: data
+  labels:
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: data
+spec:
+  podSelector: {}
+  policyTypes: ["Ingress", "Egress"]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+  namespace: ingress
+  labels:
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: ingress
+spec:
+  podSelector: {}
+  policyTypes: ["Ingress", "Egress"]

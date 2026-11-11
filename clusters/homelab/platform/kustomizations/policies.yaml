@@ -1,0 +1,22 @@
+# Stage 3. Admission policy lands before any workload can be created, so the
+# first tenant pod is already constrained by it.
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: platform-policies
+  namespace: flux-system
+  labels:
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: platform
+spec:
+  interval: 10m
+  retryInterval: 1m
+  timeout: 5m
+  prune: true
+  path: ./clusters/homelab/platform/policies
+  dependsOn:
+    - name: platform-rbac
+  sourceRef:
+    kind: GitRepository
+    name: flux-system
+  serviceAccountName: kustomize-controller

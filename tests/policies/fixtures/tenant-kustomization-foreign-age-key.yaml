@@ -1,0 +1,19 @@
+# expect: deny tenant-flux-guard
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: homelabs-apps
+  namespace: tenant-apps
+spec:
+  interval: 10m
+  prune: true
+  path: ./deploy
+  targetNamespace: tenant-apps
+  serviceAccountName: tenant-apps-reconciler
+  sourceRef:
+    kind: GitRepository
+    name: homelabs-apps
+  decryption:
+    provider: sops
+    secretRef:
+      name: platform-age

@@ -1,0 +1,75 @@
+# Tenant identity for the homelabs-apps reconciler. The service account is
+# only ever impersonated by kustomize-controller; no pod may run as it
+# (07-tenant-flux-sa-pods.yaml enforces that), so its token is never mounted.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: tenant-apps-reconciler
+  namespace: tenant-apps
+  labels:
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: tenant
+automountServiceAccountToken: false
+---
+# Least privilege for one tenant namespace. Everything the tenant cannot do is
+# absent on purpose, so a new API group stays denied until this Role grants it:
+#
+#   secrets, serviceaccounts            - no credential or identity minting;
+#   roles, rolebindings, clusterroles   - no path to escalate or bind;
+#   resourcequotas, limitranges         - no limit tampering;
+#   networkpolicies, ingresses, pdbs    - isolation is platform-owned;
+#   *.<anything>.toolkit.fluxcd.io      - no second reconciler;
+#   customresourcedefinitions, namespaces, nodes, runtimeclasses,
+#   validatingadmissionpolicies, priorityclasses, storageclasses,
+#   persistentvolumes                   - no cluster-scoped objects at all.
+#
+# "escalate", "bind" and "impersonate" appear nowhere: without RBAC write
+# permission on RBAC objects there is nothing to escalate into.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: tenant-apps-reconciler
+  namespace: tenant-apps
+  labels:
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: tenant
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["services", "configmaps", "persistentvolumeclaims"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Events are write-only noise; nothing reads them for authorization.
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["get", "list", "watch", "create", "patch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["batch"]
+    resources: ["jobs", "cronjobs"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["discovery.k8s.io"]
+    resources: ["endpointslices"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: tenant-apps-reconciler
+  namespace: tenant-apps
+  labels:
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: tenant
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: tenant-apps-reconciler
+subjects:
+  - kind: ServiceAccount
+    name: tenant-apps-reconciler
+    namespace: tenant-apps

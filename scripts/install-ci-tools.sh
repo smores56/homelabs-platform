@@ -40,3 +40,11 @@ install -m 0755 "$tmp/tofu/tofu" "$dest/tofu"
 "$dest/kustomize" version
 "$dest/kubeconform" -v
 "$dest/tofu" version
+
+YQ_VERSION=v4.54.3
+YQ_SHA256=129534601871538efe0ba4c5e62a34fb1d5f469bcb975c4fddeb467d82974973
+fetch "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_amd64" \
+  yq "$YQ_SHA256"
+install -m 0755 "$tmp/yq" "$dest/yq"
+
+"$dest/yq" --version

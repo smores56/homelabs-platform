@@ -1,0 +1,21 @@
+# expect: allow
+apiVersion: v1
+kind: Pod
+metadata:
+  name: platform-builder
+  namespace: platform
+  labels:
+    app.kubernetes.io/name: platform-builder
+spec:
+  automountServiceAccountToken: false
+  securityContext:
+    runAsNonRoot: true
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: builder
+      image: ghcr.io/smores56/homelabs-platform/builder@sha256:0000000000000000000000000000000000000000000000000000000000000000
+      securityContext:
+        allowPrivilegeEscalation: true
+        capabilities:
+          drop: ["ALL"]

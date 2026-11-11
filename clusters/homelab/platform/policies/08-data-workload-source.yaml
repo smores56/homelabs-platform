@@ -1,0 +1,42 @@
+# Data-namespace workloads are platform-owned. CEL cannot read who sent a
+# request, so the binding narrows to tier=data and the rules pin the two things
+# a tenant-controlled manifest would have to fake: the managed-by label and the
+# service account. RBAC is the other half of the control: no tenant identity has
+# any binding in the data namespace (docs/tenancy.md).
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: data-workload-source
+  labels:
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: platform
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["pods"]
+  validations:
+    - expression: "has(object.metadata.labels) && object.metadata.labels['homelabs.dev/managed-by'] == 'platform'"
+      message: "data-namespace pods must carry homelabs.dev/managed-by=platform"
+    - expression: "object.spec.serviceAccountName == 'data-workload'"
+      message: "data-namespace pods must run as the data-workload service account"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: data-workload-source
+  labels:
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: platform
+spec:
+  policyName: data-workload-source
+  validationActions: [Deny]
+  matchResources:
+    namespaceSelector:
+      matchExpressions:
+        - key: homelabs.dev/tier
+          operator: In
+          values: ["data"]

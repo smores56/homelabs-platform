@@ -1,0 +1,48 @@
+# Agent pods may mount only their own scratch volume: a PVC name must start
+# with the pod's app.kubernetes.io/name label plus a dash. Data PVCs live in the
+# data namespace (cross-namespace PVC refs are impossible) and this rule stops a
+# tenant pod from adopting a neighbour's claim inside tenant-apps.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: tenant-scratch-pvc
+  labels:
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: platform
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["pods"]
+  variables:
+    - name: claims
+      expression: >-
+        has(object.spec.volumes)
+        ? object.spec.volumes.filter(v, has(v.persistentVolumeClaim)).map(v, v.persistentVolumeClaim.claimName)
+        : []
+  validations:
+    - expression: >-
+        has(object.metadata.labels) && ('app.kubernetes.io/name' in object.metadata.labels)
+        ? variables.claims.all(n, n.startsWith(object.metadata.labels['app.kubernetes.io/name'] + '-'))
+        : size(variables.claims) == 0
+      message: "pods may only mount PVCs named <app.kubernetes.io/name>-*"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: tenant-scratch-pvc
+  labels:
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: platform
+spec:
+  policyName: tenant-scratch-pvc
+  validationActions: [Deny]
+  matchResources:
+    namespaceSelector:
+      matchExpressions:
+        - key: homelabs.dev/tier
+          operator: In
+          values: ["tenant"]

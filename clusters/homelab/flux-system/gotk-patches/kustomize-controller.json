@@ -1,0 +1,7 @@
+[
+  { "op": "add", "path": "/spec/template/spec/containers/0/args/-", "value": "--no-cross-namespace-refs=true" },
+  { "op": "add", "path": "/spec/template/spec/containers/0/args/-", "value": "--no-remote-bases=true" },
+  { "op": "add", "path": "/spec/template/spec/containers/0/args/-", "value": "--default-service-account=default" },
+  { "op": "add", "path": "/spec/template/spec/containers/0/args/-", "value": "--default-decryption-service-account=default" },
+  { "op": "add", "path": "/spec/template/spec/containers/0/args/-", "value": "--default-kubeconfig-service-account=default" }
+]

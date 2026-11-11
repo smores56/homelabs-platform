@@ -1,0 +1,51 @@
+# homelabs-apps is reconciled by the tenant identity, into the tenant namespace,
+# from the tenant repository. 06-tenant-flux-guard.yaml pins every field here,
+# so a change to this file that weakens it is rejected by the API server.
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: GitRepository
+metadata:
+  name: homelabs-apps
+  namespace: tenant-apps
+  labels:
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: tenant
+spec:
+  interval: 10m
+  # Read-only deploy key, created by hand as the homelabs-apps-auth Secret in
+  # tenant-apps (docs/manual-steps.md, step 7). Same namespace as this object:
+  # the controller runs with --no-cross-namespace-refs.
+  url: ssh://git@github.com/smores56/homelabs-apps
+  ref:
+    branch: main
+  secretRef:
+    name: homelabs-apps-auth
+  # Ignore the apps repo's own CI and docs: only deploy/ belongs on the cluster.
+  ignore: |
+    .github/
+    docs/
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: homelabs-apps
+  namespace: tenant-apps
+  labels:
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: tenant
+spec:
+  interval: 10m
+  retryInterval: 1m
+  timeout: 5m
+  prune: true
+  path: ./deploy
+  targetNamespace: tenant-apps
+  serviceAccountName: tenant-apps-reconciler
+  sourceRef:
+    kind: GitRepository
+    name: homelabs-apps
+  # Namespace-local age key. The controller has no --sops-age-secret global, so
+  # ciphertext in homelabs-apps decrypts only with tenant-apps/sops-age.
+  decryption:
+    provider: sops
+    secretRef:
+      name: sops-age

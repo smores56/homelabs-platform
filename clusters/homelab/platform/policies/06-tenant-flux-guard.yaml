@@ -1,0 +1,51 @@
+# A Kustomization in the tenant tier may only reconcile with the tenant
+# service account, into its own namespace, from the homelabs-apps repository
+# and with a same-namespace age key. That closes the three escalation paths a
+# second reconciler would otherwise open: impersonate the platform identity,
+# write into data namespaces, or fetch manifests from an attacker's repository.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: tenant-flux-guard
+  labels:
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: platform
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["kustomize.toolkit.fluxcd.io"]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["kustomizations"]
+  validations:
+    - expression: "object.spec.serviceAccountName == 'tenant-apps-reconciler'"
+      message: "tenant Kustomizations must reconcile as tenant-apps-reconciler"
+    - expression: "has(object.spec.targetNamespace) && object.spec.targetNamespace == request.namespace"
+      message: "tenant Kustomizations must target their own namespace"
+    - expression: >-
+        object.spec.sourceRef.kind == 'GitRepository'
+        && object.spec.sourceRef.name == 'homelabs-apps'
+        && !has(object.spec.sourceRef.namespace)
+      message: "tenant Kustomizations must read the same-namespace homelabs-apps GitRepository"
+    - expression: "!has(object.spec.kubeConfig)"
+      message: "tenant Kustomizations must not carry a kubeConfig"
+    - expression: "!has(object.spec.decryption) || (object.spec.decryption.provider == 'sops' && object.spec.decryption.secretRef.name == 'sops-age')"
+      message: "tenant Kustomizations may only decrypt with the namespace-local sops-age secret"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: tenant-flux-guard
+  labels:
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: platform
+spec:
+  policyName: tenant-flux-guard
+  validationActions: [Deny]
+  matchResources:
+    namespaceSelector:
+      matchExpressions:
+        - key: homelabs.dev/tier
+          operator: In
+          values: ["tenant"]

@@ -1,0 +1,16 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Stage 3: admission policy. Every file carries its policy and the binding that
+# scopes it, so a policy can never exist bound to a namespace selector nobody
+# reviewed. tests/policies/check.sh asserts that pairing.
+resources:
+  - 01-no-host-access.yaml
+  - 02-tenant-gvisor.yaml
+  - 03-tenant-images.yaml
+  - 04-tenant-scratch-pvc.yaml
+  - 05-tenant-pvc-naming.yaml
+  - 06-tenant-flux-guard.yaml
+  - 07-tenant-flux-sa-pods.yaml
+  - 08-data-workload-source.yaml
+  - 09-tenant-secret-scope.yaml

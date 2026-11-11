@@ -1,0 +1,37 @@
+# expect: deny tenant-secret-scope
+apiVersion: v1
+kind: Pod
+metadata:
+  name: nanobot-scratch
+  namespace: tenant-apps
+  labels:
+    app.kubernetes.io/name: nanobot
+    app.kubernetes.io/part-of: homelabs
+spec:
+  runtimeClassName: gvisor
+  automountServiceAccountToken: false
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    runAsGroup: 1000
+    fsGroup: 1000
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: nanobot
+      image: ghcr.io/smores56/homelabs-apps/nanobot@sha256:0000000000000000000000000000000000000000000000000000000000000000
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: ["ALL"]
+      volumeMounts:
+        - name: scratch
+          mountPath: /scratch
+  volumes:
+    - name: age-key
+      secret:
+        secretName: sops-age
+    - name: scratch
+      persistentVolumeClaim:
+        claimName: nanobot-scratch

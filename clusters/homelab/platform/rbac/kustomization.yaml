@@ -1,0 +1,7 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Stage 2: identities before the policies that name them in CEL.
+resources:
+  - tenant-apps.yaml
+  - data.yaml

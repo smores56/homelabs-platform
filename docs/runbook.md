@@ -93,6 +93,7 @@ gh api -X PUT repos/smores56/homelabs-platform/branches/main/protection --input 
       "shellcheck",
       "action SHA pins",
       "CODEOWNERS coverage",
+      "policy checks",
       "fork-pr-secret-boundary"
     ]
   },
@@ -132,7 +133,7 @@ gh api repos/smores56/homelabs-platform/branches/main/protection --jq \
 ```
 
 Expected: `require_code_owner_reviews == true`, `linear == true`,
-`force_push == false`, `deletions == false`, and the eight contexts above.
+`force_push == false`, `deletions == false`, and the nine contexts above.
 
 ## Repo settings (blocked: 403)
 
@@ -191,8 +192,9 @@ scripts/check-action-pins.sh
 scripts/check-pr-secret-boundary.sh
 scripts/check-codeowners.sh
 scripts/kustomize-build-all.sh
+tests/policies/check.sh
 nix shell nixpkgs#yamllint nixpkgs#shellcheck nixpkgs#opentofu -c bash -c \
-  'yamllint -c .yamllint.yaml $(git ls-files "*.yaml" "*.yml") && shellcheck scripts/*.sh && tofu fmt -check -recursive tofu'
+  'yamllint -c .yamllint.yaml $(git ls-files "*.yaml" "*.yml") && shellcheck scripts/*.sh tests/policies/*.sh clusters/homelab/flux-system/bootstrap.sh && tofu fmt -check -recursive tofu'
 ```
 
 All of the above pass on the bootstrap commit; see `docs/negative-tests.md` for
@@ -216,3 +218,110 @@ which is why the missing `main` branch policy in the section above matters.
 
 `ci` on the first push (`4d1229f`) has no run entry; the workflow files landed
 in that same commit, so the first observable run is on `c5a6dca`.
+
+## Cluster bring-up: bootstrap and the three operator steps
+
+The platform stack is bootstrapped as code (`docs/flux.md`); three things are
+human-held and must be created before the stack converges.
+
+### 1. Bootstrap Flux
+
+```sh
+GITHUB_TOKEN=$(gh auth token) clusters/homelab/flux-system/bootstrap.sh
+flux -n flux-system get kustomizations
+```
+
+Expected: `flux-system` Kustomization Ready on the pinned
+`serviceAccountName: kustomize-controller` (see `docs/flux.md` for why bootstrap
+re-renders `gotk-sync.yaml`), then the six `platform-*` stages appear in order.
+
+### 2. Age key for SOPS
+
+One key per namespace that holds ciphertext. Generate on the workstation, never
+in the cluster, never in git:
+
+```sh
+age-keygen -o sops-age.agekey
+export AGE_RECIPIENT=$(age-keygen -y sops-age.agekey)
+kubectl -n flux-system create secret generic sops-age \
+  --from-file=age.agekey=sops-age.agekey
+kubectl -n tenant-apps create secret generic sops-age \
+  --from-file=age.agekey=sops-age.agekey
+rm sops-age.agekey   # the only copy lives in the password manager
+```
+
+Store `sops-age.agekey` in the password manager before deleting it. Then:
+
+```sh
+kubectl -n flux-system get secret sops-age -o jsonpath='{.data.age\.agekey}' | base64 -d | head -1
+```
+
+Expected: the `AGE-SECRET-KEY-1...` line. The `sops-contract` ConfigMap in
+`flux-system` records the same names; the controller flag `--sops-age-secret` is
+never set (`docs/flux.md`).
+
+### 3. Tenant repository credential
+
+`homelabs-apps` is private, so the GitRepository in `tenant-apps` needs its own
+read-only credential in the same namespace:
+
+```sh
+flux create secret git homelabs-apps-auth \
+  --namespace=tenant-apps \
+  --url=ssh://git@github.com/smores56/homelabs-apps
+```
+
+Add the printed public key to `smores56/homelabs-apps` under Settings → Deploy
+keys with **Allow write access clear**. Verify:
+
+```sh
+flux -n tenant-apps get gitrepository        # READY True
+flux -n tenant-apps get kustomization        # homelabs-apps reconciled as tenant-apps-reconciler
+```
+
+### 4. External Secrets, then resume its stage
+
+The ESO objects ship suspended because the operator's CRDs are not installed by
+this repository:
+
+```sh
+helm repo add external-secrets https://charts.external-secrets.io
+helm repo update
+helm install external-secrets external-secrets/external-secrets \
+  --namespace platform --create-namespace
+flux -n flux-system resume kustomization platform-secrets-eso
+kubectl -n tenant-apps get externalsecret
+```
+
+Expected: `nanobot-broker-token` Secret materialises from the `Password`
+generator (`refreshInterval: "0"`, so it mints once and stays stable until the
+target Secret is deleted).
+
+### 5. Confirm the policy stack on the live cluster
+
+```sh
+tests/policies/check.sh            # 184 static assertions, no cluster
+nix shell nixpkgs#etcd nixpkgs#kubernetes nixpkgs#openssl nixpkgs#kustomize \
+  nixpkgs#yq-go nixpkgs#jq -c tests/policies/check.sh --runtime
+kubectl get validatingadmissionpolicies,validatingadmissionpolicybindings
+kubectl auth can-i create secrets -n tenant-apps \
+  --as=system:serviceaccount:tenant-apps:tenant-apps-reconciler   # no
+```
+
+The one check the ephemeral bench cannot make is PSA at `restricted`:
+
+```sh
+kubectl -n tenant-apps run probe --image=busybox \
+  --overrides='{"spec":{"runtimeClassName":"gvisor","volumes":[{"name":"h","hostPath":{"path":"/"}}]}}'
+```
+
+Expected: rejected with a `violates PodSecurity "restricted"` violation
+(`docs/negative-tests.md`).
+
+### Required CI contexts
+
+`.github/workflows/ci.yml` now includes the `policy checks` job. The
+branch-protection payload in "Branch protection on `main`" must list nine
+contexts once the owner applies it: `kustomize build`, `kubeconform`,
+`yamllint`, `tofu fmt and validate`, `shellcheck`, `action SHA pins`,
+`CODEOWNERS coverage`, `policy checks`, `fork-pr-secret-boundary`.

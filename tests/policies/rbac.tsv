@@ -1,0 +1,31 @@
+# verb	resource	namespace	expect
+# namespace "-" means cluster scope. Every line is evaluated with
+# kubectl auth can-i --as=system:serviceaccount:tenant-apps:tenant-apps-reconciler
+# against a real API server in --runtime mode.
+create	secrets	tenant-apps	no
+list	secrets	tenant-apps	no
+create	serviceaccounts	tenant-apps	no
+create	roles	tenant-apps	no
+create	rolebindings	tenant-apps	no
+escalate	roles	tenant-apps	no
+bind	roles	tenant-apps	no
+impersonate	serviceaccounts	tenant-apps	no
+create	customresourcedefinitions	-	no
+create	namespaces	-	no
+create	nodes	-	no
+create	runtimeclasses	-	no
+create	validatingadmissionpolicies	-	no
+create	kustomizations.kustomize.toolkit.fluxcd.io	tenant-apps	no
+create	gitrepositories.source.toolkit.fluxcd.io	tenant-apps	no
+create	networkpolicies.networking.k8s.io	tenant-apps	no
+create	resourcequotas	tenant-apps	no
+create	pods	data	no
+delete	pods	data	no
+patch	deployments.apps	data	no
+get	secrets	data	no
+create	pods	tenant-apps	yes
+create	persistentvolumeclaims	tenant-apps	yes
+create	deployments.apps	tenant-apps	yes
+create	services	tenant-apps	yes
+get	configmaps	tenant-apps	yes
+get	pods/log	tenant-apps	yes

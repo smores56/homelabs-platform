@@ -1,0 +1,8 @@
+[
+  { "op": "add", "path": "/metadata/labels/homelabs.dev~1tenant", "value": "platform" },
+  { "op": "add", "path": "/metadata/labels/homelabs.dev~1tier", "value": "platform" },
+  { "op": "add", "path": "/metadata/labels/homelabs.dev~1managed-by", "value": "platform" },
+  { "op": "add", "path": "/metadata/labels/pod-security.kubernetes.io~1enforce", "value": "baseline" },
+  { "op": "add", "path": "/metadata/labels/pod-security.kubernetes.io~1audit", "value": "restricted" },
+  { "op": "add", "path": "/metadata/labels/pod-security.kubernetes.io~1warn", "value": "restricted" }
+]

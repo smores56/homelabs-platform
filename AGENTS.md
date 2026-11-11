@@ -21,8 +21,10 @@
 
 ```sh
 scripts/kustomize-build-all.sh          # every clusters/** kustomization renders
+tests/policies/check.sh                 # static policy, RBAC, network assertions
 nix run nixpkgs#yamllint -- .
-nix run nixpkgs#shellcheck -- scripts/*.sh
+nix run nixpkgs#shellcheck -- scripts/*.sh tests/policies/*.sh \
+  clusters/homelab/flux-system/bootstrap.sh
 scripts/check-action-pins.sh
 scripts/check-pr-secret-boundary.sh
 scripts/check-codeowners.sh
@@ -34,10 +36,12 @@ no formatter beyond `tofu fmt` (`nix run nixpkgs#opentofu -- fmt -check -recursi
 
 ## Cluster conventions
 
-- Flux runs with tenancy lockdown: `--no-cross-namespace-refs=true`,
-  `--no-remote-bases=true`, `--default-service-account=default`; per-tenant
-  `decryption.secretRef` for age keys. Never
-  `--insecure-kubeconfig-exec`/`--insecure-kubeconfig-tls`.
+- Flux runs with tenancy lockdown: per-controller flags are tabulated in
+  `docs/flux.md` and asserted against the rendered args by
+  `tests/policies/check.sh` (helm, notification, kustomize, source and
+  source-watcher differ in which flags exist at the pinned versions). Per-tenant
+  `decryption.secretRef` for age keys; the `--sops-age-secret` global stays
+  unset. Never the two insecure kubeconfig flags.
 - Namespaces carry `homelabs.dev/tenant` and `homelabs.dev/tier` labels plus PSA
   labels; non-platform namespaces enforce `restricted`. See `docs/tenancy.md`.
 - Kustomization directories are self-contained; CI builds each one directly.

@@ -1,0 +1,13 @@
+# The only identity data-namespace pods may run as. Platform reconciliation
+# creates those pods (kustomize-controller holds cluster-admin); the tenant
+# service account has no binding in this namespace, so it cannot create
+# anything here. 08-data-workload-source.yaml pins the name.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: data-workload
+  namespace: data
+  labels:
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: data
+automountServiceAccountToken: false

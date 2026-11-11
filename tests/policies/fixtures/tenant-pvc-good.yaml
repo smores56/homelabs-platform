@@ -1,0 +1,14 @@
+# expect: allow
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: nanobot-scratch
+  namespace: tenant-apps
+  labels:
+    app.kubernetes.io/name: nanobot
+    app.kubernetes.io/part-of: homelabs
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 1Gi

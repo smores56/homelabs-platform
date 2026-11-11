@@ -1,0 +1,74 @@
+# Nothing outside the platform tier may reach host namespaces, host paths, host
+# ports or extra capabilities. The observability tier is exempt (node-exporter
+# needs hostPath and hostNetwork) and the platform tier is trusting by design;
+# both are audited separately in docs/tenancy.md.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: no-host-access
+  labels:
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: platform
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["pods"]
+  variables:
+    - name: containers
+      expression: >-
+        object.spec.containers
+        + (has(object.spec.initContainers) ? object.spec.initContainers : [])
+        + (has(object.spec.ephemeralContainers) ? object.spec.ephemeralContainers : [])
+    - name: volumes
+      expression: "has(object.spec.volumes) ? object.spec.volumes : []"
+  validations:
+    - expression: "!has(object.spec.hostNetwork) || !object.spec.hostNetwork"
+      message: "hostNetwork is not allowed outside the platform tier"
+    - expression: "!has(object.spec.hostPID) || !object.spec.hostPID"
+      message: "hostPID is not allowed outside the platform tier"
+    - expression: "!has(object.spec.hostIPC) || !object.spec.hostIPC"
+      message: "hostIPC is not allowed outside the platform tier"
+    - expression: "variables.volumes.all(v, !has(v.hostPath))"
+      message: "hostPath volumes are not allowed outside the platform tier"
+    - expression: >-
+        variables.containers.all(c,
+          !has(c.securityContext) || !has(c.securityContext.privileged) || !c.securityContext.privileged)
+      message: "privileged containers are not allowed outside the platform tier"
+    - expression: >-
+        variables.containers.all(c,
+          !has(c.securityContext)
+          || !has(c.securityContext.allowPrivilegeEscalation)
+          || !c.securityContext.allowPrivilegeEscalation)
+      message: "containers must set securityContext.allowPrivilegeEscalation to false"
+    - expression: >-
+        variables.containers.all(c,
+          !has(c.securityContext)
+          || !has(c.securityContext.capabilities)
+          || !has(c.securityContext.capabilities.add)
+          || size(c.securityContext.capabilities.add) == 0)
+      message: "added capabilities are not allowed outside the platform tier"
+    - expression: >-
+        variables.containers.all(c,
+          !has(c.ports) || c.ports.all(p, !has(p.hostPort) || p.hostPort == 0))
+      message: "hostPort is not allowed outside the platform tier"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: no-host-access
+  labels:
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: platform
+spec:
+  policyName: no-host-access
+  validationActions: [Deny]
+  matchResources:
+    namespaceSelector:
+      matchExpressions:
+        - key: homelabs.dev/tier
+          operator: In
+          values: ["tenant", "broker", "data"]

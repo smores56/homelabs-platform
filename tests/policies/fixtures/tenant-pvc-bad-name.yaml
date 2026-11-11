@@ -1,0 +1,14 @@
+# expect: deny tenant-pvc-naming
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: scratch
+  namespace: tenant-apps
+  labels:
+    app.kubernetes.io/name: nanobot
+    app.kubernetes.io/part-of: homelabs
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 1Gi

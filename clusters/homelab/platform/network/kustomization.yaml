@@ -1,0 +1,10 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Stage 4: network isolation. Namespace labels already exist (stage 1), and the
+# selects here are label-based, so this can run beside the admission stage.
+resources:
+  - default-deny.yaml
+  - dns-egress.yaml
+  - tenant-broker.yaml
+  - data-flows.yaml

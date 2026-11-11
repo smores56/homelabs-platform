@@ -1,0 +1,58 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Entry point for the Flux root Kustomization created by bootstrap: its path is
+# ./clusters/homelab, so everything the cluster reconciles is reachable from
+# here.
+#
+# The gotk-controller patches live at this level on purpose. `flux bootstrap`
+# regenerates flux-system/gotk-components.yaml and flux-system/gotk-sync.yaml on
+# every run, and would silently drop patches stored beside them.
+resources:
+  - flux-system
+  - platform
+
+patches:
+  # Tenancy lockdown on the controllers that reconcile tenant input.
+  - target:
+      group: apps
+      version: v1
+      kind: Deployment
+      namespace: flux-system
+      name: kustomize-controller
+    path: flux-system/gotk-patches/kustomize-controller.json
+  - target:
+      group: apps
+      version: v1
+      kind: Deployment
+      namespace: flux-system
+      name: helm-controller
+    path: flux-system/gotk-patches/helm-controller.json
+  - target:
+      group: apps
+      version: v1
+      kind: Deployment
+      namespace: flux-system
+      name: notification-controller
+    path: flux-system/gotk-patches/notification-controller.json
+  - target:
+      group: apps
+      version: v1
+      kind: Deployment
+      namespace: flux-system
+      name: source-controller
+    path: flux-system/gotk-patches/source-controller.json
+  - target:
+      group: apps
+      version: v1
+      kind: Deployment
+      namespace: flux-system
+      name: source-watcher
+    path: flux-system/gotk-patches/source-watcher.json
+  # The bootstrap install manifests create flux-system without tenancy labels;
+  # policies and NetworkPolicies select namespaces by label.
+  - target:
+      version: v1
+      kind: Namespace
+      name: flux-system
+    path: flux-system/gotk-patches/flux-system-namespace.json

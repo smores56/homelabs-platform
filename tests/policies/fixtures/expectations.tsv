@@ -1,0 +1,34 @@
+# fixture	namespace	expect	policy	token
+# token is a literal string the named policy must contain; it is the static
+# half of the "does this CEL rule actually mention the field the fixture
+# violates" question. Runtime mode proves the same thing by admission.
+tenant-pod-good.yaml	tenant-apps	allow	-	-
+tenant-pod-broker-token-env.yaml	tenant-apps	allow	-	-
+tenant-pod-no-gvisor.yaml	tenant-apps	deny	tenant-gvisor	spec.runtimeClassName to gvisor
+tenant-pod-image-tag.yaml	tenant-apps	deny	tenant-images	pinned by @sha256 digest
+tenant-pod-image-no-digest.yaml	tenant-apps	deny	tenant-images	pinned by @sha256 digest
+tenant-pod-image-foreign.yaml	tenant-apps	deny	tenant-images	must run ghcr.io/smores56/homelabs-apps/nanobot pinned by digest
+tenant-pod-hostpath.yaml	tenant-apps	deny	no-host-access	hostPath volumes are not allowed
+tenant-pod-hostnetwork.yaml	tenant-apps	deny	no-host-access	hostNetwork is not allowed
+tenant-pod-privileged.yaml	tenant-apps	deny	no-host-access	privileged containers are not allowed
+tenant-pod-capabilities.yaml	tenant-apps	deny	no-host-access	added capabilities are not allowed
+tenant-pod-hostport.yaml	tenant-apps	deny	no-host-access	hostPort is not allowed
+tenant-pod-foreign-pvc.yaml	tenant-apps	deny	tenant-scratch-pvc	pods may only mount PVCs named
+tenant-pod-flux-sa.yaml	tenant-apps	deny	tenant-flux-sa-pods	no pod may run as the tenant reconciler service account
+tenant-pod-sops-age-volume.yaml	tenant-apps	deny	tenant-secret-scope	must not mount the sops-age Secret
+tenant-pod-sops-age-env.yaml	tenant-apps	deny	tenant-secret-scope	must not read the sops-age Secret through env
+tenant-pvc-good.yaml	tenant-apps	allow	-	-
+tenant-pvc-bad-name.yaml	tenant-apps	deny	tenant-pvc-naming	must be labelled app.kubernetes.io/name
+tenant-kustomization-good.yaml	tenant-apps	allow	-	-
+tenant-kustomization-platform-sa.yaml	tenant-apps	deny	tenant-flux-guard	must reconcile as tenant-apps-reconciler
+tenant-kustomization-other-target.yaml	tenant-apps	deny	tenant-flux-guard	must target their own namespace
+tenant-kustomization-foreign-source.yaml	tenant-apps	deny	tenant-flux-guard	same-namespace homelabs-apps GitRepository
+tenant-kustomization-kubeconfig.yaml	tenant-apps	deny	tenant-flux-guard	must not carry a kubeConfig
+tenant-kustomization-foreign-age-key.yaml	tenant-apps	deny	tenant-flux-guard	namespace-local sops-age secret
+data-pod-good.yaml	data	allow	-	-
+data-pod-missing-label.yaml	data	deny	data-workload-source	managed-by=platform
+data-pod-wrong-sa.yaml	data	deny	data-workload-source	data-workload service account
+data-pod-hostpath.yaml	data	deny	no-host-access	hostPath volumes are not allowed
+broker-pod-hostnetwork.yaml	broker	deny	no-host-access	hostNetwork is not allowed
+platform-pod-escalation.yaml	platform	allow	-	-
+observability-pod-hostpath.yaml	observability	allow	-	-

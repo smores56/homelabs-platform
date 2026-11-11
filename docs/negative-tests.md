@@ -80,3 +80,89 @@ approval, and every fork run receives a read-only `GITHUB_TOKEN` regardless.
 
 Not executed: no second identity. Manual step recorded above; static half
 passes.
+
+## The platform policy stack fails closed
+
+SDLC #578. Property under test: a tenant workload cannot reach the host, run
+outside gVisor, pull a mutable image, mount the age key, adopt another app's
+claim, or start a second reconciler with a different identity; a tenant identity
+cannot read or mint credentials, edit RBAC, create cluster-scoped objects, or
+touch data namespaces; and data workloads accept traffic only from the ingress
+namespace on one port.
+
+### What runs automatically (static, CI job `policy checks`)
+
+`tests/policies/check.sh` runs with no cluster and no credentials on every push
+and pull request. 184 assertions (recorded run, 2026-11-11):
+
+| Family | Assertions |
+| --- | --- |
+| `kustomize build clusters/homelab` renders, every `clusters/` and `tests/` YAML file parses (`yq`) | 2 |
+| Policy/binding pairing, names, `failurePolicy: Fail` | 45 |
+| Each binding selects exactly the namespaces in `tests/policies/bindings.tsv`, resolved against the real namespace labels | 9 |
+| Each fixture's expected policy really contains the CEL field the fixture violates | 23 |
+| RBAC deny list, wildcard-free rules, no cluster-scoped objects, only the tenant SA bound | 9 |
+| Rendered controller `args` match the reviewed flag table (`docs/flux.md`) | 13 |
+| No insecure kubeconfig flags anywhere in manifests or scripts | 1 |
+| NetworkPolicy shape: default-deny both directions, DNS to `kube-system`, broker-only tenant egress, immich from `ingress` only, no extra data flows | 12 |
+| Stage DAG (`dependsOn`), stage service accounts, apply order | 26 |
+| `gotk-sync.yaml` equals `bootstrap.sh --print-sync`, bootstrap flags, tenant Kustomization pins | 13 |
+| Fixture/expectation table completeness and `# expect:` headers | 31 |
+
+The static half cannot evaluate CEL: it proves the expression *mentions* the
+field and that the binding reaches the intended namespaces. Enforcement is the
+runtime half.
+
+### What runs on demand (runtime, real API server)
+
+```sh
+nix shell nixpkgs#etcd nixpkgs#kubernetes nixpkgs#openssl nixpkgs#kustomize \
+  nixpkgs#yq-go nixpkgs#jq -c tests/policies/check.sh --runtime
+```
+
+`tests/policies/apiserver.sh` boots etcd plus `kube-apiserver` on loopback ports
+(no kubelet, no container runtime, no root). The checker applies the real
+`gotk-components.yaml` (for the Flux CRDs), then the six platform stages in order,
+then drives every case with `kubectl --dry-run=server` and `kubectl auth can-i`.
+66 assertions (recorded run, 2026-11-11, kube-apiserver v1.36.2, etcd 3.6.13):
+
+- 6 stage applies plus the Flux component apply;
+- 30 fixture admissions: 10 allowed, 20 denied, each denial matched to the policy
+  named in `fixtures/expectations.tsv` by its denier string;
+- 27 `can-i` probes from `tests/policies/rbac.tsv`, run as
+  `system:serviceaccount:tenant-apps:tenant-apps-reconciler`;
+- 2 live attempts over the API (create a Secret, create a Kustomization), both
+  `forbidden`.
+
+Result: `static+runtime: 250 passed, 0 failed`.
+
+Two deliberate deviations from a production cluster, both so a failure is
+attributable:
+
+- PSA enforcement is relabelled to `privileged` on the bench after the real
+  namespaces are applied. Otherwise PSA answers first for host-access fixtures and
+  the test would pass for the wrong reason. The shipped labels stay `restricted`
+  and are asserted statically (`bindings.tsv` selects on tier, and
+  `namespaces.yaml` is reviewed YAML).
+- `--disable-admission-plugins=ServiceAccount` and `--allow-privileged=true`: the
+  bench runs no controller manager and has no privileged-container policy of its
+  own. `--authorization-mode=RBAC` keeps the RBAC half real.
+
+### What still needs a live cluster
+
+| Not covered here | Why | Where it is exercised |
+| --- | --- | --- |
+| Flux reconciliation, `dependsOn` waits, prune behaviour | needs kustomize-controller | first real cluster bring-up (`docs/runbook.md`) |
+| `RuntimeClass gvisor` actually starting under `runsc` | needs containerd + node | node bring-up; pod creation fails closed if the handler is missing |
+| NetworkPolicy enforcement | needs a CNI; a bare API server only stores objects | cluster bring-up; the policies are shaped and cross-checked statically |
+| PSA at `restricted` on tenant namespaces | relabelled on the bench (above) | cluster bring-up: create a hostPath pod in `tenant-apps`, expect a PSA violation |
+| SOPS decryption with the real age key | key is human-held | `docs/runbook.md` step 1, then `flux -n tenant-apps get kustomization` |
+| ESO `Password`/`ExternalSecret` materialising | needs the ESO operator CRDs | after `docs/runbook.md` step 3 resumes `platform-secrets-eso` |
+| Digest-pinned image pulls | fixtures use a syntax-valid placeholder digest | cluster bring-up pulls the real digests |
+
+### Runtime result
+
+Executed on 2026-11-11 in the agent VM against the ephemeral control plane:
+`tests/policies/check.sh --runtime` → `static+runtime: 250 passed, 0 failed`.
+The same checker runs without `--runtime` in CI, so a regression in any static
+assertion fails the pull request that introduces it.

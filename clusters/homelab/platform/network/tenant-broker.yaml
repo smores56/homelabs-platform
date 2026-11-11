@@ -1,0 +1,44 @@
+# Agents reach the network only through the broker, and the broker accepts
+# connections only from the tenant tier. Both directions are stated so neither
+# side depends on the other's file being applied first.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: egress-broker-only
+  namespace: tenant-apps
+  labels:
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: tenant
+spec:
+  podSelector: {}
+  policyTypes: ["Egress"]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              homelabs.dev/tier: broker
+          podSelector: {}
+      ports:
+        - protocol: TCP
+          port: 8080
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ingress-tenant-only
+  namespace: broker
+  labels:
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: broker
+spec:
+  podSelector: {}
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              homelabs.dev/tier: tenant
+          podSelector: {}
+      ports:
+        - protocol: TCP
+          port: 8080

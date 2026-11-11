@@ -1,0 +1,91 @@
+# Every namespace carries the tenancy contract: owner tenant, tier, and PSA
+# labels. Admission policies and NetworkPolicies select by label, never by
+# name, so renaming a namespace does not silently disable a guard.
+#
+# flux-system is not declared here: the bootstrap install manifests already
+# contain it, and clusters/homelab/kustomization.yaml patches the expected
+# labels onto that object. Declaring it twice would collide in one build.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: platform
+  labels:
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tenant: platform
+    homelabs.dev/tier: platform
+    homelabs.dev/managed-by: platform
+    # Flux, ESO and the policy controllers need baseline; observability
+    # workloads that need host access live in the observability namespace.
+    pod-security.kubernetes.io/enforce: baseline
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: tenant-apps
+  labels:
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tenant: apps
+    homelabs.dev/tier: tenant
+    homelabs.dev/managed-by: tenant
+    # homelabs-apps is reconciled into this namespace by the tenant
+    # service account; see clusters/homelab/platform/tenants/homelabs-apps.yaml.
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: broker
+  labels:
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tenant: broker
+    homelabs.dev/tier: broker
+    homelabs.dev/managed-by: platform
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: data
+  labels:
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tenant: data
+    homelabs.dev/tier: data
+    homelabs.dev/managed-by: platform
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ingress
+  labels:
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tenant: ingress
+    homelabs.dev/tier: ingress
+    homelabs.dev/managed-by: platform
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: observability
+  labels:
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tenant: observability
+    homelabs.dev/tier: observability
+    homelabs.dev/managed-by: platform
+    # node-exporter needs hostPath and hostNetwork, which the baseline and
+    # restricted profiles both forbid. The no-host-access policy exempts every
+    # namespace whose tier is not tenant/broker/data, so this stays explicit.
+    pod-security.kubernetes.io/enforce: privileged
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted

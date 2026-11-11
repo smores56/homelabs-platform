@@ -1,0 +1,22 @@
+# expect: allow
+apiVersion: v1
+kind: Pod
+metadata:
+  name: node-exporter
+  namespace: observability
+  labels:
+    app.kubernetes.io/name: node-exporter
+spec:
+  hostNetwork: true
+  automountServiceAccountToken: false
+  containers:
+    - name: node-exporter
+      image: quay.io/prometheus/node-exporter@sha256:0000000000000000000000000000000000000000000000000000000000000000
+      volumeMounts:
+        - name: proc
+          mountPath: /host/proc
+          readOnly: true
+  volumes:
+    - name: proc
+      hostPath:
+        path: /proc

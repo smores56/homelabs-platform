@@ -1,0 +1,41 @@
+# Same naming contract from the claim side: a tenant PVC must be named after the
+# app that owns it, so the pod-side rule in 04-tenant-scratch-pvc.yaml cannot be
+# satisfied by renaming a shared claim.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: tenant-pvc-naming
+  labels:
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: platform
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["persistentvolumeclaims"]
+  validations:
+    - expression: >-
+        has(object.metadata.labels)
+        && ('app.kubernetes.io/name' in object.metadata.labels)
+        && object.metadata.name.startsWith(object.metadata.labels['app.kubernetes.io/name'] + '-')
+      message: "tenant PVCs must be labelled app.kubernetes.io/name and named <name>-*"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: tenant-pvc-naming
+  labels:
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: platform
+spec:
+  policyName: tenant-pvc-naming
+  validationActions: [Deny]
+  matchResources:
+    namespaceSelector:
+      matchExpressions:
+        - key: homelabs.dev/tier
+          operator: In
+          values: ["tenant"]

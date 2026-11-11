@@ -12,14 +12,16 @@ changes by pull request from a fork, so no PR workflow can read a secret.
 
 | Path | Contents |
 | --- | --- |
-| `clusters/homelab/flux-system/` | Flux bootstrap manifests (added by the bootstrap task) |
-| `clusters/homelab/platform/` | Namespaces, tenant kustomizations, RBAC, policy, network |
+| `clusters/homelab/kustomization.yaml` | Flux root build; controller patches live here so bootstrap cannot overwrite them |
+| `clusters/homelab/flux-system/` | Install manifests, root sync objects, `gotk-patches/`, `bootstrap.sh` |
+| `clusters/homelab/platform/` | Ordered stages: namespaces, RBAC, admission policy, network, secrets, tenant reconciler |
 | `clusters/homelab/data/` | Data-bearing apps: Immich, Navidrome, Calibre, Graphiti |
 | `clusters/homelab/observability/` | Prometheus, Loki, Vector, status exporter |
 | `clusters/homelab/broker/` | Egress broker for agent traffic |
+| `tests/policies/` | Static + runtime policy checks, fixtures, expectation tables |
 | `tofu/` | Cloudflare OpenTofu (provider v5) |
 | `scripts/` | CI helpers, shellchecked |
-| `docs/` | Tenancy, runbook, negative tests, manual steps |
+| `docs/` | Flux, tenancy, runbook, negative tests, manual steps |
 
 ## Local checks
 
@@ -30,6 +32,7 @@ nix run nixpkgs#shellcheck -- scripts/*.sh
 scripts/check-action-pins.sh
 scripts/check-pr-secret-boundary.sh
 scripts/check-codeowners.sh
+tests/policies/check.sh                  # static policy, RBAC and network checks
 ```
 
 CI (`.github/workflows/ci.yml`) runs the same checks with pinned tool versions;
