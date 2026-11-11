@@ -83,6 +83,27 @@ def workload_images(workload: dict[str, Any]) -> list[str]:
     return sorted(images)
 
 
+def node_ready(node: dict[str, Any]) -> float:
+    """1.0 when the node's Ready condition is True, else 0.0.
+
+    A node with no conditions is not ready: the API omits the list while the
+    node is still registering, and the digest must not report it as healthy.
+    """
+    conditions = node.get("status", {}).get("conditions") or []
+    for condition in conditions:
+        if condition.get("type") == "Ready":
+            return 1.0 if condition.get("status") == "True" else 0.0
+    return 0.0
+
+
+def node_metrics(nodes: Iterable[dict[str, Any]]) -> list[str]:
+    lines: list[str] = []
+    for node in nodes:
+        labels = {"node": node.get("metadata", {}).get("name", "")}
+        lines.append(render_sample("homelabs_cluster_node_ready", labels, node_ready(node)))
+    return lines
+
+
 def pod_metrics(pods: Iterable[dict[str, Any]]) -> list[str]:
     lines: list[str] = []
     for pod in pods:
@@ -155,7 +176,10 @@ class KubernetesClient:
             return json.loads(response.read().decode("utf-8"))
 
     def collect(self) -> list[str]:
-        samples: list[str] = []
+        # One cluster-scoped read (the ClusterRole grants `nodes` get/list) so
+        # the digest can report node readiness without an agent ever holding
+        # this identity.
+        samples: list[str] = node_metrics(self.get("/api/v1/nodes").get("items", []))
         for namespace in self.namespaces:
             pods = self.get(f"/api/v1/namespaces/{namespace}/pods").get("items", [])
             deployments = self.get(f"/apis/apps/v1/namespaces/{namespace}/deployments").get(

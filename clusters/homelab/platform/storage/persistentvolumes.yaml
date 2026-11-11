@@ -137,3 +137,38 @@ spec:
             - key: kubernetes.io/hostname
               operator: In
               values: ["cluster"]
+---
+# The digest share (smores56/sdlc#595). The CronJob in platform/digest/ writes
+# `latest.json` and 96 snapshots here; the host writer watches the same tree at
+# /var/lib/data/cluster-digest and age-encrypts each new document into Kanbei's
+# inbox. The claim lives in `observability` because the token Secret it mounts
+# does, and a Secret reference never crosses namespaces.
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: cluster-digest-share
+  labels:
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: platform
+    homelabs.dev/share: cluster-digest
+spec:
+  capacity:
+    storage: 1Gi
+  accessModes: ["ReadWriteOnce"]
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: data-local
+  volumeMode: Filesystem
+  # Pre-bound: only this claim may take the share, so a mistyped claim name
+  # fails to bind instead of writing a digest over an app's directory.
+  claimRef:
+    namespace: observability
+    name: cluster-digest-data
+  local:
+    path: /mnt/data/cluster-digest
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: In
+              values: ["cluster"]

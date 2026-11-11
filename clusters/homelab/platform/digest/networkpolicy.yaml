@@ -1,0 +1,100 @@
+# The digest pod is the one workload that may read both sources, and it may do
+# nothing else. Egress is narrowed by this policy, and the pod declares
+# `policyTypes: [Ingress, Egress]` with no ingress rules at all: there is no
+# channel from Kanbei, from a tenant or from the broker back into it, and no
+# Service selects it (tests/digest/check.sh asserts both).
+#
+# The two companion Ingress policies are additive to the broker-only ones in
+# observability/network/: Kubernetes unions every policy that selects a pod, so
+# the gateway and exporter keep their broker caller and gain exactly one more.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: cluster-digest-egress
+  namespace: observability
+  labels:
+    app.kubernetes.io/name: cluster-digest
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: platform
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: cluster-digest
+  policyTypes: ["Ingress", "Egress"]
+  egress:
+    # DNS resolution for the two in-cluster Service names, nothing public.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: observability
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: status-exporter
+      ports:
+        - protocol: TCP
+          port: 9101
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: observability
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: loki-gateway
+      ports:
+        - protocol: TCP
+          port: 3100
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: status-exporter-from-digest
+  namespace: observability
+  labels:
+    app.kubernetes.io/name: cluster-digest
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: platform
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: status-exporter
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: cluster-digest
+      ports:
+        - protocol: TCP
+          port: 9101
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: loki-gateway-from-digest
+  namespace: observability
+  labels:
+    app.kubernetes.io/name: cluster-digest
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: platform
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: loki-gateway
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: cluster-digest
+      ports:
+        - protocol: TCP
+          port: 3100

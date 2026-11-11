@@ -1,0 +1,12 @@
+# No channel from Kanbei (or any other tier) back into nanobot: a NetworkPolicy
+# whose ingress selects the digest pod, or that opens the digest pod as a source
+# for these namespaces, would be that reverse path. One namespace per line.
+tenant-apps
+broker
+ingress
+immich
+navidrome
+calibre
+graphiti
+platform
+flux-system

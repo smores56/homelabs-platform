@@ -26,9 +26,11 @@ python3 -m unittest discover -s apps/broker/tests -t apps/broker   # broker unit
 tests/tofu/check.sh                     # Cloudflare config shape, no credentials
 tests/backup/check.sh                   # mirror script args/URLs, no network
 tests/observability/check.sh            # vector unit tests, config drift, exporter tests
+tests/digest/check.sh                   # digest builder fixtures, egress and reverse-path contract
 nix run nixpkgs#yamllint -- .
 nix run nixpkgs#shellcheck -- scripts/*.sh tests/policies/*.sh tests/tofu/*.sh \
-  tests/access/*.sh tests/backup/*.sh clusters/homelab/flux-system/bootstrap.sh \
+  tests/access/*.sh tests/backup/*.sh tests/digest/*.sh \
+  clusters/homelab/flux-system/bootstrap.sh \
   clusters/homelab/platform/backup/*.sh
 scripts/check-action-pins.sh
 scripts/check-pr-secret-boundary.sh

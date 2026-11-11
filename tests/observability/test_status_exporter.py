@@ -32,6 +32,28 @@ def pod(ready_states: list[bool], restarts: list[int]) -> dict:
     }
 
 
+def node(ready: str | None) -> dict:
+    conditions = [] if ready is None else [{"type": "Ready", "status": ready}]
+    return {"metadata": {"name": "cluster"}, "status": {"conditions": conditions}}
+
+
+class NodeMetricsTest(unittest.TestCase):
+    def test_ready_condition_true(self) -> None:
+        self.assertEqual(1.0, exporter.node_ready(node("True")))
+
+    def test_ready_condition_false(self) -> None:
+        self.assertEqual(0.0, exporter.node_ready(node("False")))
+
+    def test_no_conditions_is_not_ready(self) -> None:
+        self.assertEqual(0.0, exporter.node_ready(node(None)))
+
+    def test_sample_carries_the_node_name(self) -> None:
+        self.assertEqual(
+            ['homelabs_cluster_node_ready{node="cluster"} 1.0'],
+            exporter.node_metrics([node("True")]),
+        )
+
+
 class PodMetricsTest(unittest.TestCase):
     def test_all_containers_ready(self) -> None:
         self.assertEqual(1.0, exporter.pod_ready(pod([True, True], [0, 0])))

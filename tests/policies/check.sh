@@ -359,7 +359,7 @@ eq "$(yq -r '.volumeBindingMode' "$sc")" "WaitForFirstConsumer" "data-local bind
 eq "$(yq -r '.allowVolumeExpansion' "$sc")" "false" "data-local is not expandable"
 
 eq "$(yq -r '.spec.local.path' "$pvs" | grep -v '^---$' | sort | paste -sd, -)" \
-  "/mnt/data/books,/mnt/data/graphiti,/mnt/data/immich,/mnt/data/music" \
+  "/mnt/data/books,/mnt/data/cluster-digest,/mnt/data/graphiti,/mnt/data/immich,/mnt/data/music" \
   "every PV path is one of the guest's virtiofs shares"
 eq "$(yq -r '.spec.storageClassName' "$pvs" | grep -v '^---$' | sort -u)" "data-local" "every PV claims data-local"
 eq "$(yq -r '.spec.persistentVolumeReclaimPolicy' "$pvs" | grep -v '^---$' | sort -u)" "Retain" "every PV retains its data"
@@ -368,8 +368,8 @@ eq "$(yq -r '.spec.nodeAffinity.required.nodeSelectorTerms[0].matchExpressions[0
 eq "$(yq -r '.spec.nodeAffinity.required.nodeSelectorTerms[0].matchExpressions[0].values[0]' "$pvs" | grep -v '^---$' | sort -u)" \
   "cluster" "every PV is bound to the cluster node"
 eq "$(yq -r '.spec.claimRef | [.namespace, .name] | join(":")' "$pvs" | grep -v '^---$' | sort | paste -sd, -)" \
-  "calibre:calibre-data,graphiti:graphiti-data,immich:immich-data,navidrome:navidrome-data" \
-  "each PV is pre-bound to exactly one app claim"
+  "calibre:calibre-data,graphiti:graphiti-data,immich:immich-data,navidrome:navidrome-data,observability:cluster-digest-data" \
+  "each PV is pre-bound to exactly one claim"
 if grep -rq 'hostPath' clusters/homelab/data clusters/homelab/ingress; then
   bad "a data or ingress manifest uses hostPath"
 else
@@ -626,6 +626,7 @@ declare -A stage_edges=(
   [platform-broker]="platform-namespaces,platform-network,platform-policies,platform-rbac,platform-secrets"
   [platform-storage]="platform-namespaces"
   [platform-backup]="platform-namespaces,platform-policies"
+  [platform-digest]="platform-namespaces,platform-observability,platform-policies,platform-storage"
   [platform-data-apps]="platform-network,platform-policies,platform-storage"
   [platform-ingress]="platform-namespaces,platform-network"
   [platform-observability]="platform-policies"
@@ -654,7 +655,7 @@ done
 
 listed=$(yq -o=json -I=0 '.' clusters/homelab/platform/kustomization.yaml |
   jq -r '[.resources[] | sub("^kustomizations/"; "") | sub("\\.yaml$"; "")] | .[]')
-eq "$listed" "$(printf '%s\n' namespaces rbac policies network secrets broker storage backup data ingress observability tenants)" \
+eq "$listed" "$(printf '%s\n' namespaces rbac policies network secrets broker storage backup digest data ingress observability tenants)" \
   "platform/kustomization.yaml lists every stage in apply order"
 missing=$(comm -23 <(find "$stages_dir" -maxdepth 1 -name '*.yaml' -printf '%f\n' | sed 's|\.yaml$||' | sort) \
   <(yq -o=json -I=0 '.' clusters/homelab/platform/kustomization.yaml |

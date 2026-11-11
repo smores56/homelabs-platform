@@ -1,0 +1,27 @@
+# Stage 5d. The cluster digest: a CronJob that reads the status exporter and the
+# `data` tenant through the gateway and publishes one bounded JSON document onto
+# the cluster-digest share. It depends on the observability stage (both sources
+# and the ESO-generated token) and on storage (the static PV the claim binds to).
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: platform-digest
+  namespace: flux-system
+  labels:
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: platform
+spec:
+  interval: 10m
+  retryInterval: 1m
+  timeout: 5m
+  prune: true
+  path: ./clusters/homelab/platform/digest
+  dependsOn:
+    - name: platform-namespaces
+    - name: platform-policies
+    - name: platform-storage
+    - name: platform-observability
+  sourceRef:
+    kind: GitRepository
+    name: flux-system
+  serviceAccountName: kustomize-controller

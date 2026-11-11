@@ -142,9 +142,9 @@ eq "$(yq -r '.spec.template.spec.containers[0].env[] | select(.name == "LOKI_GAT
 # --------------------------------------------------------- status exporter RBAC
 exporter_dir=clusters/homelab/observability/status-exporter
 eq "$(yq -r '.rules | map(.resources | join("+")) | join(" ")' "$exporter_dir/clusterrole.yaml")" \
-  "pods deployments+statefulsets" "status exporter reads only pods and workload kinds"
+  "pods nodes deployments+statefulsets" "status exporter reads only pods, nodes and workload kinds"
 eq "$(yq -r '.rules | map(.verbs | join("+")) | join(" ")' "$exporter_dir/clusterrole.yaml")" \
-  "get+list+watch get+list" "status exporter verbs are read-only and exact"
+  "get+list+watch get+list get+list" "status exporter verbs are read-only and exact"
 if grep -rq 'kind: ClusterRoleBinding' "$exporter_dir" clusters/homelab/observability/rbac-data.yaml; then
   bad "status exporter has a ClusterRoleBinding (it would read every namespace)"
 else

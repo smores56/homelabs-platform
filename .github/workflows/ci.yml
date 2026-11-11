@@ -113,7 +113,7 @@ jobs:
         run: |
           shellcheck --version
           shellcheck scripts/*.sh tests/policies/*.sh tests/tofu/*.sh \
-            tests/access/*.sh tests/backup/*.sh \
+            tests/access/*.sh tests/backup/*.sh tests/digest/*.sh \
             clusters/homelab/flux-system/bootstrap.sh \
             clusters/homelab/platform/backup/*.sh
 
@@ -177,6 +177,25 @@ jobs:
       # own jobs.
       - name: vector tests, config lint, exporter unit tests
         run: tests/observability/check.sh
+
+  digest:
+    name: cluster digest
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          persist-credentials: false
+      - name: install pinned tools
+        run: |
+          scripts/install-ci-tools.sh "$RUNNER_TEMP/bin"
+          echo "$RUNNER_TEMP/bin" >>"$GITHUB_PATH"
+      # Fixture-driven builder tests (planted prompt/body must not survive, key
+      # ordering, 64 KiB bound, retention) plus the rendered contract: schedule,
+      # the single ESO token, the static PV/PVC pair, the two-source egress
+      # allowlist, no ingress into the job, and no Service or reverse path.
+      - name: digest builder and manifest checks
+        run: tests/digest/check.sh
 
   policy-checks:
     name: policy checks

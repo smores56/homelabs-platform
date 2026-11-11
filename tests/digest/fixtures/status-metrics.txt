@@ -1,0 +1,14 @@
+# HELP homelabs_cluster_node_ready 1 when the node's Ready condition is True.
+# TYPE homelabs_cluster_node_ready gauge
+homelabs_cluster_node_ready{node="cluster"} 1
+# HELP homelabs_data_pod_ready 1 when every container is ready.
+# TYPE homelabs_data_pod_ready gauge
+homelabs_data_pod_ready{namespace="immich",pod="immich-server-0"} 1
+homelabs_data_pod_ready{namespace="immich",pod="immich-server-1"} 0
+homelabs_data_pod_restart_count{namespace="immich",pod="immich-server-0"} 3
+homelabs_data_pod_restart_count{namespace="immich",pod="immich-server-1"} 5
+homelabs_data_workload_ready{kind="Deployment",name="immich",namespace="immich"} 0
+homelabs_data_workload_ready{kind="StatefulSet",name="postgres",namespace="immich"} 1
+homelabs_data_workload_image{image="ghcr.io/immich-app/immich-server:v2",kind="Deployment",name="immich",namespace="immich"} 1
+homelabs_data_status_exporter_last_scrape_success 1
+homelabs_data_status_exporter_up 1

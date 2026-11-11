@@ -192,7 +192,7 @@ cluster and no credentials. 29 assertions (recorded run, 2026-11-11):
 | Token contract: gateway and Vector read `loki-gateway-token`, ExternalSecret targets it, generator kind is `Password` | 4 |
 | Status exporter RBAC: resources and verbs exact, **no ClusterRoleBinding**, binding namespaced to `data`, subject in `observability` | 5 |
 | Postgres fragment sets `terse` + `panic`; every observability image is version/digest pinned | 2 |
-| Python unit tests for `exporter.py` and `gateway.py` | 29 tests in 1 assertion |
+| Python unit tests for `exporter.py` and `gateway.py` | 33 tests in 1 assertion |
 
 The deny-by-construction part is in the VRL itself: the event is rebuilt from an
 allowlist, so a parser failure or an unknown log format cannot fall back to
@@ -319,6 +319,82 @@ Static and API-server halves recorded above (2026-11-11). The node-level half �
 PV binding, NetworkPolicy enforcement, the CronJob actually writing through the
 share, and restic snapshotting that file — needs the live `cluster` guest and is
 recorded in `docs/data-migration.md` "Verification on the live cluster".
+
+## The digest cannot carry a prompt, and nothing can write to it
+
+SDLC #595. Property under test: the digest document contains node/workload
+health and six allowlisted activity fields per event; a planted prompt, message
+body or tool payload from the `data` tenant is absent; the document is
+deterministic and bounded at 64 KiB with at most 400 events; the job can reach
+only the exporter and the gateway; and there is no Service or ingress rule that
+would let Kanbei (or any tenant) send anything back to it.
+
+### What runs automatically (CI job `cluster digest`)
+
+`tests/digest/check.sh` runs on every push and pull request with no cluster and
+no credentials. 63 assertions (recorded run, 2026-11-11):
+
+| Family | Assertions |
+| --- | --- |
+| Builder unit tests: parsing, node/pod/workload health, restarts by pod prefix, versions, redaction, determinism, bounds, freshness, publication (30 cases) | 1 |
+| The shipped ConfigMap embeds the tested `digest_builder.py` byte for byte | 1 |
+| Namespace, tier label and the token-free ServiceAccount | 4 |
+| Schedule (`*/15`, UTC), `Forbid`, deadlines, retry bound | 6 |
+| Pod/container hardening (uid 1000, no token, read-only rootfs, seccomp) and the pinned image | 5 |
+| Environment contract (share path, 64 KiB, 400 events, 96 files, 15m window, both source URLs) | 7 |
+| Secret scope: exactly `loki-gateway-token`, no env secret reference, `password` projected as `token`, token file, claim mount | 5 |
+| Storage: claim on `data-local`, PV path/claimRef/affinity/retention | 4 |
+| Egress: exactly the two sources plus DNS, no rule without `to`, no `ipBlock`, ports 53/3100/9101, deny list from the fixture (`tenant-apps`, `broker`, `ingress`, `platform`, `0.0.0.0/0`, `::/0`, 443, 80) | 16 |
+| No Service in the build and no Service selects the digest pod | 2 |
+| No reverse path: nine namespaces have no digest-sourced ingress, the digest is a source only for the exporter/gateway policies, no RBAC names it | 11 |
+| Fixture run: deterministic bytes, planted strings absent, under 64 KiB, three events | 1 |
+
+The deny-by-construction part is in `digest_builder.activity_from_loki`: the
+event object is built from `ACTIVITY_ALLOWLIST`, never filtered from the parsed
+line. The negative assertions on the planted fixture are that the strings
+`PROMPT`, `Vacation`, `IMG_1234`, `read_file`, `shadow` and `diary` do not occur
+anywhere in the encoded document.
+
+The static fixtures are `tests/digest/fixtures/loki-planted.json` (the planted
+streams), `status-metrics.txt` (an exporter scrape), `egress.tsv` (the only
+allowed destinations and the deny list) and `reverse-path.txt` (namespaces that
+must never receive digest-sourced ingress).
+
+### What cannot run here
+
+No Loki, so the query is a fixture rather than a live `query_range`; no
+status exporter, so node/workload health is a captured scrape; no CNI, so the
+egress and ingress policies are shape-checked rather than enforced; no PV
+provisioner, so the claim stays Pending until the static PV and the share
+exist; and no host writer, so the age-encrypted batch and the inbox arrival are
+operator steps.
+
+### Manual runtime test
+
+1. Complete `docs/manual-steps.md` step 23 (share, PV bound, first run). It
+   includes the nix-config `dataShares` entry this stage depends on.
+2. Run the job once and inspect the document. `jq` on the job's host-side file
+   is enough; the file holds classification only.
+
+   ```sh
+   kubectl -n observability create job --from=cronjob/cluster-digest cluster-digest-manual
+   kubectl -n observability logs job/cluster-digest-manual -f
+   ssh smortress 'jq -r ".schema_version, .generated_at, .source_freshness, (.nanobot_activity.events|length)" \
+     /var/lib/data/cluster-digest/latest.json'
+   ```
+
+3. Expected: `"1"`, a UTC timestamp no older than 15 minutes, both sources
+   `ok: true`, and an event count at or below 400. Grep the host-side file for a
+   planted prompt and expect no match.
+4. Reverse-path test: `kubectl -n observability get svc | grep cluster-digest`
+   must print nothing, and a tenant pod dialling the digest by any name must
+   fail because no Service or ingress rule exists.
+
+### Runtime result
+
+Not executed: needs the live cluster (no Loki, CNI, PV provisioner or host
+writer here). Static half passes: `tests/digest/check.sh` → `digest: 63 passed,
+0 failed`.
 
 ## nanobot has no credentials and no internal reach
 

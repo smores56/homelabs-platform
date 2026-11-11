@@ -1,0 +1,25 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Stage 5d: the cluster digest. It lives in `observability` because that is
+# where the Loki gateway token Secret and both sources are (a Secret reference
+# never crosses namespaces), but every object is platform-tier: human-owned code
+# with no agent input and no API credential.
+namespace: observability
+resources:
+  - serviceaccount.yaml
+  - pvc.yaml
+  - networkpolicy.yaml
+  - cronjob.yaml
+
+# The builder ships in a ConfigMap so the manifest and the tested source are one
+# file. `tests/digest/check.sh` runs this exact copy against fixtures.
+configMapGenerator:
+  - name: cluster-digest-source
+    files:
+      - digest_builder.py
+    options:
+      labels:
+        app.kubernetes.io/name: cluster-digest
+        app.kubernetes.io/part-of: homelabs
+        homelabs.dev/tier: platform

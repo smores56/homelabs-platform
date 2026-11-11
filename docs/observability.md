@@ -17,6 +17,7 @@ the operator's CRDs are not shipped by this repository.
 | Vector | `timberio/vector:0.61.0-debian` | one DaemonSet, two sinks | 50m / 64Mi | 500m / 256Mi |
 | status-exporter | `python:3.13.12-slim` + `exporter.py` | read-only ready/restarts/versions for `data` | 10m / 32Mi | 100m / 96Mi |
 | loki-gateway | `python:3.13.12-slim` + `gateway.py` | bearer auth + forced `data` tenant | 10m / 32Mi | 100m / 96Mi |
+| cluster-digest | `python:3.13.12-slim` + `digest_builder.py` | 15-minute bounded JSON digest (platform stage) | 10m / 32Mi | 100m / 128Mi |
 
 Total requests are under 300m CPU and ~800Mi; limits sum to ~2.7Gi on the 15GB
 guest. No component uses `hostNetwork`; only Vector reads host paths
@@ -156,9 +157,11 @@ identity. `status-exporter` is the sanctioned view:
 | `homelabs_data_workload_image{namespace,kind,name,image}` | 1 per image (version) |
 | `homelabs_data_status_exporter_last_scrape_success` | 1 after a successful API read |
 | `homelabs_data_status_exporter_up` | 1 while the exporter serves |
+| `homelabs_cluster_node_ready{node}` | 1 when the node's `Ready` condition is True |
 
 The identity is the narrowest shape that can answer those questions: a
-ClusterRole with `get/list/watch` on `pods` and `get/list` on
+ClusterRole with `get/list/watch` on `pods`, `get/list` on `nodes` (a
+cluster-scoped read of node status only) and `get/list` on
 `deployments`/`statefulsets`, bound by **one RoleBinding per data namespace**
 (`immich`, `navidrome`, `calibre`, `graphiti`; `DATA_NAMESPACES` in the
 Deployment names the same four). A
@@ -172,6 +175,91 @@ namespaces.
 The exporter is human-owned (`CODEOWNERS`): nanobot reads its metrics through the
 broker or Prometheus and never runs or edits it. Prometheus scrapes it by static
 target and also picks up pods annotated `prometheus.io/scrape: "true"`.
+
+## Cluster digest
+
+`clusters/homelab/platform/digest/` is the one-way hand-off to Kanbei
+(smores56/sdlc#595). A CronJob every 15 minutes reads the two sanctioned views —
+the status exporter's metrics and the `data` tenant through `loki-gateway` — and
+writes one bounded JSON document to the cluster-digest share. The Flux stage is
+`platform-digest`, after `platform-storage` and `platform-observability`
+(the token Secret and both sources) and after `platform-policies`.
+
+The objects live in `observability` because a Secret reference never crosses a
+namespace and the ESO-generated `loki-gateway-token` lives there; every label is
+`homelabs.dev/tier: platform` because the code is human-owned and no agent
+supplies a byte of the input.
+
+Document shape (`schema_version` `"1"`):
+
+| Key | Content |
+| --- | --- |
+| `schema_version` | `"1"`; a reader must reject an unknown value |
+| `generated_at` | UTC `YYYY-MM-DDTHH:MM:SSZ`, the host writer's cursor |
+| `window` | Loki lookback, `15m` |
+| `source_freshness.status_exporter` | `{ok, age_seconds}`; age is the exporter's 30 s cache bound, `null` when the read failed |
+| `source_freshness.loki_gateway` | `{ok, age_seconds}`; age is 0 on a live query, `null` when it failed |
+| `cluster.nodes[]` | `{name, ready}` from `homelabs_cluster_node_ready` |
+| `cluster.pods[]` | `{namespace, pod, ready, restarts}` |
+| `cluster.workloads[]` | `{namespace, kind, name, ready, restarts, images}`; restarts are summed over pods whose name starts with the workload name |
+| `nanobot_activity` | `observed_events`, `event_count`, `truncated`, `events[]` |
+| `limits` | `max_bytes`, `max_events`, `max_files` the job enforces |
+
+Each activity event carries **only** `logical_host`, `timestamp`, `level`,
+`component`, `error_code` and `status`. `logical_host` is the Loki stream's
+`namespace` label (which host emitted the line), never the pod or container. The
+event object is rebuilt from that allowlist, so a message body, a prompt or a
+tool payload cannot be copied — the same deny-by-construction rule as the Vector
+allowlist, applied a second time. Values are stripped to printable ASCII and
+64 characters, so a data-tenant writer cannot inflate the document through its
+own `level` field. A line that is not JSON contributes nothing.
+
+Ordering and bounds: keys are sorted, events are in a total order over the six
+fields, and the encoded document is compact ASCII JSON with one trailing
+newline. The 64 KiB budget is enforced by dropping the oldest events first and
+setting `truncated`; if the mandatory sections alone exceed it the job exits 3
+instead of writing. The last 96 snapshots (24 hours) are kept; `latest.json` is
+always the newest.
+
+### Share and host-side contract
+
+The digest share is a virtiofs share of the `cluster` guest, one more entry in
+the `dataShares` list of `modules/nixos/cluster-vm.nix` (lines 25–30 today;
+add `"cluster-digest"` after `"graphiti"` at line 30 — that module is
+nix-config's, not this repository's). The generated share is:
+
+| | Value |
+| --- | --- |
+| Host path | `/var/lib/data/cluster-digest` |
+| Guest path | `/mnt/data/cluster-digest` (mount of the `data-cluster-digest` virtiofs tag) |
+| Static PV | `cluster-digest-share`, `data-local`, node affinity `cluster`, claimRef `observability/cluster-digest-data` |
+| Writer | the CronJob, uid 1000 (the share's host owner through the guest translation) |
+| Names it writes | `latest.json` plus `digest-<YYYYMMDDTHHMMSSZ>.json`, newest 96 retained |
+| Atomicity | temp file in the same directory, fsync, `rename(2)`; a reader never sees a partial document |
+| Max size | 65536 bytes; a larger mandatory document fails the run |
+| Age boundary | **host-side**: the host writer watches `latest.json`, age-encrypts to Kanbei's published recipient and drops the ciphertext into `/var/lib/data/inbox` (T14). The cluster holds no age key and never writes the inbox |
+
+The host writer must read only `latest.json` (snapshots are local debugging
+history), keep `generated_at` as a cursor so a restart does not duplicate a
+batch, and treat a missing `latest.json` as "not yet produced" rather than an
+error. Ingest's 1 MiB batch cap (`modules/lib/ingest-vm.nix:23`) leaves the
+64 KiB digest ample room for the envelope.
+
+### Network and secrets
+
+`cluster-digest-egress` allows DNS to `kube-system` and TCP 9101/3100 to
+`status-exporter`/`loki-gateway` and nothing else: no `ipBlock`, so no
+Cloudflare, GitHub or Neuralwatt egress. The same policy declares both
+`policyTypes` with no ingress rules, which denies every inbound connection. The
+two companion `*-from-digest` ingress policies are additive to the broker-only
+ones in `observability/network/` (Kubernetes unions policies that select the
+same pod). No Service selects the pod, so nothing can dial it by name, and no
+RBAC object names its ServiceAccount.
+
+The only mounted Secret is `loki-gateway-token` (key `password`, projected as
+the file `token`). It is the ESO `Password` generator's value, scoped by the
+gateway to the `data` tenant; the pod never mounts a Kubernetes token
+(`automountServiceAccountToken: false`), so it has no API access of its own.
 
 ## Postgres guidance for data apps
 
@@ -217,7 +305,8 @@ deliberately has no namespace that holds only shared configuration.
 
 ```sh
 tests/observability/check.sh          # vector test + validate, drift, unit tests
-tests/policies/check.sh               # static policy stack (357 assertions)
+tests/policies/check.sh               # static policy stack (361 assertions)
+tests/digest/check.sh                 # digest builder fixtures + rendered contract
 scripts/kustomize-build-all.sh        # every clusters/** kustomization
 nix run nixpkgs#kubeconform -- -strict -ignore-missing-schemas /tmp/manifests/*.yaml
 ```
@@ -226,13 +315,16 @@ Recorded 2026-11-11 (agent VM, Vector 0.61.0, Loki 3.7.9, Python 3.13, k3s
 schema v1.34):
 
 - `tests/observability/check.sh` → `observability: 29 passed, 0 failed`
-  (6 `vector test` cases, 29 Python unit tests);
+  (6 `vector test` cases, 33 Python unit tests);
 - `vector validate` and `loki -verify-config` both accept the shipped configs;
 - `promtool check config` accepts the Prometheus config;
-- `tests/policies/check.sh` → `static: 357 passed, 0 failed`;
-- `tests/policies/check.sh --runtime` → `static+runtime: 457 passed, 0 failed`;
+- `tests/policies/check.sh` → `static: 361 passed, 0 failed`;
+- `tests/policies/check.sh --runtime` → not re-run this wave; the runtime half
+  tracks the static stack plus the fixture/RBAC rows and needs the throwaway
+  API server (last recorded 457 at the previous stack);
+- `tests/digest/check.sh` → `digest: 63 passed, 0 failed`;
 - `kustomize build` over every `clusters/**` tree and `kubeconform -strict`
-  → `237 resources found ... Valid: 175, Invalid: 0`.
+  → `387 resources found ... Valid: 309, Invalid: 0` (78 CRDs skipped).
 
 CI runs the `observability` job with Vector installed from the release tarball
 whose SHA-256 is pinned in `scripts/install-ci-tools.sh`.
@@ -248,3 +340,6 @@ whose SHA-256 is pinned in `scripts/install-ci-tools.sh`.
 | ESO materialising `loki-gateway-token` | needs the ESO operator | `docs/manual-steps.md` step 9 |
 | Image digest pinning | needs a registry lookup | `docs/manual-steps.md` step 10 |
 | PVC binding on `local-path` | needs the k3s provisioner | `kubectl -n observability get pvc` |
+| The digest writing through the share | needs the `cluster-digest` virtiofs share and the static PV | `docs/manual-steps.md` step 23 |
+| Digest egress and the absent reverse path | needs a CNI | `docs/manual-steps.md` step 23, steps 3 and 6 |
+| The host writer age-encrypting a digest into the inbox | needs the T14 writer and Kanbei's recipient | `docs/manual-steps.md` step 23, step 5 |

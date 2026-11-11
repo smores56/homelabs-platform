@@ -711,3 +711,87 @@ the script refuses a classic `ghp_` token at start.
    Rotation is: mint the replacement in step 1, repeat step 2, wait for the 1h
    ESO refresh (or delete the projected Secret so it is recreated), then revoke
    the old PAT.
+
+## 23. Verify the digest job, the share and the host writer hand-off
+
+The CronJob in `clusters/homelab/platform/digest/` writes `latest.json` and 96
+snapshots to `/mnt/data/cluster-digest`; the host reads the same tree at
+`/var/lib/data/cluster-digest` and age-encrypts each new document into Kanbei's
+inbox. The cluster holds no age key.
+
+1. Land the share in nix-config. The guest module must list the share, or the
+   PVC stays Pending and nothing is written:
+
+   ```nix
+   # modules/nixos/cluster-vm.nix, the dataShares list (lines 25-30)
+   dataShares = [
+     "immich"
+     "music"
+     "books"
+     "graphiti"
+     "cluster-digest"
+   ];
+   ```
+
+   Rebuild the `cluster` guest, then confirm the host directory exists with the
+   owner the guest translation maps to (uid 1000):
+
+   ```sh
+   ls -ld /var/lib/data/cluster-digest
+   cluster-kubectl get nodes -o wide          # node name must be `cluster`
+   ```
+
+2. Confirm the static volume and the claim bound to it:
+
+   ```sh
+   kubectl get pv cluster-digest-share        # Bound, cluster-digest-data
+   kubectl -n observability get pvc cluster-digest-data   # Bound
+   ```
+
+   A Pending claim means step 1 is missing or the node name is not `cluster`;
+   the PV's node affinity fails closed rather than binding elsewhere.
+
+3. Run the job once and read its log. The builder prints one JSON summary line
+   (`generated_at`, `bytes`, `events`, `pruned`) and exits 1 when either source
+   failed, so a failed read is visible without opening the document:
+
+   ```sh
+   kubectl -n observability create job --from=cronjob/cluster-digest cluster-digest-manual
+   kubectl -n observability logs job/cluster-digest-manual -f
+   ```
+
+4. Read the document on the host. `jq` shows the schema version, a fresh UTC
+   `generated_at`, both freshness entries `ok: true`, and an event count at or
+   below 400; `wc -c` must stay at or below 65536:
+
+   ```sh
+   jq -r '.schema_version, .generated_at, .source_freshness,
+     (.nanobot_activity.events|length)' /var/lib/data/cluster-digest/latest.json
+   wc -c /var/lib/data/cluster-digest/latest.json
+   ls /var/lib/data/cluster-digest | wc -l    # latest.json + at most 96 snapshots
+   ```
+
+   The schedule is `*/15 * * * *` UTC, so `generated_at` should be no more than
+   15 minutes old at any time; a stale timestamp with `ok: false` means the
+   exporter or gateway was unreachable and the host writer should not be
+   expected to produce a new batch.
+
+5. Confirm the host writer's half. It watches only `latest.json` (snapshots are
+   local debugging history), uses `generated_at` as a cursor so a restart does
+   not duplicate a batch, and drops age ciphertext into `/var/lib/data/inbox`
+   (T14). A new file in the inbox starting with `age-encryption.org/v1` is the
+   successful end-to-end:
+
+   ```sh
+   ls -t /var/lib/data/inbox | head -1
+   head -c 30 /var/lib/data/inbox/"$(ls -t /var/lib/data/inbox | head -1)"; echo
+   ```
+
+6. Confirm there is no way back. No Service selects the digest pod and no
+   ingress policy opens it to another namespace:
+
+   ```sh
+   kubectl -n observability get svc -l app.kubernetes.io/name=cluster-digest   # empty
+   kubectl -n observability get networkpolicy cluster-digest-egress \
+     -o jsonpath='{.spec.policyTypes}{"\n"}{.spec.ingress}{"\n"}'             # Egress,Ingress / nothing
+   ```

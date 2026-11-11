@@ -1,0 +1,20 @@
+# The digest share (`/var/lib/data/cluster-digest` on the host, mounted at
+# /mnt/data/cluster-digest in the guest) is a static `data-local` PV in
+# platform/storage/persistentvolumes.yaml. The claim name is what the PV's
+# claimRef pins, so a mistyped name fails to bind instead of landing on an
+# app's data.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: cluster-digest-data
+  namespace: observability
+  labels:
+    app.kubernetes.io/name: cluster-digest
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: platform
+spec:
+  accessModes: ["ReadWriteOnce"]
+  storageClassName: data-local
+  resources:
+    requests:
+      storage: 1Gi

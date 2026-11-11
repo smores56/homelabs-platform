@@ -1,0 +1,16 @@
+# The digest CronJob egress, as the only destinations it may name. The check
+# asserts the rendered NetworkPolicy carries exactly these and no rule without a
+# `to` block (an empty `to` allows every destination).
+# kind<TAB>key=value...
+allow	namespace=observability	pod=status-exporter	port=9101
+allow	namespace=observability	pod=loki-gateway	port=3100
+allow	namespace=kube-system	pod=*	port=53
+# Destinations that must never appear in a digest egress rule.
+deny	namespace=tenant-apps
+deny	namespace=broker
+deny	namespace=ingress
+deny	namespace=platform
+deny	cidr=0.0.0.0/0
+deny	cidr=::/0
+deny	port=443
+deny	port=80

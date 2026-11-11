@@ -311,7 +311,7 @@ contract from `docs/manual-steps.md` step 10, not an ESO generator.
 ### 5. Confirm the policy stack on the live cluster
 
 ```sh
-tests/policies/check.sh            # 357 static assertions, no cluster
+tests/policies/check.sh            # 361 static assertions, no cluster
 nix shell nixpkgs#etcd nixpkgs#kubernetes nixpkgs#openssl nixpkgs#kustomize \
   nixpkgs#yq-go nixpkgs#jq -c tests/policies/check.sh --runtime
 kubectl get validatingadmissionpolicies,validatingadmissionpolicybindings
@@ -331,8 +331,8 @@ Expected: rejected with a `violates PodSecurity "restricted"` violation
 
 ### 6. Data apps and the cluster tunnel
 
-`platform-storage`, `platform-backup`, `platform-data-apps` and
-`platform-ingress` apply with the rest of the stack, but their pods stay
+`platform-storage`, `platform-backup`, `platform-digest`, `platform-data-apps`
+and `platform-ingress` apply with the rest of the stack, but their pods stay
 unstarted until the operator has done `docs/manual-steps.md` steps 8, 12 and 13
 (ESO, the SOPS-contract Secrets, and the cutover). The per-app order, checks and
 rollback are in `docs/data-migration.md`. Nothing here flips a Cloudflare route:
@@ -392,6 +392,25 @@ in CI:
 
 ```sh
 tests/backup/check.sh
+```
+
+### 9. Cluster digest
+
+`platform-digest` reconciles `clusters/homelab/platform/digest/`: the
+`cluster-digest` CronJob, the `cluster-digest-data` PVC over the static
+`cluster-digest-share` PV, and three policies (the egress allowlist, two
+ingress allowances, and a policy that denies all ingress into the pod). Its
+objects are in the `observability` namespace because the ESO token lives there,
+but the tier label is `platform`. The job writes `latest.json` and at most 96
+snapshots to `/var/lib/data/cluster-digest`; the host writer age-encrypts each
+new document into Kanbei's inbox.
+
+```sh
+# after docs/manual-steps.md step 23
+kubectl -n observability get cronjob cluster-digest
+kubectl -n observability get pvc cluster-digest-data
+jq -r '.schema_version, .generated_at' /var/lib/data/cluster-digest/latest.json
+ls /var/lib/data/cluster-digest | wc -l        # latest.json + at most 96
 ```
 
 ### Required CI contexts
