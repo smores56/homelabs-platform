@@ -319,3 +319,116 @@ Static and API-server halves recorded above (2026-11-11). The node-level half �
 PV binding, NetworkPolicy enforcement, the CronJob actually writing through the
 share, and restic snapshotting that file — needs the live `cluster` guest and is
 recorded in `docs/data-migration.md` "Verification on the live cluster".
+
+## nanobot has no credentials and no internal reach
+
+SDLC #582. Property under test: the agent can call only its enrolled logical
+hosts through the broker, and only with the credential the broker injects. It
+cannot reach a private, loopback, link-local, CGNAT, pod-CIDR, service-CIDR or
+node address even by naming one; cannot follow a redirect to another host;
+cannot create a ServiceAccount or Secret, read `pods/log`, exec into a data pod,
+or patch a deployment; and cannot present its own credential to an upstream.
+The broker logs logical host, method, path, status and bytes and never logs a
+header, a body, a query string or a secret.
+
+### What runs automatically (CI job `broker unit tests`)
+
+`python3 -m unittest discover -s apps/broker/tests -t apps/broker` — 52 tests,
+no network and no cluster. The resolver and connector are injected, so the real
+policy code runs against scripted DNS answers and a loopback upstream.
+
+| Family | Tests |
+| --- | --- |
+| Address policy: pod CIDR, loopback, link-local/metadata, CGNAT, multicast, unspecified, ULA, IPv4-mapped forms, non-global ranges, private-only enrollment, node address | 7 |
+| DNS: pin first allowed address, one refused address denies the answer, private answer needs a private enrollment, failure/empty are 502, loopback names never resolve | 5 |
+| Redirects: relative and same-host pass; other host, parent/child host, other port, scheme change and unparsable port deny | 2 |
+| Request shape: absolute-form and `//` refused, IP-literal `Host` refused, encoded NUL/backslash refused, dot segments canonicalized, query preserved | 6 |
+| Enrollment/secret loading: shipped config is the logical-host contract, no credential value in it, invalid host/port/header/kind/enrollment rejected, env deny-list, missing/empty secret is fatal | 15 |
+| Redaction: raw/URL/JSON/slash-escaped/base64 forms replaced, longest variant wins, URL-bearing headers only | 5 |
+| Broker end-to-end: one injected credential, agent headers stripped, Loki tenant header forced, uncredentialed host forwarded, log shape and no secrets/query, cross-host redirect denied, same-host redirect returned, body redaction, CONNECT 405, IP Host 400, unknown host 404, POST body forwarded, pod address refused before connect | 12 |
+
+### What runs automatically (CI job `policy checks`, static)
+
+`tests/policies/check.sh` — 329 assertions (recorded run, 2026-11-11):
+the previous table in this document describes the #578 families; #582 adds:
+
+- `agent-identity` and `broker-runtime` are paired with bindings and select
+  `tenant-apps` and `broker` respectively; their CEL mentions the fields the
+  fixtures violate (service account, token automount, gvisor, read-only rootfs);
+- `agent-debug` exists in all four data namespaces, grants exactly events
+  `get`/`list` and pods `delete`, and binds only `tenant-apps/nanobot`;
+- the `nanobot` ServiceAccount exists with `automountServiceAccountToken: false`;
+- the broker Deployment is on gVisor, non-root, read-only, drops `ALL`, has no
+  Secret-backed env, mounts `broker-credentials` fail-closed, is digest-pinned,
+  and its Service listens on 8080;
+- the broker build holds no Secret; the enrollment file names exactly the seven
+  logical hosts, only `loki`/`status` allow private addresses, `loki` forces
+  `X-Scope-OrgID: data`, and the SOPS contract keys equal the enrolled secret
+  names; no token-shaped value is in the enrollment;
+- broker egress is TCP 443 to global unicast with every non-global range in
+  `except`; the tunnel reaches `tenant-apps/nanobot:8080` and nothing else;
+- the stage DAG includes `platform-broker` and the apply list names it.
+
+### What runs on demand (runtime, real API server)
+
+`tests/policies/check.sh --runtime` — `static+runtime: 428 passed, 0 failed`
+(recorded run, 2026-11-11, kube-apiserver v1.36.2, etcd 3.6.13). The new
+fixtures are admitted/denied by the real API server:
+
+- `agent-pod-wrong-sa.yaml` and `agent-pod-automount.yaml` → denied by
+  `agent-identity`;
+- `broker-pod-no-gvisor.yaml` and `broker-pod-writable-root.yaml` → denied by
+  `broker-runtime`; `broker-pod-good.yaml` → admitted;
+- `broker-pod-hostnetwork.yaml` now also satisfies `broker-runtime`, so its
+  denial is attributable to `no-host-access`.
+
+The `can-i` table (`tests/policies/rbac.tsv`, subject column) evaluates
+`system:serviceaccount:tenant-apps:nanobot`: `delete pods` and `get`/`list
+events` are `yes` in each data namespace; `get pods`, `pods/log`, `pods/exec`,
+`pods/attach`, `pods/portforward`, `pods/proxy`, `get secrets`, `get nodes`,
+`patch deployments`, and creating ServiceAccounts, Secrets or Roles in
+`tenant-apps` are all `no`.
+
+### What cannot run here
+
+No CNI, so the NetworkPolicy pairs are stored and shape-checked, not enforced.
+No kubelet or gVisor handler, so the runtime class is admitted but never
+starts. No real DNS, TLS or provider tokens, so the unit tests inject the
+resolver and connector and the live calls are manual. No cluster tunnel, so the
+`agent.sammohr.dev` route and Access policies are only diffed and documented
+(`docs/broker.md`). The broker image is a marked digest placeholder until
+`docs/manual-steps.md` publishes it.
+
+### Manual runtime test (live cluster)
+
+```sh
+# 1. the broker is up and the enrollment is the shipped one
+cluster-kubectl -n broker get deploy broker
+cluster-kubectl -n broker exec deploy/broker -- \
+  python -c 'import json,sys; print(sorted(json.load(open("/etc/broker/broker.json"))["logical_hosts"]))'
+
+# 2. from the agent pod: enrolled call works, direct/private call does not
+cluster-kubectl -n tenant-apps exec deploy/nanobot -- \
+  curl -sS -o /dev/null -w '%{http_code}\n' "$BROKER_URL/neuralwatt/v1/models"
+cluster-kubectl -n tenant-apps exec deploy/nanobot -- \
+  curl -sS -o /dev/null -w '%{http_code}\n' \
+  "http://broker.broker.svc.cluster.local:8080/neuralwatt/../status/metrics"   # 400/403
+cluster-kubectl -n tenant-apps exec deploy/nanobot -- \
+  curl -sS --max-time 5 http://10.43.0.1:443/                              # times out (NetworkPolicy)
+
+# 3. the agent's token is absent and its RBAC is the ceiling
+cluster-kubectl -n tenant-apps get sa nanobot -o jsonpath='{.automountServiceAccountToken}\n'
+cluster-kubectl auth can-i delete pods -n immich --as system:serviceaccount:tenant-apps:nanobot   # yes
+cluster-kubectl auth can-i get pods/log -n immich --as system:serviceaccount:tenant-apps:nanobot   # no
+cluster-kubectl auth can-i patch deployments.apps -n immich --as system:serviceaccount:tenant-apps:nanobot  # no
+
+# 4. every request was logged with metadata only
+cluster-kubectl -n broker logs deploy/broker | tail -5
+```
+
+### Runtime result
+
+Static and API-server halves executed on 2026-11-11 (`329` and `428` passing);
+the unit suite is green in CI. The live half needs the cluster, the broker
+image and the SOPS credentials, and is recorded here when the coordinator runs
+it.

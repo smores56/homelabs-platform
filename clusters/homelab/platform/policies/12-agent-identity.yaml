@@ -1,0 +1,52 @@
+# nanobot's identity is pinned at admission, not only in its Deployment. A pod
+# labelled as the agent must run as the `nanobot` ServiceAccount and must not
+# automount a token; the tenant reconciler can create ServiceAccounts in neither
+# case, and 99% of the intended failure mode is a copy-pasted pod spec that
+# silently keeps the default identity.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: agent-identity
+  labels:
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: platform
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["pods"]
+  variables:
+    - name: agent
+      expression: >-
+        has(object.metadata.labels)
+        && 'app.kubernetes.io/name' in object.metadata.labels
+        && object.metadata.labels['app.kubernetes.io/name'] == 'nanobot'
+  validations:
+    - expression: >-
+        !variables.agent
+        || (has(object.spec.serviceAccountName) && object.spec.serviceAccountName == 'nanobot')
+      message: "nanobot pods must run as the nanobot service account"
+    - expression: >-
+        !variables.agent
+        || (has(object.spec.automountServiceAccountToken) && object.spec.automountServiceAccountToken == false)
+      message: "nanobot pods must set automountServiceAccountToken: false"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: agent-identity
+  labels:
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: platform
+spec:
+  policyName: agent-identity
+  validationActions: [Deny]
+  matchResources:
+    namespaceSelector:
+      matchExpressions:
+        - key: homelabs.dev/tier
+          operator: In
+          values: ["tenant"]

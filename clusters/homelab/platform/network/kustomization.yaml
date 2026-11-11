@@ -8,3 +8,4 @@ resources:
   - dns-egress.yaml
   - tenant-broker.yaml
   - data-flows.yaml
+  - agent-ingress.yaml

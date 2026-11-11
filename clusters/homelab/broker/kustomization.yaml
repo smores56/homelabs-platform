@@ -1,0 +1,23 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# The broker is platform-owned: its logical-host enrollment and its egress
+# policy are reviewed here, and the tenant repository can neither read nor
+# change them. The enrollment file is non-secret; the credentials it names are
+# files in the `broker-credentials` Secret (sops-contract.yaml).
+namespace: broker
+labels:
+  - includeSelectors: false
+    pairs:
+      app.kubernetes.io/part-of: homelabs
+      homelabs.dev/tier: broker
+resources:
+  - serviceaccount.yaml
+  - deployment.yaml
+  - service.yaml
+  - networkpolicy.yaml
+  - sops-contract.yaml
+configMapGenerator:
+  - name: broker-config
+    files:
+      - broker.json=config/broker.json

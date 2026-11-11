@@ -3,7 +3,6 @@
 # half of the "does this CEL rule actually mention the field the fixture
 # violates" question. Runtime mode proves the same thing by admission.
 tenant-pod-good.yaml	tenant-apps	allow	-	-
-tenant-pod-broker-token-env.yaml	tenant-apps	allow	-	-
 tenant-pod-no-gvisor.yaml	tenant-apps	deny	tenant-gvisor	spec.runtimeClassName to gvisor
 tenant-pod-image-tag.yaml	tenant-apps	deny	tenant-images	pinned by @sha256 digest
 tenant-pod-image-no-digest.yaml	tenant-apps	deny	tenant-images	pinned by @sha256 digest
@@ -36,3 +35,8 @@ data-pod-own-pvc.yaml	immich	allow	-	-
 data-pod-foreign-pvc.yaml	immich	deny	data-pvc-scope	PVC names must start with <namespace>-
 immich-dump-pod.yaml	immich	allow	-	-
 data-pvc-bad-storage.yaml	immich	deny	data-pvc-storage	data-local StorageClass
+agent-pod-wrong-sa.yaml	tenant-apps	deny	agent-identity	must run as the nanobot service account
+agent-pod-automount.yaml	tenant-apps	deny	agent-identity	automountServiceAccountToken: false
+broker-pod-good.yaml	broker	allow	-	-
+broker-pod-no-gvisor.yaml	broker	deny	broker-runtime	broker pods must run on gvisor
+broker-pod-writable-root.yaml	broker	deny	broker-runtime	readOnlyRootFilesystem: true

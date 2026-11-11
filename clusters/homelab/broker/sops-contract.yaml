@@ -1,0 +1,29 @@
+# The credential contract for the broker, recorded as data rather than prose.
+# No value is here: the Secret is assembled from SOPS-decrypted files by the
+# operator (docs/manual-steps.md, "Create the broker credential Secret").
+#
+# One key per logical host; a key is a file the broker reads at startup. The
+# enrollment file names the key, never the value.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: broker-credentials-contract
+  labels:
+    app.kubernetes.io/name: broker
+    homelabs.dev/tier: broker
+data:
+  secretName: broker-credentials
+  namespace: broker
+  keys: >-
+    neuralwatt-api-key,github-apps-token,github-platform-token,tinyfish-api-key,loki-gateway-token
+  source: >-
+    broker-credentials.yaml, SOPS-encrypted with the flux-system age recipient;
+    decrypt with `sops -d` and pipe each key into the Secret. Never commit the
+    encrypted file to the tenant repository.
+  rotate: >-
+    write the new value to the SOPS file, replace the Secret, then
+    `kubectl -n broker rollout restart deployment/broker` (the broker reads
+    credentials once at start).
+  verify: >-
+    kubectl -n broker get secret broker-credentials -o jsonpath='{.data}' |
+    jq 'keys'

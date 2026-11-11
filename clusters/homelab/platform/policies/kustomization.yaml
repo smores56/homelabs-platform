@@ -16,3 +16,5 @@ resources:
   - 09-tenant-secret-scope.yaml
   - 10-data-pvc-scope.yaml
   - 11-data-pvc-storage.yaml
+  - 12-agent-identity.yaml
+  - 13-broker-runtime.yaml

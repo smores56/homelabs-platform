@@ -1,0 +1,110 @@
+# One listener, one credentials mount. The image runs the stdlib broker from
+# apps/broker; gVisor is the sandbox boundary, and the rootfs is read-only
+# because nothing in the broker writes to disk.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: broker
+  labels:
+    app.kubernetes.io/name: broker
+    homelabs.dev/tier: broker
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: broker
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: broker
+        app.kubernetes.io/component: egress-broker
+        homelabs.dev/tier: broker
+    spec:
+      serviceAccountName: broker
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      runtimeClassName: gvisor
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: broker
+          # PLACEHOLDER DIGEST: the all-zero digest is a reviewable stand-in. The
+          # broker image is published from apps/broker and pinned by digest in
+          # docs/manual-steps.md ("Publish the broker image").
+          image: ghcr.io/smores56/homelabs-platform/broker@sha256:0000000000000000000000000000000000000000000000000000000000000000
+          imagePullPolicy: IfNotPresent
+          args:
+            - /etc/broker/broker.json
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          env:
+            - name: BROKER_SECRETS_DIR
+              value: /run/secrets
+            - name: PYTHONDONTWRITEBYTECODE
+              value: "1"
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: TMPDIR
+              value: /tmp
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 5
+            failureThreshold: 30
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 30
+            failureThreshold: 3
+          volumeMounts:
+            - name: config
+              mountPath: /etc/broker
+              readOnly: true
+            - name: credentials
+              mountPath: /run/secrets
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: config
+          configMap:
+            name: broker-config
+        # Fail closed: the pod stays pending until the SOPS contract Secret
+        # exists, so a credentialed request can never be forwarded without one.
+        - name: credentials
+          secret:
+            secretName: broker-credentials
+            defaultMode: 256
+            optional: false
+        - name: tmp
+          emptyDir: {}
+      terminationGracePeriodSeconds: 15

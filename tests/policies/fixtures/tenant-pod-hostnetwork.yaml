@@ -8,6 +8,7 @@ metadata:
     app.kubernetes.io/name: nanobot
     app.kubernetes.io/part-of: homelabs
 spec:
+  serviceAccountName: nanobot
   runtimeClassName: gvisor
   hostNetwork: true
   automountServiceAccountToken: false

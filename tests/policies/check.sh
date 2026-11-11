@@ -199,10 +199,10 @@ for file in "$rbac_dir"/*.yaml; do
 done
 
 eq "$(jq -r 'select(.kind == "ServiceAccount") | .metadata.namespace + ":" + .metadata.name' "$rbac_json" | sort | paste -sd, -)" \
-  "calibre:data-workload,graphiti:data-workload,immich:data-workload,navidrome:data-workload,tenant-apps:tenant-apps-reconciler" \
-  "the RBAC stage holds the tenant identity and one data-workload account per data namespace"
-eq "$(jq -r 'select(.kind == "Role" or .kind == "RoleBinding") | .kind' "$rbac_json" | sort | paste -sd, -)" \
-  "Role,RoleBinding" "the RBAC stage holds no other Role or RoleBinding"
+  "calibre:data-workload,graphiti:data-workload,immich:data-workload,navidrome:data-workload,tenant-apps:nanobot,tenant-apps:tenant-apps-reconciler" \
+  "the RBAC stage holds the two tenant identities and one data-workload account per data namespace"
+eq "$(jq -r 'select(.kind != "Role" and .kind != "RoleBinding" and .kind != "ServiceAccount") | .kind' "$rbac_json" | sort -u)" \
+  "" "the RBAC stage holds only identities, Roles and RoleBindings"
 
 hits=$(jq -r --arg re "^(${deny_resources})$" '
   . as $doc
@@ -235,11 +235,23 @@ if [[ -z $hits ]]; then ok "no wildcard resources or verbs in RBAC"; else bad "R
 hits=$(jq -r 'select(.kind == "ClusterRole" or .kind == "ClusterRoleBinding") | .metadata.name' "$rbac_json")
 if [[ -z $hits ]]; then ok "no cluster-scoped RBAC objects in the platform RBAC stage"; else bad "cluster-scoped RBAC objects present" "$hits"; fi
 
-eq "$(jq -r 'select(.kind == "Role") | .metadata.namespace' "$rbac_json")" "tenant-apps" "tenant Role is namespace-scoped"
-eq "$(jq -r 'select(.kind == "RoleBinding") | .subjects | map("\(.kind):\(.namespace):\(.name)") | join(",")' "$rbac_json")" \
-  "ServiceAccount:tenant-apps:tenant-apps-reconciler" "rolebinding binds only the tenant service account"
-eq "$(jq -r 'select(.kind == "Role") | [.rules[] | select(.resources | index("pods")) | .verbs | index("create")] | map(select(. != null)) | length' "$rbac_json")" \
+eq "$(jq -r 'select(.kind == "Role" and .metadata.name == "tenant-apps-reconciler") | .metadata.namespace' "$rbac_json")" \
+  "tenant-apps" "tenant Role is namespace-scoped"
+eq "$(jq -r 'select(.kind == "RoleBinding" and .metadata.name == "tenant-apps-reconciler") | .subjects | map("\(.kind):\(.namespace):\(.name)") | join(",")' "$rbac_json")" \
+  "ServiceAccount:tenant-apps:tenant-apps-reconciler" "the tenant rolebinding binds only the tenant service account"
+eq "$(jq -r 'select(.kind == "Role" and .metadata.name == "tenant-apps-reconciler") | [.rules[] | select(.resources | index("pods")) | .verbs | index("create")] | map(select(. != null)) | length' "$rbac_json")" \
   "1" "tenant Role can create pods (the tenant can still work)"
+
+# The agent identity is its own account and grants exactly two reads and one
+# write in each data namespace. Anything wider is a privilege change.
+eq "$(jq -r 'select(.kind == "ServiceAccount" and .metadata.name == "nanobot") | [.metadata.namespace, (.automountServiceAccountToken // false)] | join(":")' "$rbac_json")" \
+  "tenant-apps:false" "the nanobot ServiceAccount exists in tenant-apps with no token automount"
+eq "$(jq -r 'select(.kind == "Role" and .metadata.name == "agent-debug") | .metadata.namespace' "$rbac_json" | sort | paste -sd, -)" \
+  "calibre,graphiti,immich,navidrome" "agent-debug exists in every data namespace"
+eq "$(jq -r 'select(.kind == "Role" and .metadata.name == "agent-debug") | [.rules[] | (.resources | join("+")) + ":" + (.verbs | sort | join("+"))] | sort | join(",")' "$rbac_json" | sort -u)" \
+  "events:get+list,pods:delete" "agent-debug grants exactly events get/list and pods delete"
+eq "$(jq -r 'select(.kind == "RoleBinding" and .metadata.name == "agent-debug") | .subjects | map("\(.kind):\(.namespace):\(.name)") | join(",")' "$rbac_json" | sort -u)" \
+  "ServiceAccount:tenant-apps:nanobot" "agent-debug binds only the nanobot service account"
 
 # ------------------------------------------------------------ controller flags
 declare -A controller_flags=(
@@ -333,6 +345,8 @@ eq "$(jq -r 'select(.metadata.namespace == "ingress" and .metadata.name == "egre
   "the ingress namespace reaches the four app Services and nothing else"
 eq "$(jq -r 'select(.metadata.namespace == "ingress" and .metadata.name == "egress-tunnel-edge") | [.spec.podSelector.matchLabels["app.kubernetes.io/name"], .spec.egress[0].ports[0].port] | join(":")' "$network_json")" \
   "cloudflared:443" "cloudflared may reach the Cloudflare edge over TCP 443 only"
+eq "$(jq -r 'select(.metadata.namespace == "ingress" and .metadata.name == "egress-agent") | [.spec.egress[0].to[0].namespaceSelector.matchLabels["kubernetes.io/metadata.name"], .spec.egress[0].to[0].podSelector.matchLabels["app.kubernetes.io/name"], .spec.egress[0].ports[0].port] | join(":")' "$network_json")" \
+  "tenant-apps:nanobot:8080" "the tunnel reaches only the nanobot pod on 8080"
 
 # ------------------------------------------------------- data storage contract
 storage_dir=clusters/homelab/platform/storage
@@ -436,6 +450,79 @@ calibre:calibre.sammohr.dev:calibre:8083
 graphiti:memory.sammohr.dev:graphiti:8184
 INGRESS
 
+# ---------------------------------------------------------- broker contract
+broker_dir=clusters/homelab/broker
+kustomize build "$broker_dir" >"$work/broker.yaml"
+json_of "$work/broker.yaml" >"$work/broker.json"
+
+podspec='.[] | select(.kind == "Deployment" and .metadata.name == "broker") | .spec.template.spec'
+eq "$(jq -r "$podspec | .runtimeClassName // \"none\"" "$work/broker.json")" "gvisor" "the broker runs on gvisor"
+eq "$(jq -r "$podspec | if has(\"automountServiceAccountToken\") then .automountServiceAccountToken else true end" "$work/broker.json")" "false" \
+  "the broker never mounts a service-account token"
+eq "$(jq -r "$podspec | .securityContext.runAsNonRoot" "$work/broker.json")" "true" \
+  "the broker pod declares runAsNonRoot"
+eq "$(jq -r "$podspec | .serviceAccountName" "$work/broker.json")" "broker" \
+  "the broker runs as its own service account"
+eq "$(jq -r "$podspec | .containers[0].securityContext.readOnlyRootFilesystem" "$work/broker.json")" "true" \
+  "the broker rootfs is read-only"
+eq "$(jq -r "$podspec | .containers[0].securityContext.allowPrivilegeEscalation" "$work/broker.json")" "false" \
+  "the broker forbids privilege escalation"
+eq "$(jq -r "$podspec | .containers[0].securityContext.capabilities.drop | join(\",\")" "$work/broker.json")" "ALL" \
+  "the broker drops every capability"
+eq "$(jq -r "$podspec | [.containers[0].env[] | select(has(\"valueFrom\"))] | length" "$work/broker.json")" "0" \
+  "no broker env value comes from a Secret (credentials are files)"
+eq "$(jq -r "$podspec | [.volumes[] | select(.name == \"credentials\")] | .[0] | [.secret.secretName, (.secret.optional // false)] | join(\":\")" "$work/broker.json")" \
+  "broker-credentials:false" "the broker credential volume is fail-closed"
+eq "$(jq -r '.[] | select(.kind == "Secret") | .metadata.name' "$work/broker.json")" "" \
+  "the broker build contains no Secret"
+eq "$(jq -r '.[] | select(.kind == "ServiceAccount" and .metadata.name == "broker") | .automountServiceAccountToken' "$work/broker.json")" \
+  "false" "the broker ServiceAccount has no token automount"
+eq "$(jq -r '.[] | select(.kind == "Service" and .metadata.name == "broker") | [.spec.ports[0].port, .spec.ports[0].targetPort] | join(":")' "$work/broker.json")" \
+  "8080:http" "the broker Service exposes 8080 to the http port"
+
+bimage=$(jq -r "$podspec | .containers[0].image" "$work/broker.json")
+case $bimage in
+  ghcr.io/smores56/homelabs-platform/broker@sha256:*) ok "broker image is the platform repository" ;;
+  *) bad "broker image is not the platform repository ($bimage)" ;;
+esac
+if [[ $bimage =~ @sha256:[0-9a-f]{64}$ ]]; then
+  ok "broker image is digest-pinned"
+else
+  bad "broker image is not digest-pinned ($bimage)"
+fi
+
+# The enrollment file is data, not a credential. Its shape is the contract the
+# agent's BROKER_URL paths depend on; the unit tests parse the same file.
+enrollment='.[] | select(.kind == "ConfigMap" and (.metadata.name | startswith("broker-config"))) | .data["broker.json"] | fromjson'
+eq "$(jq -r "$enrollment | .logical_hosts | keys | sort | join(\",\")" "$work/broker.json")" \
+  "github-apps,github-fork,github-platform,loki,neuralwatt,status,tinyfish" \
+  "the broker enrolls exactly the agent's logical hosts"
+eq "$(jq -r "$enrollment | [.logical_hosts | to_entries[] | select(.value.allow_private) | .key] | sort | join(\",\")" "$work/broker.json")" \
+  "loki,status" "only the two in-cluster hosts are private enrollments"
+eq "$(jq -r "$enrollment | .logical_hosts.loki.headers[\"X-Scope-OrgID\"]" "$work/broker.json")" "data" \
+  "the loki logical host pins the data tenant header"
+eq "$(jq -r "$enrollment | .logical_hosts[\"github-apps\"].inject.kind" "$work/broker.json")" "basic" \
+  "github-apps injects git basic auth"
+eq "$(jq -r "$enrollment | .logical_hosts[\"github-platform\"].host" "$work/broker.json")" "api.github.com" \
+  "github-platform is the REST API host"
+eq "$(jq -r "$enrollment | [.logical_hosts[] | .secret // empty] | unique | sort | join(\",\")" "$work/broker.json")" \
+  "$(jq -r '.[] | select(.kind == "ConfigMap" and .metadata.name == "broker-credentials-contract") | .data.keys | split(",") | sort | join(",")' "$work/broker.json")" \
+  "the SOPS contract names exactly the enrolled secrets"
+broker_config=$(jq -r "$enrollment | tostring" "$work/broker.json")
+if grep -Eq 'ghp_[A-Za-z0-9]{20,}|github_pat_|sk-[A-Za-z0-9]{20,}|xox[baprs]-' <<<"$broker_config"; then
+  bad "the broker enrollment file contains a token-shaped value"
+else
+  ok "the broker enrollment file contains no credential value"
+fi
+
+# Coarse egress: public 443 only. The broker's own address check is asserted by
+# the unit tests; this is the CNI layer that must not be wider.
+eq "$(jq -r '.[] | select(.kind == "NetworkPolicy" and .metadata.name == "egress-public-https") | [.spec.egress[0].to[0].ipBlock.cidr, .spec.egress[0].ports[0].port] | join(":")' "$work/broker.json")" \
+  "0.0.0.0/0:443" "broker egress is public TCP 443 only"
+eq "$(jq -r '.[] | select(.kind == "NetworkPolicy" and .metadata.name == "egress-public-https") | .spec.egress[0].to[0].ipBlock.except | sort | join(",")' "$work/broker.json")" \
+  "0.0.0.0/8,10.0.0.0/8,100.64.0.0/10,127.0.0.0/8,169.254.0.0/16,172.16.0.0/12,192.0.0.0/24,192.168.0.0/16,198.18.0.0/15,224.0.0.0/4,240.0.0.0/4" \
+  "broker egress excludes every non-global IPv4 range"
+
 # ------------------------------------------------------- stage ordering (DAG)
 declare -A stage_edges=(
   [platform-namespaces]=""
@@ -443,6 +530,7 @@ declare -A stage_edges=(
   [platform-policies]="platform-rbac"
   [platform-network]="platform-namespaces"
   [platform-secrets]="platform-namespaces,platform-policies"
+  [platform-broker]="platform-namespaces,platform-network,platform-policies,platform-rbac,platform-secrets"
   [platform-storage]="platform-namespaces"
   [platform-data-apps]="platform-network,platform-policies,platform-storage"
   [platform-ingress]="platform-namespaces,platform-network"
@@ -472,7 +560,7 @@ done
 
 listed=$(yq -o=json -I=0 '.' clusters/homelab/platform/kustomization.yaml |
   jq -r '[.resources[] | sub("^kustomizations/"; "") | sub("\\.yaml$"; "")] | .[]')
-eq "$listed" "$(printf '%s\n' namespaces rbac policies network secrets storage data ingress observability tenants)" \
+eq "$listed" "$(printf '%s\n' namespaces rbac policies network secrets broker storage data ingress observability tenants)" \
   "platform/kustomization.yaml lists every stage in apply order"
 missing=$(comm -23 <(find "$stages_dir" -maxdepth 1 -name '*.yaml' -printf '%f\n' | sed 's|\.yaml$||' | sort) \
   <(yq -o=json -I=0 '.' clusters/homelab/platform/kustomization.yaml |
@@ -598,14 +686,23 @@ if ((runtime)); then
   done <"$fixtures_dir/expectations.tsv"
 
   tenant_sa="system:serviceaccount:tenant-apps:tenant-apps-reconciler"
-  while IFS=$'\t' read -r verb resource ns expect; do
+  agent_sa="system:serviceaccount:tenant-apps:nanobot"
+  while IFS=$'\t' read -r verb resource ns expect subject; do
     [[ -z $verb || $verb == \#* ]] && continue
+    case ${subject:-tenant} in
+      tenant) sa=$tenant_sa ;;
+      agent) sa=$agent_sa ;;
+      *)
+        bad "unknown rbac subject ${subject:-}"
+        continue
+        ;;
+    esac
     if [[ $ns == "-" ]]; then
-      got=$(kubectl auth can-i "$verb" "$resource" --as "$tenant_sa" 2>/dev/null)
+      got=$(kubectl auth can-i "$verb" "$resource" --as "$sa" 2>/dev/null)
     else
-      got=$(kubectl auth can-i "$verb" "$resource" -n "$ns" --as "$tenant_sa" 2>/dev/null)
+      got=$(kubectl auth can-i "$verb" "$resource" -n "$ns" --as "$sa" 2>/dev/null)
     fi
-    eq "${got:-error}" "$expect" "runtime: rbac $verb $resource ($ns)"
+    eq "${got:-error}" "$expect" "runtime: rbac ${subject:-tenant} $verb $resource ($ns)"
   done <tests/policies/rbac.tsv
 
   out=$(kubectl create secret generic probe --from-literal=k=v --dry-run=server \

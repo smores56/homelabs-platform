@@ -34,15 +34,15 @@ applied by the first stage (`docs/flux.md`).
 | Tier | Admission policy | Egress | Ingress |
 | --- | --- | --- | --- |
 | `platform` | exempt from `no-host-access` | unrestricted | unrestricted |
-| `tenant` | gVisor, digest-pinned images, scratch PVC only, no `sops-age`, no reconciler SA | broker only, plus DNS | none |
-| `broker` | `no-host-access` | provider APIs (platform-owned) | `tenant` tier on 8080 |
+| `tenant` | gVisor, digest-pinned images, scratch PVC only, no `sops-age`, no reconciler SA, `agent-identity` | broker only, plus DNS | the cluster tunnel on 8080 (`nanobot` only) |
+| `broker` | `no-host-access`, `broker-runtime` | public TCP 443 (global unicast only), DNS, `loki-gateway` 3100 and `status-exporter` 9101 | `tenant` tier on 8080 |
 | `data` (each of `immich`, `navidrome`, `calibre`, `graphiti`) | `no-host-access`, `data-workload-source`, `data-pvc-scope`, `data-pvc-storage` | same namespace, DNS; HTTPS for `immich-machine-learning` and `graphiti` | same namespace, `ingress` on the app's port |
-| `ingress` | none beyond PSA | the four data apps on their ports, Cloudflare edge 443, DNS | none |
+| `ingress` | none beyond PSA | the four data apps on their ports, `tenant-apps/nanobot` 8080, Cloudflare edge 443, DNS | none |
 | `observability` | exempt from `no-host-access` | unrestricted | unrestricted |
 
 ## Admission policy
 
-Eleven policies, each in its own file with the binding that scopes it
+Thirteen policies, each in its own file with the binding that scopes it
 (`clusters/homelab/platform/policies/`, asserted by `tests/policies/check.sh`).
 
 | Policy | Bound to | Rejects |
@@ -90,17 +90,25 @@ against a real API server in `--runtime` mode.
 each of the four data namespaces (a service account is namespaced). The tenant
 identity has no binding in any data namespace, `broker` or `platform`.
 
+`nanobot` is the agent's own ServiceAccount in `tenant-apps`, created by the
+platform RBAC stage with `automountServiceAccountToken: false`. It is bound to
+`agent-debug` in each data namespace, which grants only `get`/`list` on events
+and `delete` on pods. There is no `get pods`, `pods/log`, exec, attach,
+portforward, proxy, secrets, deployment patch, node or node-metrics rule, and
+the pod has no token or API route; the grant is a break-glass ceiling
+(`docs/broker.md`).
+
 ## NetworkPolicy
 
 | Namespace | default-deny | Allowed |
 | --- | --- | --- |
-| `tenant-apps` | both directions | DNS to `kube-system`; TCP 8080 to `broker` tier |
-| `broker` | both directions | DNS; ingress from `tenant` tier on 8080; egress TCP 3100 to `loki-gateway` and 9101 to `status-exporter` in `observability` |
+| `tenant-apps` | both directions | DNS to `kube-system`; TCP 8080 to `broker` tier; ingress from `ingress/cloudflared` on 8080 (nanobot only) |
+| `broker` | both directions | DNS; ingress from `tenant` tier on 8080; egress TCP 443 to global unicast only (every non-global range excluded), TCP 3100 to `loki-gateway` and 9101 to `status-exporter` in `observability` |
 | `immich` | both directions | DNS; same-namespace any port; TCP 2283 from `ingress`; HTTPS from the machine-learning pod for model weights |
 | `navidrome` | both directions | DNS; same-namespace any port; TCP 4533 from `ingress` |
 | `calibre` | both directions | DNS; same-namespace any port; TCP 8083 from `ingress` |
 | `graphiti` | both directions | DNS; same-namespace any port; TCP 8184 from `ingress`; HTTPS from the graphiti pod to the Neuralwatt API |
-| `ingress` | both directions | DNS; the four app Services on their ports; TCP 443 to the Cloudflare edge (`cloudflared` only) |
+| `ingress` | both directions | DNS; the four app Services on their ports; `tenant-apps/nanobot` on 8080; TCP 443 to the Cloudflare edge (`cloudflared` only) |
 
 Adding an app flow means adding a policy with its exact port and namespace
 selector. Nothing matches all namespaces, and a missing allow fails closed.
@@ -119,15 +127,18 @@ Two mechanisms, no third:
    Kustomization that carries it (`decryption.secretRef.name: sops-age`). The
    controller-wide `--sops-age-secret` flag is deliberately unset, so a
    namespace without the Secret fails instead of borrowing another key.
-   `tenant-apps` is the only current consumer; the contract is spelled out in the
-   `sops-contract` ConfigMap in `flux-system` and in `docs/runbook.md`.
+   `tenant-apps` carries the tenant ciphertext; `broker` holds the hand-made
+   `broker-credentials` Secret (five credential files, never a manifest); the
+   contract is spelled out in the `sops-contract` ConfigMaps in `flux-system`
+   and `broker`, and in `docs/runbook.md`.
 2. **External Secrets, two shapes.** `platform/secrets/eso/` holds a
    namespaced `SecretStore`, a `Password` generator and `ExternalSecret`s. No
    credential is committed. Those objects are applied by the suspended
    `platform-secrets-eso` Kustomization, because the operator (and its CRDs) is
    not installed by this repository (`docs/runbook.md`).
-   - *Generated*: `immich-db`, `nanobot-broker-token`, `loki-gateway-token` —
-     a `Password` generator mints the value once.
+   - *Generated*: `immich-db`, `loki-gateway-token` — a `Password` generator
+     mints the value once. The agent has no broker token; caller identity is
+     the namespace boundary (`docs/broker.md`).
    - *Contract*: `neuralwatt-api-key` (in `graphiti`) and
      `cloudflare-tunnel-token` (in `ingress`) — ESO's `kubernetes` provider
      projects a SOPS+age Secret (`*-sops`, created by hand, see

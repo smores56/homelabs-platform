@@ -2,10 +2,10 @@
 apiVersion: v1
 kind: Pod
 metadata:
-  name: nanobot-scratch
+  name: reconciler-probe
   namespace: tenant-apps
   labels:
-    app.kubernetes.io/name: nanobot
+    app.kubernetes.io/name: tenant-probe
     app.kubernetes.io/part-of: homelabs
 spec:
   runtimeClassName: gvisor
@@ -15,21 +15,13 @@ spec:
     runAsNonRoot: true
     runAsUser: 1000
     runAsGroup: 1000
-    fsGroup: 1000
     seccompProfile:
       type: RuntimeDefault
   containers:
-    - name: nanobot
+    - name: probe
       image: ghcr.io/smores56/homelabs-apps/nanobot@sha256:0000000000000000000000000000000000000000000000000000000000000000
       securityContext:
         allowPrivilegeEscalation: false
         readOnlyRootFilesystem: true
         capabilities:
           drop: ["ALL"]
-      volumeMounts:
-        - name: scratch
-          mountPath: /scratch
-  volumes:
-    - name: scratch
-      persistentVolumeClaim:
-        claimName: nanobot-scratch

@@ -12,3 +12,5 @@ tenant-secret-scope	tenant-apps
 data-workload-source	calibre,graphiti,immich,navidrome
 data-pvc-scope	calibre,graphiti,immich,navidrome
 data-pvc-storage	calibre,graphiti,immich,navidrome
+agent-identity	tenant-apps
+broker-runtime	broker

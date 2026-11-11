@@ -27,6 +27,21 @@ jobs:
       - name: build every clusters/** kustomization
         run: scripts/kustomize-build-all.sh
 
+  broker:
+    name: broker unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          persist-credentials: false
+      # No third-party dependency: the runner's python3 runs the stdlib broker.
+      # The address policy, DNS pinning, redirect refusal, credential stripping,
+      # header/body redaction and the log shape are all asserted here, and the
+      # enrollment file is parsed by the same tests that the Deployment ships.
+      - name: run apps/broker unit tests
+        run: python3 -m unittest discover -s apps/broker/tests -t apps/broker -v
+
   kubeconform:
     name: kubeconform
     runs-on: ubuntu-latest

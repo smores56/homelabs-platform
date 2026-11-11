@@ -1,0 +1,276 @@
+# The agent broker
+
+SDLC #582. nanobot has no credentials, no cluster token and no direct egress.
+Every outbound request leaves through one broker Deployment in the `broker`
+namespace; the broker maps an enrolled **logical host** to one real endpoint,
+resolves and pins the address itself, strips whatever credential the agent sent,
+injects exactly one enrolled credential, refuses redirects that leave the
+enrolled endpoint, and logs metadata only.
+
+Source: `apps/broker/` (Python stdlib, 52 unit tests). Manifests:
+`clusters/homelab/broker/`. Applied by the Flux stage `platform-broker`.
+
+## Trust boundary and non-goals
+
+The broker is inside the boundary: it holds the provider and GitHub tokens and
+is the only place they exist in the cluster. It is **not** an egress proxy and
+**not** an action authorizer. It does not inspect method, path or payload for
+allow/deny (Kanbei spec `04-security-deployment.md` §6.5), so an enrolled token
+is a credential oracle limited only by provider-side authorization. What it
+does enforce is target integrity: the agent names a logical host and a relative
+path, never a hostname, IP, SNI or `Host`.
+
+`nanobot` holds no credential, including no broker token. Caller authentication
+is the namespace boundary: `NetworkPolicy` admits only tenant-tier pods to the
+Service, and the agent's own `Authorization`, `Cookie`, `X-Api-Key`,
+`Proxy-Authorization`, `X-Scope-OrgID` and `X-Forwarded-For` headers are
+dropped before injection. There is no shared secret to leak, rotate or mount.
+
+## Request contract
+
+```text
+<method> http://broker.broker.svc.cluster.local:8080/<logical-host>/<path>?<query>
+```
+
+- The first path segment is the logical host; the rest is the upstream path.
+  `/tinyfish` and `/tinyfish/` both mean "/" upstream.
+- `Host` must be a DNS name, not an IP literal; absolute-form targets
+  (`GET http://host/...`), `//`-ambiguous paths, NUL and backslash bytes are
+  refused with 400.
+- `CONNECT` and `TRACE` are refused with 405. The broker is not a forward
+  proxy, so there is no tunnel and no `HTTPS_PROXY` setting in the agent.
+- Every other method is forwarded when the destination passes the checks.
+- The request body is read up to 64 MiB; a chunked request body is refused
+  (411) rather than half-forwarded.
+- `/healthz` is the kubelet probe and never proxied.
+
+The agent's environment points at this Service:
+
+```text
+BROKER_URL=http://broker.broker.svc.cluster.local:8080
+TINYFISH_BASE_URL=http://broker.broker.svc.cluster.local:8080/tinyfish
+```
+
+## Logical-host enrollment
+
+`clusters/homelab/broker/config/broker.json` is the reviewed, non-secret
+enrollment. Credentials are files in the `broker-credentials` Secret, named by
+the enrollment, read once at start.
+
+| Logical host | Real endpoint | Injection | Secret key | Private allowed |
+| --- | --- | --- | --- | --- |
+| `neuralwatt` | `https://api.neuralwatt.com:443` | `Authorization: Bearer` | `neuralwatt-api-key` | no |
+| `github-apps` | `https://github.com:443` | `Authorization: Basic x-access-token:<token>` | `github-apps-token` | no |
+| `github-platform` | `https://api.github.com:443` | `Authorization: Bearer` | `github-platform-token` | no |
+| `github-fork` | `https://github.com:443` | `Authorization: Basic x-access-token:<token>` | `github-platform-token` | no |
+| `tinyfish` | `https://api.search.tinyfish.ai:443` | `X-Api-Key: <token>` | `tinyfish-api-key` | no |
+| `loki` | `http://loki-gateway.observability.svc.cluster.local:3100` | `Authorization: Bearer`, fixed `X-Scope-OrgID: data` | `loki-gateway-token` | yes |
+| `status` | `http://status-exporter.observability.svc.cluster.local:9101` | none (metrics text) | — | yes |
+
+`github-fork` is the git transport half of the `github-platform` capability:
+GitHub serves git smart HTTP only on `github.com`, while fork and PR calls are
+REST on `api.github.com`. Both use the same token and the same enrollment, so
+the capability is still "fork and open a PR on homelabs-platform".
+
+The two private enrollments are the only exception to the TLS rule: they never
+leave the cluster network and their credentials are already cluster-local. A
+credentialed enrollment over plain HTTP is otherwise rejected at load time.
+
+## DNS self-resolution and IP pinning
+
+For each request the broker resolves the enrolled host exactly once, checks
+**every** address in the answer, and dials the address it checked. TLS uses that
+address with the enrolled hostname for SNI and certificate verification, so the
+name-to-address decision and the connection cannot disagree.
+
+Refused for every enrollment, including a private one:
+
+- the k3s pod CIDR `10.42.0.0/16` (the agent's own network);
+- loopback (`127.0.0.0/8`, `::1`), link-local (`169.254.0.0/16`, `fe80::/10`,
+  including the cloud metadata address), multicast, unspecified, reserved;
+- CGNAT `100.64.0.0/10`;
+- any address listed in `BROKER_DENY_ADDRESSES` (the node's real address);
+- IPv4-mapped IPv6 forms of all of the above (`::ffff:10.42.0.9`);
+- loopback names (`localhost`, `ip6-localhost`);
+- any address that is not global unicast (TEST-NET, documentation and
+  benchmarking ranges included).
+
+Refused unless the enrollment is one of the two private ones: RFC1918
+(`10/8`, `172.16/12`, `192.168/16`), the service CIDR `10.43.0.0/16`, IPv6 ULA
+(`fc00::/7`). A DNS answer that mixes a public and a private address is a
+denial, not a fallback to the public one: that mix is the rebinding signature.
+A DNS failure, empty answer or filtered address is a denial, never a second
+lookup.
+
+## Redirects
+
+The broker never follows a redirect. A 3xx with a `Location` on a different real
+host, port or scheme is refused with 502 and logged as `cross_host_redirect`;
+a relative or same-endpoint redirect is returned to the agent untouched. The
+agent must issue a new broker request naming a logical host, which is a fresh
+enrollment lookup and a fresh injection.
+
+## Logging and redaction
+
+Each request writes one line at INFO:
+
+```text
+logical=<host> method=<method> path=<path> status=<status> bytes=<n> outcome=<proxied|denied|error>
+```
+
+- The path is the broker path, **without the query string** (search queries
+  stay out of logs). Path and denial text are redacted against every known
+  credential.
+- No header value, request body or response body is logged. Upstream failures
+  log the exception class only.
+- Response headers that can carry a URL or a reflected credential (`Location`,
+  `Content-Location`, `Link`, `Refresh`, `Set-Cookie`, `WWW-Authenticate`,
+  `Proxy-Authenticate`) are redacted.
+- Response bodies up to 1 MiB are buffered and redacted; beyond the cap the
+  broker streams and marks `X-Broker-Redaction: partial` rather than claiming
+  full coverage. The broker asks upstreams for `Accept-Encoding: identity` so a
+  compressed body cannot hide a known secret from the matcher.
+- Redaction replaces exact values and their URL, URL-plus, JSON, escaped-slash,
+  HTML and base64 encodings with `[REDACTED:<logical-host>]`. A provider that
+  transforms or re-encrypts a secret can still echo it undetected; that is the
+  documented residual (spec §6.7), not a guarantee.
+
+## Address policy in the CNI
+
+The broker's own check is authoritative; `NetworkPolicy` is the coarse layer:
+
+- `broker` egress: TCP 443 to global unicast only (`0.0.0.0/0` with every
+  non-global IPv4 range in `except`, and the IPv6 equivalents), plus TCP 3100
+  to `loki-gateway` and 9101 to `status-exporter` (`observability/network/`).
+- `broker` ingress: tenant tier on 8080 only (`platform/network/tenant-broker.yaml`).
+- DNS: `kube-system` on 53 (`platform/network/dns-egress.yaml`).
+- Tunnel: `ingress/cloudflared` to `tenant-apps/nanobot` on 8080 only
+  (`platform/network/agent-ingress.yaml`), paired with the tenant-side rule in
+  `homelabs-apps`.
+
+## Agent identity and debug RBAC
+
+`platform/rbac/agent-nanobot.yaml` creates ServiceAccount `nanobot` in
+`tenant-apps` with `automountServiceAccountToken: false`. The trusted controller
+is the platform's own Flux `kustomize-controller`: the tenant reconciler has no
+`serviceaccounts` rule, so the tenant cannot mint an identity or a token. The
+admission policy `agent-identity` pins `serviceAccountName: nanobot` and
+`automountServiceAccountToken: false` for every nanobot-labelled pod, and
+`broker-runtime` pins gVisor, non-root and read-only rootfs for the broker.
+
+In each data namespace (`immich`, `navidrome`, `calibre`, `graphiti`) Role
+`agent-debug` grants exactly:
+
+| Resource | Verbs |
+| --- | --- |
+| `events` | `get`, `list` |
+| `pods` | `delete` (restart only) |
+
+Everything else is absent on purpose: no `pods/log`, `pods/exec`,
+`pods/attach`, `pods/portforward`, `pods/proxy`, no `get`/`list pods` (the
+status exporter answers state), no secrets or configmaps, no
+`patch`/`update deployments`, no `nodes` or `nodes/metrics` (the broker's
+`status` logical host is the only metrics path).
+
+The pod carries no token and its NetworkPolicy has no route to the API server,
+so the grant is a declared ceiling for a short-lived, human-minted token
+(`kubectl -n tenant-apps create token nanobot --duration=15m`) used for a
+break-glass restart. It is not a credential the agent can reach on its own.
+
+## Routing contract: `agent.sammohr.dev`
+
+The hostname terminates on the **cluster** tunnel, not the host tunnel:
+
+```text
+agent.sammohr.dev --Access--> cluster tunnel --HTTP--> nanobot.tenant-apps.svc:80 --> pod:8080
+```
+
+- Access application `agent` already exists in `tofu/access.tf` with the owner's
+  email policy (precedence 1) and the `service auth` policy (precedence 2,
+  `any_valid_service_token`). No bypass.
+- maki uses an account service token in `cloudflared access`; the owner uses
+  the browser identity. Access is evaluated at the edge, before the tunnel.
+- `nanobot.sammohr.dev` is retired with the host tunnel cutover.
+- nanobot holds **no Cloudflare token**: the tunnel token lives in `ingress`,
+  and the agent's egress policy admits the broker and DNS only.
+
+### OpenTofu fragment (T7 owns `tofu/`; the coordinator applies this)
+
+```hcl
+# 1. Route the hostname at the cluster connector. tofu/dns.tf already creates a
+#    proxied CNAME per entry, and a specific record wins over *.sammohr.dev.
+#    Supplied as TF_VAR_cluster_hosts at apply time:
+variable "cluster_hosts" {
+  default = ["agent"] # plus each data app at its cutover
+}
+
+# 2. The tunnel's public hostname. If T7 keeps the cluster tunnel
+#    dashboard-managed, add this ingress entry in the dashboard instead of this
+#    resource; the two are equivalent.
+resource "cloudflare_zero_trust_tunnel_cloudflared_config" "cluster" {
+  account_id = var.account_id
+  tunnel_id  = var.cluster_tunnel_id
+  config {
+    ingress = [
+      {
+        hostname = "agent.${var.domain}"
+        service  = "http://nanobot.tenant-apps.svc.cluster.local:80"
+      },
+      { service = "http_status:404" },
+    ]
+  }
+}
+
+# 3. Access. The `agent` application and both policies already exist; the
+#    fragment asserts the shape and adds the maki service token if T7 manages
+#    tokens in tofu. `any_valid_service_token` already accepts it.
+resource "cloudflare_zero_trust_access_service_token" "maki" {
+  account_id = var.account_id
+  name       = "maki"
+  duration   = "8760h"
+}
+
+# 4. Retire nanobot.sammohr.dev. Remove the
+#    `cloudflare_zero_trust_access_application.nanobot` block, then:
+#      tofu -chdir=tofu state rm cloudflare_zero_trust_access_application.nanobot
+#      tofu -chdir=tofu apply -no-color
+#    The wildcard CNAME moves the name back to the host tunnel until the host
+#    tunnel's nanobot route is removed in the T9 change; the Access application
+#    is the control that keeps it unreachable once deleted.
+```
+
+Verification after apply:
+
+```sh
+dig +short agent.sammohr.dev            # CNAME <cluster-uuid>.cfargotunnel.com
+curl -sS -o /dev/null -D - https://agent.sammohr.dev/ | head -3
+# expect HTTP/2 302 to *.cloudflareaccess.com, never an origin response
+```
+
+## Verification
+
+```sh
+# broker unit tests (no network, no cluster)
+python3 -m unittest discover -s apps/broker/tests -t apps/broker -v
+
+# static policy, RBAC, network and broker-manifest assertions
+tests/policies/check.sh
+
+# admission and can-i probes on the throwaway apiserver
+nix shell nixpkgs#etcd nixpkgs#kubernetes nixpkgs#openssl nixpkgs#kustomize \
+  nixpkgs#yq-go nixpkgs#jq -c tests/policies/check.sh --runtime
+```
+
+The runtime probe evaluates `system:serviceaccount:tenant-apps:nanobot` against
+every row in `tests/policies/rbac.tsv` marked `agent`: events and `delete pods`
+are the only `yes` answers; secrets, `pods/log`, exec, attach, portforward,
+proxy, deployment patches and nodes are all `no`.
+
+Live-gated (need the cluster, the real tokens and the operator):
+
+- publishing the broker image and replacing the digest placeholder;
+- creating `broker-credentials` from SOPS (manual steps);
+- the broker's first real call to each logical host (GitHub push, fork PR,
+  Neuralwatt, TinyFish, Loki);
+- tunnel/Access routing and the `nanobot.sammohr.dev` retirement;
+- NetworkPolicy and gVisor enforcement (no CNI/kubelet on the test bench).

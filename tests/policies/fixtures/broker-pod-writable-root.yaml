@@ -1,0 +1,25 @@
+# expect: deny broker-runtime
+apiVersion: v1
+kind: Pod
+metadata:
+  name: broker-writable-root
+  namespace: broker
+  labels:
+    app.kubernetes.io/name: broker
+    homelabs.dev/tier: broker
+spec:
+  runtimeClassName: gvisor
+  automountServiceAccountToken: false
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 65532
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: broker
+      image: ghcr.io/smores56/homelabs-platform/broker@sha256:0000000000000000000000000000000000000000000000000000000000000000
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: false
+        capabilities:
+          drop: ["ALL"]

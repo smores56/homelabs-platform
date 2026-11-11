@@ -26,15 +26,17 @@ nanobot forked from `homelabs-platform` cannot be the owner's own account
      so the `fork-pr-secret-boundary` job stays the load-bearing control and the
      environment restriction below is what protects the token.
 4. Credentials for the broker (logical host contracts, not GitHub logins):
-   - `github-push-apps`: fine-grained PAT, resource owner `smores56`, repository
-     access `homelabs-apps` only, permission **Contents: read and write**,
-     **Pull requests: read and write** (for branch pushes and no direct main
-     access), expiry 90 days.
-   - `github-fork-platform`: fine-grained PAT, repository access
-     `homelabs-platform`, permission **Contents: read**, **Pull requests: read
-     and write**, expiry 90 days. Used only for fork sync and PR creation
-     against the platform repo; the broker strips it on every other host.
-   Record both PATs in the broker's secret store, never in this repository.
+   - `github-apps-token`: fine-grained PAT minted by the machine user, resource
+     owner `smores56`, repository access `homelabs-apps` only, permission
+     **Contents: read and write**, expiry 90 days. Logical host `github-apps`
+     injects it as git basic auth (`x-access-token:<token>`) on `github.com`.
+   - `github-platform-token`: fine-grained PAT, repository access
+     `homelabs-platform` (the fork counts), permission **Contents: read and
+     write**, **Pull requests: read and write**, expiry 90 days. Logical hosts
+     `github-platform` (REST on `api.github.com`, bearer) and `github-fork`
+     (git push to the fork, basic) use it.
+   Record both PATs in the broker's `broker-credentials` Secret (step 10), never
+   in this repository and never in `homelabs-apps`.
 
 ## 2. Create the `cloudflare` environment secret
 
@@ -178,14 +180,16 @@ helm install external-secrets external-secrets/external-secrets \
   --namespace platform --create-namespace
 flux -n flux-system resume kustomization platform-secrets-eso
 flux -n flux-system resume kustomization platform-observability-secrets
-kubectl -n tenant-apps get externalsecret nanobot-broker-token
 kubectl -n observability get externalsecret loki-gateway-token
+kubectl -n broker get secret broker-credentials
 ```
 
-Expected: both generated Secrets exist and are owned by their ExternalSecrets.
-`loki-gateway-token` is what unblocks the Loki gateway and Vector's data sink;
-until it exists both stay unstarted (fail closed). Rotate a token by deleting
-its Secret and letting the `Password` generator mint a new one.
+Expected: `loki-gateway-token` is generated and owned by its ExternalSecret;
+`broker-credentials` is the SOPS contract Secret from step 10. `loki-gateway-token`
+is what unblocks the Loki gateway and Vector's data sink; until it exists both
+stay unstarted (fail closed). The agent holds no broker token, so there is no
+`nanobot-broker-token` to generate. Rotate a generated token by deleting its
+Secret and letting the `Password` generator mint a new one.
 
 ## 9. Digest-pin the observability images
 
@@ -214,31 +218,53 @@ to `repo@sha256:<digest>` (keep the tag when the registry allows
 `tests/observability/check.sh` accepts either a version tag or a `sha256:` digest,
 so a half-finished sweep still fails CI rather than shipping `latest`.
 
-## 10. Wire the broker's `loki` logical host
+## 10. Create the broker credential Secret
 
-The broker is deployed from `homelabs-apps`; this repository only supplies the
-gateway and the token. Copy the token into the broker's secret store (never into
-git, never into this repository):
+The broker is platform-owned (`clusters/homelab/broker/`); this step supplies
+its five credential files. They never enter git or either repository. Write
+them into one SOPS file, encrypted to the flux-system age recipient, then
+materialise the Secret. The key names are the contract: the enrollment names
+`neuralwatt-api-key`, `github-apps-token`, `github-platform-token`,
+`tinyfish-api-key` and `loki-gateway-token` (`clusters/homelab/broker/sops-contract.yaml`).
 
 ```sh
+# 1. collect the values (never echo them into a shell transcript you keep)
+#    neuralwatt-api-key: Neuralwatt key (the same provider the human uses)
+#    github-apps-token / github-platform-token: step 1
+#    tinyfish-api-key: TinyFish Search key
+#    loki-gateway-token: read from the generated Secret
 kubectl -n observability get secret loki-gateway-token \
   -o jsonpath='{.data.password}' | base64 -d
+
+# 2. write broker-credentials.yaml with those five keys, then:
+sops -e -i broker-credentials.yaml
+
+# 3. decrypt in a pipe and create the Secret, one file per key:
+kubectl -n broker create secret generic broker-credentials \
+  --from-file=neuralwatt-api-key=<(sops -d broker-credentials.yaml | yq -r .neuralwatt-api-key) \
+  --from-file=github-apps-token=<(sops -d broker-credentials.yaml | yq -r .github-apps-token) \
+  --from-file=github-platform-token=<(sops -d broker-credentials.yaml | yq -r .github-platform-token) \
+  --from-file=tinyfish-api-key=<(sops -d broker-credentials.yaml | yq -r .tinyfish-api-key) \
+  --from-file=loki-gateway-token=<(sops -d broker-credentials.yaml | yq -r .loki-gateway-token)
+kubectl -n broker rollout restart deployment/broker
 ```
 
-Configure the broker's logical host `loki` as
-`http://loki-gateway.observability.svc.cluster.local:3100`, inject the value as
-`Authorization: Bearer <token>`, and strip any `Authorization` the agent sends.
-The full contract is in `docs/observability.md` ("Broker logical host `loki`").
-Verify from a broker pod:
+The broker reads the files once at start and aborts if one is missing, so a
+failed Secret leaves the pod pending rather than forwarding unauthenticated
+requests. Verify from inside the broker namespace (the two in-cluster hosts are
+the only ones that need no DNS or TLS):
 
 ```sh
-curl -sS -H "Authorization: Bearer $TOKEN" \
-  --get http://loki-gateway.observability.svc.cluster.local:3100/loki/api/v1/labels
+kubectl -n broker exec deploy/broker -- \
+  python -c 'import urllib.request; print(urllib.request.urlopen("http://127.0.0.1:8080/healthz").status)'
+kubectl -n broker exec deploy/broker -- \
+  curl -sS -o /dev/null -w '%{http_code}\n' \
+  http://127.0.0.1:8080/loki/loki/api/v1/labels
 ```
 
-Expected: `{"status":"success",...}` listing `namespace` and `tier`. A request
-without the header must answer 401, and a tenant-apps pod must not reach the
-gateway at all (NetworkPolicy).
+Expected: `200` for health, and `200` for the Loki labels call with the gateway
+returning `{"status":"success",...}`. A tenant pod must reach only port 8080
+(NetworkPolicy) and the gateway must answer 401 without the token.
 
 ## 11. Rotate the Loki gateway token
 
@@ -275,7 +301,8 @@ sops -e -i neuralwatt-api-key.yaml
 sops -e -i cloudflare-tunnel-token.yaml
 ```
 
-Then materialise the two Secrets (SOPS contract names: `*-sops`):
+Then materialise the Secrets (SOPS contract names: `*-sops`; the broker's
+`broker-credentials` is step 10 and is a plain Secret, not a `*-sops` one):
 
 ```sh
 kubectl -n graphiti create secret generic neuralwatt-api-key-sops \
@@ -475,3 +502,74 @@ API which application matches a fresh hostname (it must be the wildcard) and
 then makes a real request: a `302` to the Access login is a pass, an answer from
 the origin is a failure. Re-run it after any Access change; run it with
 `ACCESS_PROBE_HOST=name.sammohr.dev` to check a specific hostname instead.
+
+## 19. Publish the broker image and pin its digest
+
+`apps/broker/` is the source and `clusters/homelab/broker/deployment.yaml` ships
+a deliberate all-zero digest placeholder. From a machine with registry access:
+
+```sh
+docker build -t ghcr.io/smores56/homelabs-platform/broker:<git-sha> apps/broker
+docker push ghcr.io/smores56/homelabs-platform/broker:<git-sha>
+nix run nixpkgs#crane -- digest ghcr.io/smores56/homelabs-platform/broker:<git-sha>
+```
+
+Replace the `image:` line with
+`ghcr.io/smores56/homelabs-platform/broker@sha256:<digest>`, delete the
+`PLACEHOLDER DIGEST` comment, and run `scripts/kustomize-build-all.sh` and
+`tests/policies/check.sh` before pushing. The Dockerfile's base tag
+(`python:3.13-slim`) should be replaced with its digest in the same change; the
+broker has no third-party dependencies, so there is nothing else to pin.
+
+Verify: `kubectl -n broker get pods` shows two `Running` replicas on
+`runsc`, and `kubectl -n broker get pod -o
+jsonpath='{.items[0].spec.containers[0].image}'` prints the digest.
+
+## 20. Route `agent.sammohr.dev` and retire `nanobot.sammohr.dev`
+
+The hostname moves from the host tunnel to the cluster tunnel, behind the
+existing Access application `agent` (owner email plus service auth for maki).
+No Cloudflare credential goes into the agent pod.
+
+1. After the broker and nanobot serve in the cluster, add the hostname to the
+   cluster tunnel's routed set (T7 owns `tofu/`; the fragment is in
+   `docs/broker.md`, "OpenTofu fragment"):
+
+   ```sh
+   export TF_VAR_cluster_tunnel_id=<cluster UUID from step 15>
+   export TF_VAR_cluster_hosts='["agent"]'
+   tofu -chdir=tofu plan -no-color   # one CNAME, no replacements
+   tofu -chdir=tofu apply -no-color
+   dig +short agent.sammohr.dev      # CNAME <cluster-uuid>.cfargotunnel.com
+   ```
+
+   In the tunnel's configuration, map `agent.sammohr.dev` to
+   `http://nanobot.tenant-apps.svc.cluster.local:80`; if the tunnel is
+   dashboard-managed, add that public hostname there instead of the tofu
+   resource.
+
+2. Mint the maki service token in Zero Trust → Access → Service Auth. The
+   `service auth` policy already accepts any valid service token; store the
+   `CF-Access-Client-Id`/`CF-Access-Client-Secret` pair in maki's client config,
+   never in the cluster. The owner uses the browser identity.
+
+3. Retire the old hostname: remove the `cloudflare_zero_trust_access_application.nanobot`
+   block, then
+
+   ```sh
+   tofu -chdir=tofu state rm cloudflare_zero_trust_access_application.nanobot
+   tofu -chdir=tofu apply -no-color
+   ```
+
+4. Verify the edge and the pod:
+
+   ```sh
+   curl -sS -o /dev/null -D - https://agent.sammohr.dev/ | head -3     # 302 to *.cloudflareaccess.com
+   curl -sS -o /dev/null -D - https://nanobot.sammohr.dev/ | head -3   # 302 to Access, never an origin
+   cluster-kubectl -n tenant-apps get deploy nanobot
+   cluster-kubectl -n tenant-apps get pods -l app.kubernetes.io/name=nanobot -o wide
+   cluster-kubectl -n tenant-apps exec deploy/nanobot -- env | grep -E 'BROKER_URL|CLOUDFLARE' || true
+   ```
+
+   Expected: `BROKER_URL` is set, no `CLOUDFLARE_*` variable exists, and the
+   pod has no mounted service-account token.

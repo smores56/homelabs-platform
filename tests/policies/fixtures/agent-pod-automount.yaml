@@ -1,0 +1,27 @@
+# expect: deny agent-identity
+apiVersion: v1
+kind: Pod
+metadata:
+  name: nanobot-automount
+  namespace: tenant-apps
+  labels:
+    app.kubernetes.io/name: nanobot
+    app.kubernetes.io/part-of: homelabs
+spec:
+  runtimeClassName: gvisor
+  serviceAccountName: nanobot
+  automountServiceAccountToken: true
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    runAsGroup: 1000
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: nanobot
+      image: ghcr.io/smores56/homelabs-apps/nanobot@sha256:0000000000000000000000000000000000000000000000000000000000000000
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: ["ALL"]

@@ -9,6 +9,7 @@ metadata:
     app.kubernetes.io/part-of: homelabs
 spec:
   runtimeClassName: gvisor
+  serviceAccountName: nanobot
   automountServiceAccountToken: false
   securityContext:
     runAsNonRoot: true

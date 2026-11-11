@@ -18,13 +18,14 @@ changes by pull request from a fork, so no PR workflow can read a secret.
 | `clusters/homelab/data/` | Data-bearing apps, one namespace and one virtiofs share each: Immich, Navidrome, Calibre, Graphiti (`docs/data-migration.md`) |
 | `clusters/homelab/ingress/` | `cloudflared` for the cluster tunnel; the host tunnel stays human-owned |
 | `clusters/homelab/observability/` | Prometheus, Loki, Vector, status exporter |
-| `clusters/homelab/broker/` | Egress broker for agent traffic |
+| `clusters/homelab/broker/` | Credential-injecting broker for agent traffic (`docs/broker.md`) |
+| `apps/broker/` | Broker source and unit tests (Python stdlib, no dependencies) |
 | `tests/policies/` | Static + runtime policy checks, fixtures, expectation tables |
 | `tests/tofu/` | Static assertions on the Cloudflare config (`tests/tofu/check.sh`) |
 | `tests/access/` | Live Access default-deny probe (`tests/access/check.sh`, skips without a token) |
 | `tofu/` | Cloudflare OpenTofu (provider v5), Access default-deny, CAA (`docs/cloudflare.md`) |
 | `scripts/` | CI helpers, shellchecked |
-| `docs/` | Flux, tenancy, observability, runbook, negative tests, manual steps |
+| `docs/` | Flux, tenancy, observability, broker, runbook, negative tests, manual steps |
 
 ## Local checks
 
@@ -35,7 +36,8 @@ nix run nixpkgs#shellcheck -- scripts/*.sh
 scripts/check-action-pins.sh
 scripts/check-pr-secret-boundary.sh
 scripts/check-codeowners.sh
-tests/policies/check.sh                  # static policy, RBAC and network checks
+tests/policies/check.sh                  # static policy, RBAC, network and broker checks
+python3 -m unittest discover -s apps/broker/tests -t apps/broker   # broker unit tests
 tests/tofu/check.sh                      # Cloudflare config shape, no credentials
 tests/access/check.sh                    # live Access deny, skips without a token
 tests/observability/check.sh             # vector unit tests, config lint, exporter tests

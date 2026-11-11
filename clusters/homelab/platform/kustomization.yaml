@@ -13,6 +13,7 @@ resources:
   - kustomizations/policies.yaml
   - kustomizations/network.yaml
   - kustomizations/secrets.yaml
+  - kustomizations/broker.yaml
   - kustomizations/storage.yaml
   - kustomizations/data.yaml
   - kustomizations/ingress.yaml

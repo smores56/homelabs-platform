@@ -1,0 +1,163 @@
+# The agent identity. One ServiceAccount per agent, created here by the
+# platform (kustomize-controller holds the only write on ServiceAccounts); the
+# tenant reconciler has no `serviceaccounts` rule, so nanobot can never mint an
+# identity of its own. The token is never mounted: the pod reaches no API
+# server, and the Role grants below are a declared ceiling for a short-lived
+# token the owner may mint for a break-glass restart. See docs/broker.md.
+#
+# The tenant reconciler admits pods that run as this account; 12-agent-identity
+# pins `serviceAccountName: nanobot` and `automountServiceAccountToken: false`
+# for every nanobot-labelled pod.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: nanobot
+  namespace: tenant-apps
+  labels:
+    app.kubernetes.io/name: nanobot
+    homelabs.dev/tier: tenant
+automountServiceAccountToken: false
+---
+# Debug rights on the data tier, and only these: read events (what happened) and
+# delete pods (restart). Everything the agent must not do is absent on purpose:
+#
+#   pods/log, pods/exec, pods/attach, pods/portforward, pods/proxy - no output,
+#       code execution or traffic interception inside a data pod;
+#   get/list pods                                             - the status
+#       exporter in observability answers state, not the API;
+#   secrets, configmaps                                      - no credentials;
+#   deployments/statefulsets patch/update                    - a change is a
+#       commit to the tenant repository, never a live patch;
+#   nodes, nodes/metrics                                     - the status
+#       exporter and the broker are the only metrics path.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: agent-debug
+  namespace: immich
+  labels:
+    app.kubernetes.io/name: nanobot
+    homelabs.dev/tier: data
+rules:
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: agent-debug
+  namespace: immich
+  labels:
+    app.kubernetes.io/name: nanobot
+    homelabs.dev/tier: data
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: agent-debug
+subjects:
+  - kind: ServiceAccount
+    name: nanobot
+    namespace: tenant-apps
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: agent-debug
+  namespace: navidrome
+  labels:
+    app.kubernetes.io/name: nanobot
+    homelabs.dev/tier: data
+rules:
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: agent-debug
+  namespace: navidrome
+  labels:
+    app.kubernetes.io/name: nanobot
+    homelabs.dev/tier: data
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: agent-debug
+subjects:
+  - kind: ServiceAccount
+    name: nanobot
+    namespace: tenant-apps
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: agent-debug
+  namespace: calibre
+  labels:
+    app.kubernetes.io/name: nanobot
+    homelabs.dev/tier: data
+rules:
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: agent-debug
+  namespace: calibre
+  labels:
+    app.kubernetes.io/name: nanobot
+    homelabs.dev/tier: data
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: agent-debug
+subjects:
+  - kind: ServiceAccount
+    name: nanobot
+    namespace: tenant-apps
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: agent-debug
+  namespace: graphiti
+  labels:
+    app.kubernetes.io/name: nanobot
+    homelabs.dev/tier: data
+rules:
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: agent-debug
+  namespace: graphiti
+  labels:
+    app.kubernetes.io/name: nanobot
+    homelabs.dev/tier: data
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: agent-debug
+subjects:
+  - kind: ServiceAccount
+    name: nanobot
+    namespace: tenant-apps

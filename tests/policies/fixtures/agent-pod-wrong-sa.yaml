@@ -1,8 +1,8 @@
-# expect: allow
+# expect: deny agent-identity
 apiVersion: v1
 kind: Pod
 metadata:
-  name: nanobot-scratch
+  name: nanobot-wrong-sa
   namespace: tenant-apps
   labels:
     app.kubernetes.io/name: nanobot
@@ -14,7 +14,6 @@ spec:
     runAsNonRoot: true
     runAsUser: 1000
     runAsGroup: 1000
-    fsGroup: 1000
     seccompProfile:
       type: RuntimeDefault
   containers:
@@ -25,12 +24,3 @@ spec:
         readOnlyRootFilesystem: true
         capabilities:
           drop: ["ALL"]
-      envFrom:
-        - secretRef: {name: nanobot-broker-token}
-      volumeMounts:
-        - name: scratch
-          mountPath: /scratch
-  volumes:
-    - name: scratch
-      persistentVolumeClaim:
-        claimName: nanobot-scratch

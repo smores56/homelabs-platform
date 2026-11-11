@@ -300,11 +300,12 @@ kubectl -n tenant-apps get externalsecret
 kubectl -n observability get externalsecret
 ```
 
-Expected: `nanobot-broker-token` in `tenant-apps` and `loki-gateway-token` in
-`observability` materialise from their `Password` generators
-(`refreshInterval: "0"`, so each mints once and stays stable until the target
-Secret is deleted). `loki-gateway-token` unblocks the Loki gateway and the Vector
-data sink; until then both pods stay unstarted on purpose (`docs/observability.md`).
+Expected: `loki-gateway-token` in `observability` materialises from its
+`Password` generator (`refreshInterval: "0"`, so it mints once and stays stable
+until the target Secret is deleted). `loki-gateway-token` unblocks the Loki
+gateway and the Vector data sink; until then both pods stay unstarted on purpose
+(`docs/observability.md`). The broker's `broker-credentials` Secret is the SOPS
+contract from `docs/manual-steps.md` step 10, not an ESO generator.
 
 ### 5. Confirm the policy stack on the live cluster
 

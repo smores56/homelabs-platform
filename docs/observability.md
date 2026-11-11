@@ -119,7 +119,9 @@ curl -sS -H "Authorization: Bearer $TOKEN" \
 
 The agent-facing contract is the logical host name and the query string only. The
 broker maps `loki` → the URL above, attaches the token from its secret store and
-drops any credential the agent tried to send. Because the tenant header is
+drops any credential the agent tried to send. The broker does not enforce the
+path list (it is not an action authorizer); the gateway's read-path check is the
+policy, and its 403 is what the agent sees. Because the tenant header is
 injected after authentication, an agent with a broker token can read `data`
 classification and cannot read `raw`.
 

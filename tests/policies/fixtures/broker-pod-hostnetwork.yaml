@@ -7,6 +7,7 @@ metadata:
   labels:
     app.kubernetes.io/name: broker
 spec:
+  runtimeClassName: gvisor
   hostNetwork: true
   automountServiceAccountToken: false
   securityContext:
@@ -18,5 +19,6 @@ spec:
       image: ghcr.io/smores56/homelabs-platform/broker@sha256:0000000000000000000000000000000000000000000000000000000000000000
       securityContext:
         allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
         capabilities:
           drop: ["ALL"]

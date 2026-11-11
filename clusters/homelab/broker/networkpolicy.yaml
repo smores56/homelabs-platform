@@ -1,0 +1,47 @@
+# Egress is the coarse CNI layer; the authoritative rule is the broker's own
+# pinned-address check. Public space is reachable on TCP 443 only, with every
+# non-global range excluded here as well as in the broker. The two in-cluster
+# logical hosts are opened by name in observability/network/.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: egress-public-https
+  labels:
+    app.kubernetes.io/name: broker
+    homelabs.dev/tier: broker
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: broker
+  policyTypes: ["Egress"]
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 0.0.0.0/8
+              - 10.0.0.0/8
+              - 100.64.0.0/10
+              - 127.0.0.0/8
+              - 169.254.0.0/16
+              - 172.16.0.0/12
+              - 192.0.0.0/24
+              - 192.168.0.0/16
+              - 198.18.0.0/15
+              - 224.0.0.0/4
+              - 240.0.0.0/4
+      ports:
+        - protocol: TCP
+          port: 443
+    - to:
+        - ipBlock:
+            cidr: "::/0"
+            except:
+              - "::/128"
+              - "::1/128"
+              - fc00::/7
+              - fe80::/10
+              - ff00::/8
+      ports:
+        - protocol: TCP
+          port: 443

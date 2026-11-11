@@ -1,0 +1,60 @@
+# The broker is the only component that holds several live credentials, so its
+# runtime is not left to a Deployment review: the pod must be on gVisor,
+# non-root, and read-only. The static half of this contract is asserted in
+# tests/policies/check.sh; this is the admission half.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: broker-runtime
+  labels:
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: platform
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["pods"]
+  variables:
+    - name: broker
+      expression: >-
+        has(object.metadata.labels)
+        && 'app.kubernetes.io/name' in object.metadata.labels
+        && object.metadata.labels['app.kubernetes.io/name'] == 'broker'
+  validations:
+    - expression: >-
+        !variables.broker
+        || (has(object.spec.runtimeClassName) && object.spec.runtimeClassName == 'gvisor')
+      message: "broker pods must run on gvisor"
+    - expression: >-
+        !variables.broker
+        || (has(object.spec.securityContext)
+          && has(object.spec.securityContext.runAsNonRoot)
+          && object.spec.securityContext.runAsNonRoot)
+      message: "broker pods must set runAsNonRoot: true"
+    - expression: >-
+        !variables.broker
+        || object.spec.containers.all(c,
+          has(c.securityContext)
+          && has(c.securityContext.readOnlyRootFilesystem)
+          && c.securityContext.readOnlyRootFilesystem)
+      message: "broker containers must set readOnlyRootFilesystem: true"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: broker-runtime
+  labels:
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: platform
+spec:
+  policyName: broker-runtime
+  validationActions: [Deny]
+  matchResources:
+    namespaceSelector:
+      matchExpressions:
+        - key: homelabs.dev/tier
+          operator: In
+          values: ["broker"]
