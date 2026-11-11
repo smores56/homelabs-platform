@@ -81,12 +81,32 @@ environment secret from step 2.
 A token that can repoint `kanbei.sammohr.dev` is why diffing `*.tf` and
 `.github/` is Kanbei-critical (`docs/kanbei-critical.md`).
 
-## 4. Apply branch protection
+## 4. Create the `cloudflare` environment and apply repo settings
+
+Both need **Administration: write** on the repository, which the bootstrap token
+lacked (HTTP 403, recorded in `docs/runbook.md`). Run as the owner with a
+classic `repo`-scoped PAT or a fine-grained PAT carrying Administration and
+Actions write:
+
+1. `docs/runbook.md` → "Environment `cloudflare`": the environment object
+   already exists but has no deployment branch policy
+   (`deployment_branch_policy: null`, branch-policy list 404). Set
+   `custom_branch_policies: true` and add the `main` branch policy before any
+   secret lands. No required reviewers.
+2. `docs/runbook.md` → "Repo settings": read-only default `GITHUB_TOKEN`,
+   SHA-pinning required, only GitHub-owned and verified actions, fork PRs need
+   owner approval, private vulnerability reporting on.
+
+Then confirm with the `gh api` verify commands in those sections. Do this before
+setting the environment secret in step 2, because a secret can only be attached
+to an environment that exists.
+
+## 5. Apply branch protection
 
 Run the commands from `docs/runbook.md` section "Branch protection on main".
-They require an admin token; `enforce_admins` is false so the owner can still
-push a bootstrap commit, while the machine user and every other account are
-bound by PR review and the required checks.
+They require the same admin token; `enforce_admins` is false so the owner can
+still push a bootstrap commit, while the machine user and every other account
+are bound by PR review and the required checks.
 
 After applying, confirm the machine user cannot push to `main` (expected:
 `protected branch hook declined`) and cannot force-push (expected: `Cannot

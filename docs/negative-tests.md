@@ -65,9 +65,11 @@ not executed.
 3. Record the run URL and the printed `ABSENT` lines under "Runtime result"
    below, then close the fork PR.
 
-Approval gate: repo setting `fork-pr-contributor-approval` is
-`all_external_contributors`, so even that probe run waits for the owner to
-approve it, and `docs/runbook.md` records the setting.
+Approval gate: repo setting `fork-pr-contributor-approval` is intended to be
+`all_external_contributors`; the bootstrap token could not apply it (HTTP 403,
+`docs/runbook.md`). Until the owner applies it, GitHub's default applies: a
+first-time contributor's workflow run on a private repo waits for owner
+approval, and every fork run receives a read-only `GITHUB_TOKEN` regardless.
 
 ### Runtime result
 
