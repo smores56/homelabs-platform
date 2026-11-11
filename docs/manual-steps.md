@@ -170,9 +170,73 @@ helm repo update
 helm install external-secrets external-secrets/external-secrets \
   --namespace platform --create-namespace
 flux -n flux-system resume kustomization platform-secrets-eso
+flux -n flux-system resume kustomization platform-observability-secrets
 kubectl -n tenant-apps get externalsecret nanobot-broker-token
+kubectl -n observability get externalsecret loki-gateway-token
 ```
 
-Expected: the generated `nanobot-broker-token` Secret exists and is owned by the
-ExternalSecret; rotate by deleting the Secret and letting the `Password`
-generator mint a new one.
+Expected: both generated Secrets exist and are owned by their ExternalSecrets.
+`loki-gateway-token` is what unblocks the Loki gateway and Vector's data sink;
+until it exists both stay unstarted (fail closed). Rotate a token by deleting
+its Secret and letting the `Password` generator mint a new one.
+
+## 9. Digest-pin the observability images
+
+The manifests pin version tags. Replace each tag with a digest once, from a
+machine with registry access (the agent VM has none):
+
+```sh
+for ref in prom/prometheus:v3.16.0 grafana/loki:3.7.9 \
+  timberio/vector:0.61.0-debian python:3.13.12-slim busybox:1.37.0; do
+  printf '%s -> %s\n' "$ref" "$(crane digest "$ref")"
+done
+```
+
+Then rewrite the four `image:` lines under
+`clusters/homelab/observability/{prometheus,loki,vector,status-exporter,loki-gateway}`
+to `repo@sha256:<digest>` (keep the tag when the registry allows
+`repo:tag@sha256:...`), run `scripts/kustomize-build-all.sh` and
+`tests/observability/check.sh`, and commit. The image-pin assertion in
+`tests/observability/check.sh` accepts either a version tag or a `sha256:` digest,
+so a half-finished sweep still fails CI rather than shipping `latest`.
+
+## 10. Wire the broker's `loki` logical host
+
+The broker is deployed from `homelabs-apps`; this repository only supplies the
+gateway and the token. Copy the token into the broker's secret store (never into
+git, never into this repository):
+
+```sh
+kubectl -n observability get secret loki-gateway-token \
+  -o jsonpath='{.data.password}' | base64 -d
+```
+
+Configure the broker's logical host `loki` as
+`http://loki-gateway.observability.svc.cluster.local:3100`, inject the value as
+`Authorization: Bearer <token>`, and strip any `Authorization` the agent sends.
+The full contract is in `docs/observability.md` ("Broker logical host `loki`").
+Verify from a broker pod:
+
+```sh
+curl -sS -H "Authorization: Bearer $TOKEN" \
+  --get http://loki-gateway.observability.svc.cluster.local:3100/loki/api/v1/labels
+```
+
+Expected: `{"status":"success",...}` listing `namespace` and `tier`. A request
+without the header must answer 401, and a tenant-apps pod must not reach the
+gateway at all (NetworkPolicy).
+
+## 11. Rotate the Loki gateway token
+
+The value is read from the environment at process start, so rotation is a
+delete-and-roll, not a hot reload:
+
+```sh
+kubectl -n observability delete secret loki-gateway-token
+# the ExternalSecret recreates it from the Password generator
+kubectl -n observability rollout restart deployment/loki-gateway
+kubectl -n observability rollout restart daemonset/vector
+```
+
+Then repeat step 10 so the broker holds the new value, and query the `data`
+tenant through the gateway to confirm (docs/observability.md, "Verification").

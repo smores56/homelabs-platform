@@ -1,0 +1,33 @@
+# kubernetes_logs needs pod metadata (and the owning namespace's labels, which
+# decide the tenant) for every namespace on the node. That is read-only and
+# cannot be narrowed to one namespace: the DaemonSet ships every container log,
+# including kube-system's. Nothing here can read a Secret, exec, or mutate.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: observability-vector-metadata
+  labels:
+    app.kubernetes.io/name: vector
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: observability
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "namespaces"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: observability-vector-metadata
+  labels:
+    app.kubernetes.io/name: vector
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: observability
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: observability-vector-metadata
+subjects:
+  - kind: ServiceAccount
+    name: vector
+    namespace: observability

@@ -1,0 +1,24 @@
+# Counterpart of status-exporter-from-broker.yaml: broker egress is default-deny,
+# so the metrics path needs an explicit rule on this side too.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: egress-status-exporter
+  namespace: broker
+  labels:
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: broker
+spec:
+  podSelector: {}
+  policyTypes: ["Egress"]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: observability
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: status-exporter
+      ports:
+        - protocol: TCP
+          port: 9101

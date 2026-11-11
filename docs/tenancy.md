@@ -87,14 +87,17 @@ identity has no binding in `data`, `broker` or `platform`.
 | Namespace | default-deny | Allowed |
 | --- | --- | --- |
 | `tenant-apps` | both directions | DNS to `kube-system`; TCP 8080 to `broker` tier |
-| `broker` | both directions | DNS; ingress from `tenant` tier on 8080 |
+| `broker` | both directions | DNS; ingress from `tenant` tier on 8080; egress TCP 3100 to `loki-gateway` and 9101 to `status-exporter` in `observability` |
 | `data` | both directions | DNS; same-namespace any port; TCP 2283 from `ingress` namespace to `app.kubernetes.io/name=immich` |
 | `ingress` | both directions | DNS; TCP 2283 to `data` immich |
 
 Adding an app flow means adding a policy with its exact port and namespace
 selector. Nothing matches all namespaces, and a missing allow fails closed.
-`observability` and `platform` are not network-isolated: they are platform-tier
-by label and hold cluster-wide permissions already.
+`observability` and `platform` have no default-deny of their own: they are
+platform-tier by label and hold cluster-wide permissions already. The two
+observability paths an agent can reach are allow-listed from the broker side
+(the Loki gateway and the status exporter) and stated on both ends in
+`clusters/homelab/observability/network/`.
 
 ## Secrets
 

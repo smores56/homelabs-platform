@@ -1,0 +1,174 @@
+# Unit tests for the observability log pipeline. `vector test` builds this
+# topology without starting sources, so the routing and the VRL file under test
+# are the same definitions the cluster runs; tests/observability/check.sh
+# asserts that neither has drifted from
+# clusters/homelab/observability/vector/vector.yaml.
+data_dir: /tmp/vector-test-data
+
+sources:
+  test_input:
+    type: demo_logs
+    format: json
+    interval: 3600
+
+transforms:
+  tenant_route:
+    type: remap
+    inputs: [test_input]
+    source: |
+      .tenant_route = if .kubernetes.namespace_labels."homelabs.dev/tier" == "data" {
+        "data"
+      } else {
+        "raw"
+      }
+
+  data_filter:
+    type: filter
+    inputs: [tenant_route]
+    condition: '.tenant_route == "data"'
+
+  raw_filter:
+    type: filter
+    inputs: [tenant_route]
+    condition: '.tenant_route == "raw"'
+
+  data_allowlist:
+    type: remap
+    inputs: [data_filter]
+    file: clusters/homelab/observability/vector/data_allowlist.vrl
+
+tests:
+  # The planted line names a file and an album. The assertion is only useful if
+  # neither string is present anywhere in the emitted event.
+  - name: "data tenant keeps classification only, drops the planted body"
+    inputs:
+      - type: log
+        insert_at: data_allowlist
+        log_fields:
+          # Folded, not one 269-char line: YAML joins the pieces with spaces,
+          # and the parsed JSON is identical to
+          # tests/observability/fixtures/immich-planted.json.
+          message: >-
+            {"level":"error","context":"AssetService","code":"ENOENT","status":500,
+            "msg":"failed to read /mnt/photos/Alice - Vacation/IMG_1234.jpg",
+            "albumName":"Alice - Vacation","file":"IMG_1234.jpg",
+            "originalPath":"/mnt/photos/Alice - Vacation/IMG_1234.jpg"}
+          timestamp: "2026-11-11T20:15:00Z"
+          kubernetes:
+            pod_namespace: data
+            pod_labels:
+              app.kubernetes.io/name: immich-server
+            namespace_labels:
+              homelabs.dev/tier: data
+    outputs:
+      - extract_from: data_allowlist
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.namespace, "data")
+              assert_eq!(.level, "error")
+              assert_eq!(.component, "AssetService")
+              assert_eq!(.error_code, "ENOENT")
+              assert_eq!(.status, "500")
+              assert_eq!(.timestamp, "2026-11-11T20:15:00Z")
+              assert_eq!(length(.), 6)
+              assert!(!exists(.message))
+              assert!(!exists(.file))
+              assert!(!exists(.albumName))
+              assert!(!exists(.originalPath))
+              assert!(!contains(encode_json(.), "Vacation"))
+              assert!(!contains(encode_json(.), "IMG_1234"))
+              assert!(!contains(encode_json(.), "Alice"))
+
+  - name: "text logs contribute a level token and never the line"
+    inputs:
+      - type: log
+        insert_at: data_allowlist
+        log_fields:
+          message: '2026-11-11 20:15:01.123 UTC [42] ERROR: relation "immich.secret_table" does not exist'
+          timestamp: "2026-11-11T20:15:01Z"
+          kubernetes:
+            pod_namespace: data
+            namespace_labels:
+              homelabs.dev/tier: data
+    outputs:
+      - extract_from: data_allowlist
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.level, "ERROR")
+              assert_eq!(.namespace, "data")
+              assert_eq!(length(.), 3)
+              assert!(!exists(.message))
+              assert!(!contains(encode_json(.), "secret_table"))
+
+  - name: "JSON without classification fields emits metadata only"
+    inputs:
+      - type: log
+        insert_at: data_allowlist
+        log_fields:
+          message: '{"msg":"GET /api/assets?album=Alice - Vacation 200","reqId":"abc"}'
+          timestamp: "2026-11-11T20:15:02Z"
+          kubernetes:
+            pod_namespace: data
+            namespace_labels:
+              homelabs.dev/tier: data
+    outputs:
+      - extract_from: data_allowlist
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(length(.), 2)
+              assert_eq!(.namespace, "data")
+              assert!(!exists(.message))
+              assert!(!contains(encode_json(.), "Vacation"))
+
+  - name: "the data namespace label routes to the data tenant"
+    inputs:
+      - type: log
+        insert_at: tenant_route
+        log_fields:
+          message: '{"level":"info","msg":"Immich started"}'
+          kubernetes:
+            pod_namespace: data
+            namespace_labels:
+              homelabs.dev/tier: data
+    outputs:
+      - extract_from: tenant_route
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.tenant_route, "data")
+
+  - name: "a tenant namespace label routes to the raw tenant"
+    inputs:
+      - type: log
+        insert_at: tenant_route
+        log_fields:
+          message: '{"level":"info","msg":"nanobot started"}'
+          kubernetes:
+            pod_namespace: tenant-apps
+            namespace_labels:
+              homelabs.dev/tier: tenant
+    outputs:
+      - extract_from: tenant_route
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.tenant_route, "raw")
+
+  - name: "a namespace without the tier label stays raw"
+    inputs:
+      - type: log
+        insert_at: tenant_route
+        log_fields:
+          message: "kube-proxy started"
+          kubernetes:
+            pod_namespace: kube-system
+            namespace_labels: {}
+    outputs:
+      - extract_from: tenant_route
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.tenant_route, "raw")

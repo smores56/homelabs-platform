@@ -1,0 +1,13 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: observability
+resources:
+  - serviceaccount.yaml
+  - rbac.yaml
+  - claim.yaml
+  - deployment.yaml
+  - service.yaml
+configMapGenerator:
+  - name: prometheus-config
+    files:
+      - prometheus.yaml

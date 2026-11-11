@@ -1,0 +1,25 @@
+# Stated from the broker side as well: the broker is default-deny, so without
+# this rule a broker logical-host call to loki would be dropped even though the
+# gateway accepts it. One port, one namespace, one pod selector.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: egress-loki-gateway
+  namespace: broker
+  labels:
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: broker
+spec:
+  podSelector: {}
+  policyTypes: ["Egress"]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: observability
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: loki-gateway
+      ports:
+        - protocol: TCP
+          port: 3100

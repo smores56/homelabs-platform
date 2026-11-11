@@ -1,0 +1,27 @@
+# Postgres settings for every database that stores data-tenant content. The two
+# lines are the point: `terse` drops the DETAIL/HINT body that quotes the failing
+# value (a filename, an album name, an email), and `panic` stops the server from
+# echoing the offending statement, which would carry the same content. Together
+# they are what makes the Postgres log safe to ship to any tenant.
+#
+# Consumption (docs/observability.md has the full recipe):
+#   - images that accept server flags:
+#       command: ["postgres", "-c", "config_file=/etc/postgresql/data-settings.conf"]
+#       mount this ConfigMap's `data-settings.conf` at that path
+#   - images whose entrypoint owns the command: mount the key at
+#       /etc/postgresql/conf.d/10-homelabs-data.conf and add
+#       `include_dir = '/etc/postgresql/conf.d'` to postgresql.conf
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-data-settings
+  labels:
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: data
+data:
+  data-settings.conf: |
+    # Keep error classification, drop the content around it.
+    log_error_verbosity = terse
+    log_min_error_statement = panic
+    # Statements themselves are never logged for data apps.
+    log_statement = 'none'

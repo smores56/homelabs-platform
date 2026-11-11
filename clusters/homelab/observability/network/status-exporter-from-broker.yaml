@@ -1,0 +1,24 @@
+# The status exporter is the only view of data workloads an agent gets. The
+# broker reads the metrics endpoint on the agent's behalf; the exporter's own
+# identity is what talks to the Kubernetes API, and no agent ever holds it.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: status-exporter-from-broker
+  namespace: observability
+  labels:
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: observability
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: status-exporter
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: broker
+      ports:
+        - protocol: TCP
+          port: 9101

@@ -308,6 +308,8 @@ declare -A stage_edges=(
   [platform-policies]="platform-rbac"
   [platform-network]="platform-namespaces"
   [platform-secrets]="platform-namespaces,platform-policies"
+  [platform-data-config]="platform-namespaces"
+  [platform-observability]="platform-policies"
   [platform-tenants]="platform-network,platform-policies,platform-secrets"
 )
 
@@ -333,7 +335,7 @@ done
 
 listed=$(yq -o=json -I=0 '.' clusters/homelab/platform/kustomization.yaml |
   jq -r '[.resources[] | sub("^kustomizations/"; "") | sub("\\.yaml$"; "")] | .[]')
-eq "$listed" "$(printf '%s\n' namespaces rbac policies network secrets tenants)" \
+eq "$listed" "$(printf '%s\n' namespaces rbac policies network secrets data observability tenants)" \
   "platform/kustomization.yaml lists every stage in apply order"
 missing=$(comm -23 <(find "$stages_dir" -maxdepth 1 -name '*.yaml' -printf '%f\n' | sed 's|\.yaml$||' | sort) \
   <(yq -o=json -I=0 '.' clusters/homelab/platform/kustomization.yaml |

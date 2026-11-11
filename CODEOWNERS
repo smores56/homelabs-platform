@@ -11,3 +11,9 @@
 
 # Workflows and repo automation: run with the deploy token in the environment.
 .github/ @smores56
+
+# Human-owned observability helpers. Agents have no `get pods` in a data
+# namespace, so these are the only sanctioned views of data workloads; a human
+# authors and reviews them (docs/observability.md).
+clusters/homelab/observability/status-exporter/ @smores56
+clusters/homelab/observability/loki-gateway/ @smores56

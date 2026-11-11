@@ -1,0 +1,9 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Applied by the suspended platform-observability-secrets stage: the CRDs come
+# from the External Secrets operator, which this repository does not install.
+# Resuming the stage is a manual step (docs/manual-steps.md).
+resources:
+  - password-generator.yaml
+  - externalsecret.yaml

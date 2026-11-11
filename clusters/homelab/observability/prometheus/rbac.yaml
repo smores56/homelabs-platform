@@ -1,0 +1,32 @@
+# Pod discovery is cluster-wide by nature: the job keeps pods that carry
+# `prometheus.io/scrape: "true"`, wherever they run. The verb set is read-only
+# and limited to pods, so this identity cannot read Secrets, exec or delete.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: observability-prometheus-pods
+  labels:
+    app.kubernetes.io/name: prometheus
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: observability
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: observability-prometheus-pods
+  labels:
+    app.kubernetes.io/name: prometheus
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: observability
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: observability-prometheus-pods
+subjects:
+  - kind: ServiceAccount
+    name: prometheus
+    namespace: observability

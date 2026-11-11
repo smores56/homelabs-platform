@@ -10,3 +10,7 @@ crash.log
 
 # Local render output
 /.rendered/
+
+# Python bytecode from the local observability checks
+__pycache__/
+*.pyc

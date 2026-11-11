@@ -1,0 +1,110 @@
+# One DaemonSet ships every container log on the node. Routing is by the
+# *namespace* label `homelabs.dev/tier` (not the pod label), because the tier is
+# a property of the namespace: a pod that forgets a label must not be able to
+# opt itself into the raw tenant.
+#
+#   tier=data     -> data_filter     -> data_allowlist (VRL) -> loki-gateway (tenant data)
+#   anything else -> raw_filter      -> Loki directly          (tenant raw)
+#
+# The data sink deliberately has no `tenant_id`: the gateway injects
+# `X-Scope-OrgID: data` after checking the bearer token, so a client cannot
+# choose its tenant. See docs/observability.md for the broker contract.
+api:
+  enabled: true
+  address: 0.0.0.0:8686
+
+data_dir: /var/lib/vector
+
+sources:
+  k8s_logs:
+    type: kubernetes_logs
+    self_node_name: ${VECTOR_SELF_NODE_NAME}
+    read_from: beginning
+
+transforms:
+  # The routing decision lives in one place so tests/vector/vector.yaml can
+  # exercise the exact namespace-label comparison the cluster uses.
+  tenant_route:
+    type: remap
+    inputs: [k8s_logs]
+    source: |
+      .tenant_route = if .kubernetes.namespace_labels."homelabs.dev/tier" == "data" {
+        "data"
+      } else {
+        "raw"
+      }
+
+  data_filter:
+    type: filter
+    inputs: [tenant_route]
+    condition: '.tenant_route == "data"'
+
+  raw_filter:
+    type: filter
+    inputs: [tenant_route]
+    condition: '.tenant_route == "raw"'
+
+  data_allowlist:
+    type: remap
+    inputs: [data_filter]
+    file: /etc/vector/vrl/data_allowlist.vrl
+
+  # Loki rejects empty label values, and not every namespace in the cluster is
+  # created by this repository (kube-system, flux-system, default). Defaults are
+  # applied before templating so one unlabelled namespace cannot fail a batch.
+  raw_labels:
+    type: remap
+    inputs: [raw_filter]
+    source: |
+      .loki_tier = if is_string(.kubernetes.namespace_labels."homelabs.dev/tier") {
+        .kubernetes.namespace_labels."homelabs.dev/tier"
+      } else {
+        "unknown"
+      }
+      .loki_namespace = if is_string(.kubernetes.pod_namespace) {
+        .kubernetes.pod_namespace
+      } else {
+        "unknown"
+      }
+      .loki_app = if is_string(.kubernetes.pod_labels."app.kubernetes.io/name") {
+        .kubernetes.pod_labels."app.kubernetes.io/name"
+      } else {
+        "unknown"
+      }
+      .loki_container = if is_string(.kubernetes.container_name) {
+        .kubernetes.container_name
+      } else {
+        "unknown"
+      }
+
+sinks:
+  loki_raw:
+    type: loki
+    inputs: [raw_labels]
+    endpoint: http://loki.observability.svc.cluster.local:3100
+    tenant_id: raw
+    encoding:
+      codec: json
+    labels:
+      namespace: "{{ loki_namespace }}"
+      tier: "{{ loki_tier }}"
+      app: "{{ loki_app }}"
+      container: "{{ loki_container }}"
+      stream: "{{ stream }}"
+    remove_timestamp: false
+
+  # The token is read from the external secret at startup. A missing secret
+  # keeps the pod from starting: no token, no data-tenant writes.
+  loki_data:
+    type: loki
+    inputs: [data_allowlist]
+    endpoint: http://loki-gateway.observability.svc.cluster.local:3100
+    auth:
+      strategy: bearer
+      token: ${LOKI_GATEWAY_TOKEN}
+    encoding:
+      codec: json
+    labels:
+      namespace: "{{ namespace }}"
+      tier: data
+    remove_timestamp: false

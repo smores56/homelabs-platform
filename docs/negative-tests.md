@@ -93,7 +93,7 @@ namespace on one port.
 ### What runs automatically (static, CI job `policy checks`)
 
 `tests/policies/check.sh` runs with no cluster and no credentials on every push
-and pull request. 184 assertions (recorded run, 2026-11-11):
+and pull request. 192 assertions (recorded run, 2026-11-11):
 
 | Family | Assertions |
 | --- | --- |
@@ -105,7 +105,7 @@ and pull request. 184 assertions (recorded run, 2026-11-11):
 | Rendered controller `args` match the reviewed flag table (`docs/flux.md`) | 13 |
 | No insecure kubeconfig flags anywhere in manifests or scripts | 1 |
 | NetworkPolicy shape: default-deny both directions, DNS to `kube-system`, broker-only tenant egress, immich from `ingress` only, no extra data flows | 12 |
-| Stage DAG (`dependsOn`), stage service accounts, apply order | 26 |
+| Stage DAG (`dependsOn`), stage service accounts, apply order | 34 |
 | `gotk-sync.yaml` equals `bootstrap.sh --print-sync`, bootstrap flags, tenant Kustomization pins | 13 |
 | Fixture/expectation table completeness and `# expect:` headers | 31 |
 
@@ -134,7 +134,7 @@ then drives every case with `kubectl --dry-run=server` and `kubectl auth can-i`.
 - 2 live attempts over the API (create a Secret, create a Kustomization), both
   `forbidden`.
 
-Result: `static+runtime: 250 passed, 0 failed`.
+Result: `static+runtime: 258 passed, 0 failed`.
 
 Two deliberate deviations from a production cluster, both so a failure is
 attributable:
@@ -163,6 +163,79 @@ attributable:
 ### Runtime result
 
 Executed on 2026-11-11 in the agent VM against the ephemeral control plane:
-`tests/policies/check.sh --runtime` → `static+runtime: 250 passed, 0 failed`.
+`tests/policies/check.sh --runtime` → `static+runtime: 258 passed, 0 failed`.
 The same checker runs without `--runtime` in CI, so a regression in any static
 assertion fails the pull request that introduces it.
+
+## Data-tenant logs carry classification only
+
+SDLC #579. Property under test: a planted Immich log line that names a file and
+an album reaches Loki's `data` tenant as `level`, `component`, `error_code`,
+`status`, `namespace` and `timestamp` and nothing else; a non-data namespace
+ships raw; and the `data` tenant is unreachable without the gateway token.
+
+### What runs automatically (CI job `observability pipeline`)
+
+`tests/observability/check.sh` runs on every push and pull request with no
+cluster and no credentials. 29 assertions (recorded run, 2026-11-11):
+
+| Family | Assertions |
+| --- | --- |
+| `vector test` on `tests/vector/vector.yaml`: planted fixture loses body, text log keeps only a level token, JSON without classification keeps metadata only, namespace-label routing for data/tenant/unlabelled | 6 cases in 1 assertion |
+| `vector validate --no-environment` on the shipped config, with the VRL staged where the container mounts it | 1 |
+| Shipped-vs-test drift: `tenant_route` source, both filter conditions, both `file:` paths, the `vector-vrl` generator entry | 5 |
+| The planted fixture really carries `file`, `albumName`, `originalPath`, and the unit-test input parses to the same JSON | 2 |
+| Tenant separation: no `tenant_id` on the data sink, gateway endpoint, bearer auth, raw tenant direct, Loki `auth_enabled`, 168h retention, telemetry off | 7 |
+| Token contract: gateway and Vector read `loki-gateway-token`, ExternalSecret targets it, generator kind is `Password` | 4 |
+| Status exporter RBAC: resources and verbs exact, **no ClusterRoleBinding**, binding namespaced to `data`, subject in `observability` | 5 |
+| Postgres fragment sets `terse` + `panic`; every observability image is version/digest pinned | 2 |
+| Python unit tests for `exporter.py` and `gateway.py` | 29 tests in 1 assertion |
+
+The deny-by-construction part is in the VRL itself: the event is rebuilt from an
+allowlist, so a parser failure or an unknown log format cannot fall back to
+shipping the line. The negative assertions on the planted fixture are
+`!exists(.message)`, `!exists(.file)`, `!exists(.albumName)`,
+`!exists(.originalPath)`, and `!contains(encode_json(.), "Vacation" | "IMG_1234" | "Alice")`.
+
+Two properties are asserted statically rather than exercised: the routing
+comparison (unit tests call the same `tenant_route` source the DaemonSet ships,
+and the drift check fails if the two strings differ) and the gateway's tenant
+header (unit tests prove the client's `X-Scope-OrgID` is replaced).
+
+### What cannot run here
+
+No kubelet, so `kubernetes_logs` never reads `/var/log/pods`; no Loki, so no
+batch is actually accepted; no Immich, so the line is planted through a Vector
+unit test rather than through a container log; no CNI, so the broker→gateway
+NetworkPolicy is only shape-checked; no ESO, so `loki-gateway-token` does not
+exist and both readers stay unstarted (fail closed) until `docs/manual-steps.md`
+step 9.
+
+### Manual runtime test
+
+1. Complete `docs/manual-steps.md` step 9 (install ESO, resume
+   `platform-observability-secrets`) and step 10 (digest pinning).
+2. Emit the fixture as a data-app log line, e.g. from the Immich server pod:
+   `kubectl -n data exec deploy/immich-server -- printenv` is not enough; use the
+   app's own logger or `kubectl -n data logs` on a pod that printed it. The
+   fixture text is `tests/observability/fixtures/immich-planted.json`.
+3. Query the tenant through the gateway, using the same contract the broker has:
+
+   ```sh
+   TOKEN=$(kubectl -n observability get secret loki-gateway-token -o jsonpath='{.data.password}' | base64 -d)
+   kubectl -n observability port-forward svc/loki-gateway 3100:3100 &
+   curl -sS -H "Authorization: Bearer $TOKEN" \
+     --get http://127.0.0.1:3100/loki/api/v1/query_range \
+     --data-urlencode 'query={tier="data"}' --data-urlencode 'limit=100'
+   ```
+
+4. Expected: the entry for the planted line contains only the six fields; grep
+   the response for `Vacation`, `IMG_1234` and the album path and expect no
+   match. A second query with `X-Scope-OrgID: raw` against Loki directly must
+   **not** return the line: it lives in `data`.
+
+### Runtime result
+
+Not executed: needs the live cluster (no kubelet, Loki or ESO here). Static half
+passes: `tests/observability/check.sh` → `observability: 29 passed, 0 failed`,
+Vector 0.61.0, Python 3.13.

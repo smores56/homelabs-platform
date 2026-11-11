@@ -22,6 +22,7 @@
 ```sh
 scripts/kustomize-build-all.sh          # every clusters/** kustomization renders
 tests/policies/check.sh                 # static policy, RBAC, network assertions
+tests/observability/check.sh            # vector unit tests, config drift, exporter tests
 nix run nixpkgs#yamllint -- .
 nix run nixpkgs#shellcheck -- scripts/*.sh tests/policies/*.sh \
   clusters/homelab/flux-system/bootstrap.sh

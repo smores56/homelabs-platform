@@ -1,0 +1,88 @@
+# Human-owned: nanobot never runs this process and has no path to its identity.
+# The source is mounted from a generated ConfigMap, so a code change is a pod
+# rollout, not an image build on the cluster.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: status-exporter
+  namespace: observability
+  labels:
+    app.kubernetes.io/name: status-exporter
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: observability
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: status-exporter
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: status-exporter
+        app.kubernetes.io/part-of: homelabs
+        homelabs.dev/tier: observability
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9101"
+        prometheus.io/path: /metrics
+    spec:
+      serviceAccountName: status-exporter
+      automountServiceAccountToken: true
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: status-exporter
+          image: python:3.13.12-slim
+          command: ["python", "-u", "/app/exporter.py"]
+          ports:
+            - name: metrics
+              containerPort: 9101
+          env:
+            - name: DATA_NAMESPACE
+              value: data
+            - name: EXPORT_PORT
+              value: "9101"
+            - name: REFRESH_SECONDS
+              value: "30"
+            - name: PYTHONDONTWRITEBYTECODE
+              value: "1"
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 96Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: metrics
+            initialDelaySeconds: 5
+            periodSeconds: 15
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: metrics
+            initialDelaySeconds: 15
+            periodSeconds: 30
+          volumeMounts:
+            - name: source
+              mountPath: /app
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: source
+          configMap:
+            name: status-exporter-source
+        - name: tmp
+          emptyDir: {}

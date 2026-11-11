@@ -1,0 +1,16 @@
+# k3s ships the `local-path` provisioner; on a single node that is the only
+# storage class. 10 Gi holds 7 days of a handful of targets at 30s.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: prometheus-data
+  labels:
+    app.kubernetes.io/name: prometheus
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: observability
+spec:
+  accessModes: ["ReadWriteOnce"]
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 10Gi

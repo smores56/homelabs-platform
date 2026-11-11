@@ -1,0 +1,41 @@
+# The `data` tenant transform. Every emitted field is copied from the allowlist
+# below and the event is rebuilt from scratch, so a filename, album name, path,
+# SQL statement or stack trace in the source line can never reach the tenant,
+# even when parsing fails or the line is not JSON.
+namespace = if exists(.kubernetes.pod_namespace) {
+  to_string!(.kubernetes.pod_namespace)
+} else {
+  "unknown"
+}
+
+ts = to_string(.timestamp) ?? now()
+
+parsed, parse_err = parse_json(.message)
+fields = if parse_err == null && is_object(parsed) {
+  object!(parsed)
+} else {
+  # Text logs (postgres, redis) contribute a leading level token and nothing
+  # else; the rest of the line is dropped with the message body.
+  level_token = parse_regex(string(.message) ?? "", r'(?i)^(?:[0-9]{4}-[0-9]{2}-[0-9]{2}[ T][0-9:.]+(?: [A-Z]{2,5})?(?: \[[0-9]+\])? )?(?<level>TRACE|DEBUG|INFO|LOG|NOTICE|WARNING|WARN|ERROR|FATAL|PANIC|CRITICAL)\b') ?? {}
+  if is_object(level_token) { object(level_token) } else { {} }
+}
+
+# compact() removes the nulls left by absent keys, so a JSON log that carries
+# `context` instead of `component` is still classified.
+level_values = compact([fields.level, fields.severity, fields.lvl])
+component_values = compact([fields.component, fields.context, fields.module, fields.logger])
+code_values = compact([fields.error_code, fields.err.code, fields.code])
+status_values = compact([fields.status, fields.statusCode, fields."res.statusCode"])
+
+level = if length(level_values) > 0 { to_string!(level_values[0]) } else { "" }
+component = if length(component_values) > 0 { to_string!(component_values[0]) } else { "" }
+error_code = if length(code_values) > 0 { to_string!(code_values[0]) } else { "" }
+status = if length(status_values) > 0 { to_string!(status_values[0]) } else { "" }
+
+out = {"namespace": namespace, "timestamp": ts}
+if level != "" { out.level = level }
+if component != "" { out.component = component }
+if error_code != "" { out.error_code = error_code }
+if status != "" { out.status = status }
+
+. = out

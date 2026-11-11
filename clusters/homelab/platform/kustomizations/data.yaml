@@ -1,0 +1,22 @@
+# Stage 5a. The Postgres settings fragment every data app mounts. It only needs
+# the `data` namespace to exist; it must land before any app that includes it.
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: platform-data-config
+  namespace: flux-system
+  labels:
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: platform
+spec:
+  interval: 10m
+  retryInterval: 1m
+  timeout: 5m
+  prune: true
+  path: ./clusters/homelab/data/postgres-config
+  dependsOn:
+    - name: platform-namespaces
+  sourceRef:
+    kind: GitRepository
+    name: flux-system
+  serviceAccountName: kustomize-controller

@@ -137,6 +137,26 @@ jobs:
       - name: no pull_request workflow references a secret
         run: scripts/check-pr-secret-boundary.sh
 
+  observability:
+    name: observability pipeline
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          persist-credentials: false
+      - name: install pinned tools
+        run: |
+          scripts/install-ci-tools.sh "$RUNNER_TEMP/bin"
+          echo "$RUNNER_TEMP/bin" >>"$GITHUB_PATH"
+      # Vector unit tests for the data-tenant allowlist (the planted Immich line
+      # must lose its filename and album name), a full `vector validate`, the
+      # prod-vs-test drift comparisons, and the status-exporter and Loki-gateway
+      # unit tests. kustomize build and kubeconform cover the manifests in their
+      # own jobs.
+      - name: vector tests, config lint, exporter unit tests
+        run: tests/observability/check.sh
+
   policy-checks:
     name: policy checks
     runs-on: ubuntu-latest

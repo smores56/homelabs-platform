@@ -233,7 +233,10 @@ flux -n flux-system get kustomizations
 
 Expected: `flux-system` Kustomization Ready on the pinned
 `serviceAccountName: kustomize-controller` (see `docs/flux.md` for why bootstrap
-re-renders `gotk-sync.yaml`), then the six `platform-*` stages appear in order.
+re-renders `gotk-sync.yaml`), then the `platform-*` stages appear in order:
+namespaces, rbac, policies, network, secrets, data config, observability,
+tenants. `platform-secrets-eso` and `platform-observability-secrets` stay
+suspended until step 4 installs the operator.
 
 ### 2. Age key for SOPS
 
@@ -290,17 +293,21 @@ helm repo update
 helm install external-secrets external-secrets/external-secrets \
   --namespace platform --create-namespace
 flux -n flux-system resume kustomization platform-secrets-eso
+flux -n flux-system resume kustomization platform-observability-secrets
 kubectl -n tenant-apps get externalsecret
+kubectl -n observability get externalsecret
 ```
 
-Expected: `nanobot-broker-token` Secret materialises from the `Password`
-generator (`refreshInterval: "0"`, so it mints once and stays stable until the
-target Secret is deleted).
+Expected: `nanobot-broker-token` in `tenant-apps` and `loki-gateway-token` in
+`observability` materialise from their `Password` generators
+(`refreshInterval: "0"`, so each mints once and stays stable until the target
+Secret is deleted). `loki-gateway-token` unblocks the Loki gateway and the Vector
+data sink; until then both pods stay unstarted on purpose (`docs/observability.md`).
 
 ### 5. Confirm the policy stack on the live cluster
 
 ```sh
-tests/policies/check.sh            # 184 static assertions, no cluster
+tests/policies/check.sh            # 192 static assertions, no cluster
 nix shell nixpkgs#etcd nixpkgs#kubernetes nixpkgs#openssl nixpkgs#kustomize \
   nixpkgs#yq-go nixpkgs#jq -c tests/policies/check.sh --runtime
 kubectl get validatingadmissionpolicies,validatingadmissionpolicybindings

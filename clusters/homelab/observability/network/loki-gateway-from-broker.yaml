@@ -1,0 +1,24 @@
+# Only the broker may call the gateway, and only on the gateway port. Vector
+# writes the `data` tenant from inside this namespace, so same-namespace
+# traffic is not restricted here.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: loki-gateway-from-broker
+  namespace: observability
+  labels:
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: observability
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: loki-gateway
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: broker
+      ports:
+        - protocol: TCP
+          port: 3100

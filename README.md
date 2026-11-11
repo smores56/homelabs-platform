@@ -21,7 +21,7 @@ changes by pull request from a fork, so no PR workflow can read a secret.
 | `tests/policies/` | Static + runtime policy checks, fixtures, expectation tables |
 | `tofu/` | Cloudflare OpenTofu (provider v5) |
 | `scripts/` | CI helpers, shellchecked |
-| `docs/` | Flux, tenancy, runbook, negative tests, manual steps |
+| `docs/` | Flux, tenancy, observability, runbook, negative tests, manual steps |
 
 ## Local checks
 
@@ -33,6 +33,7 @@ scripts/check-action-pins.sh
 scripts/check-pr-secret-boundary.sh
 scripts/check-codeowners.sh
 tests/policies/check.sh                  # static policy, RBAC and network checks
+tests/observability/check.sh             # vector unit tests, config lint, exporter tests
 ```
 
 CI (`.github/workflows/ci.yml`) runs the same checks with pinned tool versions;

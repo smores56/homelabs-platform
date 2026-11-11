@@ -1,0 +1,49 @@
+# Stage 5b. Prometheus, Loki, Vector, the status exporter and the Loki gateway.
+# After policies so every workload here is already covered by the namespace
+# guards; before tenants, because a tenant Kustomization must never be the thing
+# that brings up the log pipeline it is audited through.
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: platform-observability
+  namespace: flux-system
+  labels:
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: platform
+spec:
+  interval: 10m
+  retryInterval: 1m
+  timeout: 10m
+  prune: true
+  path: ./clusters/homelab/observability
+  dependsOn:
+    - name: platform-policies
+  sourceRef:
+    kind: GitRepository
+    name: flux-system
+  serviceAccountName: kustomize-controller
+---
+# External Secrets objects for the Loki gateway token. Suspended for the same
+# reason as platform-secrets-eso: the operator's CRDs are not installed by this
+# repository, and a stage that cannot apply would block the tenant chain.
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: platform-observability-secrets
+  namespace: flux-system
+  labels:
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: platform
+spec:
+  interval: 10m
+  retryInterval: 1m
+  timeout: 5m
+  prune: true
+  suspend: true
+  path: ./clusters/homelab/observability/loki-gateway/eso
+  dependsOn:
+    - name: platform-observability
+  sourceRef:
+    kind: GitRepository
+    name: flux-system
+  serviceAccountName: kustomize-controller

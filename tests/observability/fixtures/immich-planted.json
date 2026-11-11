@@ -1,0 +1,1 @@
+{"level":"error","context":"AssetService","code":"ENOENT","status":500,"msg":"failed to read /mnt/photos/Alice - Vacation/IMG_1234.jpg","albumName":"Alice - Vacation","file":"IMG_1234.jpg","originalPath":"/mnt/photos/Alice - Vacation/IMG_1234.jpg"}
