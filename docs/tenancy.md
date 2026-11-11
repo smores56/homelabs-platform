@@ -38,7 +38,7 @@ applied by the first stage (`docs/flux.md`).
 | `broker` | `no-host-access`, `broker-runtime` | public TCP 443 (global unicast only), DNS, `loki-gateway` 3100 and `status-exporter` 9101 | `tenant` tier on 8080 |
 | `data` (each of `immich`, `navidrome`, `calibre`, `graphiti`) | `no-host-access`, `data-workload-source`, `data-pvc-scope`, `data-pvc-storage` | same namespace, DNS; HTTPS for `immich-machine-learning` and `graphiti` | same namespace, `ingress` on the app's port |
 | `ingress` | none beyond PSA | the four data apps on their ports, `tenant-apps/nanobot` 8080, Cloudflare edge 443, DNS | none |
-| `observability` | exempt from `no-host-access` | unrestricted | unrestricted |
+| `observability` | exempt from `no-host-access` | DNS, the k3s API range on 443 (Vector, Prometheus, exporter), Loki and the annotated scrape targets; no public egress | default-deny; Vector/Loki/gateway wiring, Prometheus scrapes, and the broker paths only |
 
 ## Admission policy
 
@@ -112,11 +112,19 @@ the pod has no token or API route; the grant is a break-glass ceiling
 
 Adding an app flow means adding a policy with its exact port and namespace
 selector. Nothing matches all namespaces, and a missing allow fails closed.
-`observability` and `platform` have no default-deny of their own: they are
-platform-tier by label and hold cluster-wide permissions already. The two
-observability paths an agent can reach are allow-listed from the broker side
-(the Loki gateway and the status exporter) and stated on both ends in
-`clusters/homelab/observability/network/`.
+
+`observability` is default-deny in both directions too, with one file per flow in
+`clusters/homelab/observability/network/`: Vector to Loki 3100, the gateway to
+Loki 3100 (Loki accepts ingress from exactly those two pods), Prometheus to the
+annotated targets, the broker to the gateway and the exporter, the cluster digest
+to those two (stated in the digest stage), and the k3s API range on 443 for the
+three API clients. No observability pod has public egress. `platform` is the one
+namespace still without a default-deny: it holds the CronJobs and the reconciler
+pods, which are platform-tier by label and already cluster-wide.
+
+An agent reaches the observability stack only through the broker (the Loki
+gateway for `data` reads, the status exporter for metrics), and both paths are
+stated on both ends.
 
 ## Secrets
 

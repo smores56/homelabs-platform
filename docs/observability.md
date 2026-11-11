@@ -44,10 +44,18 @@ runs in this repository's CI.
 Loki runs with `auth_enabled: true`, so every read and write must name a tenant.
 Two tenants exist, created implicitly on first use:
 
-| Tenant | Written by | Content |
-| --- | --- | --- |
-| `raw` | Vector → Loki directly (`tenant_id: raw`) | full container log line for every non-data namespace |
-| `data` | Vector → `loki-gateway` (bearer token) | allowlisted classification only |
+| Tenant | Written by | Read by | Content |
+| --- | --- | --- | --- |
+| `raw` | Vector → Loki directly (`tenant_id: raw`) | nobody today | full container log line for every non-data namespace |
+| `data` | Vector → Loki directly (`tenant_id: data`) | `loki-gateway` only (broker, digest) | allowlisted classification only |
+
+Both sinks speak Loki's own write API with an explicit `tenant_id`, because that
+is the API Vector implements; the gateway is a **read-only** proxy and 403s every
+push (`/loki/api/v1/push`), so a sink pointed at it would discard the whole data
+tenant while every freshness field still claimed success. Writes are scoped by
+network instead: `loki-ingress` accepts 3100 from the Vector pod and the gateway
+pod only, so no tenant, no broker and no Prometheus can set `X-Scope-OrgID`
+themselves (`clusters/homelab/observability/network/loki-flows.yaml`).
 
 Routing is on the **namespace** label `homelabs.dev/tier`, never a pod label: a
 namespace is where the operator sets the tier, and a pod must not be able to
@@ -77,8 +85,9 @@ in the entry header.
 
 ## Loki gateway and the broker contract
 
-`loki-gateway` is the only way into the `data` tenant. It is a stdlib Python
-proxy (`clusters/homelab/observability/loki-gateway/gateway.py`) that:
+`loki-gateway` is the only way *into* the `data` tenant for a reader. It is a
+stdlib Python proxy (`clusters/homelab/observability/loki-gateway/gateway.py`)
+that:
 
 - requires `Authorization: Bearer <token>` and compares it in constant time;
 - proxies read paths only (`/loki/api/v1/{query,query_range,labels,label/*/values,series,index/stats,patterns,format_query}`, GET and POST);
@@ -89,9 +98,9 @@ proxy (`clusters/homelab/observability/loki-gateway/gateway.py`) that:
 - refuses to start when `LOKI_GATEWAY_TOKEN` is unset (fail closed).
 
 The token is an ESO `Password` generator (`loki-gateway/eso/`), materialised as
-Secret `loki-gateway-token` (key `password`) in `observability`, consumed by both
-Vector and the gateway. It is never in git, never in CI, and never given to an
-agent.
+Secret `loki-gateway-token` (key `password`) in `observability` and read by the
+gateway only (Vector writes with a tenant header, so it needs no credential and
+mounts no Secret). It is never in git, never in CI, and never given to an agent.
 
 ### Broker logical host `loki`
 
@@ -159,14 +168,21 @@ identity. `status-exporter` is the sanctioned view:
 | `homelabs_data_status_exporter_up` | 1 while the exporter serves |
 | `homelabs_cluster_node_ready{node}` | 1 when the node's `Ready` condition is True |
 
-The identity is the narrowest shape that can answer those questions: a
-ClusterRole with `get/list/watch` on `pods`, `get/list` on `nodes` (a
-cluster-scoped read of node status only) and `get/list` on
-`deployments`/`statefulsets`, bound by **one RoleBinding per data namespace**
-(`immich`, `navidrome`, `calibre`, `graphiti`; `DATA_NAMESPACES` in the
-Deployment names the same four). A
-ClusterRoleBinding would read every namespace; there is deliberately none, and
-`tests/observability/check.sh` fails if one appears. The binding lives at
+The identity is the narrowest shape that can answer those questions, and it is
+split in two because a ClusterRoleBinding grants **every** rule of the role it
+names:
+
+| Role | Rules | Bound by | Effect |
+| --- | --- | --- | --- |
+| `observability-status-exporter` | `get/list/watch pods`, `get/list deployments,statefulsets` | one RoleBinding per data namespace (`immich`, `navidrome`, `calibre`, `graphiti`; `DATA_NAMESPACES` in the Deployment names the same four) | pods only in those four namespaces |
+| `observability-status-exporter-nodes` | `get/list nodes` | one ClusterRoleBinding (`status-exporter/clusterrolebinding.yaml`) | node status cluster-wide; `nodes` is cluster-scoped, so only a ClusterRoleBinding can grant it |
+
+Binding the workload role cluster-wide would hand `pods` out everywhere, which is
+why `nodes` lives in its own role. `tests/observability/check.sh` renders the
+tree and fails if the ClusterRoleBinding names the workload role;
+`tests/policies/check.sh --runtime` proves the outcome with `kubectl auth can-i`
+(`list nodes` yes, `get pods` in `immich` yes, `get pods` in `kube-system`,
+`observability` and `tenant-apps` no). The RoleBindings live at
 `clusters/homelab/observability/rbac-data.yaml` rather than beside the exporter
 because the exporter's sub-kustomization sets `namespace: observability`, and
 kustomize's namespace transformer would rewrite the bindings out of the data
@@ -197,8 +213,8 @@ Document shape (`schema_version` `"1"`):
 | `schema_version` | `"1"`; a reader must reject an unknown value |
 | `generated_at` | UTC `YYYY-MM-DDTHH:MM:SSZ`, the host writer's cursor |
 | `window` | Loki lookback, `15m` |
-| `source_freshness.status_exporter` | `{ok, age_seconds}`; age is the exporter's 30 s cache bound, `null` when the read failed |
-| `source_freshness.loki_gateway` | `{ok, age_seconds}`; age is 0 on a live query, `null` when it failed |
+| `source_freshness.status_exporter` | `{ok, age_seconds, stale}`; age is `generated_at` minus the exporter's own `last_scrape_timestamp_seconds` sample, `null` when the sample is missing or the exporter was unreachable; `ok` also requires `last_scrape_success == 1` and `age_seconds <= 90` |
+| `source_freshness.loki_gateway` | `{ok, age_seconds, stale}`; age is `generated_at` minus the newest stored data-tenant entry, `null` when the 15 m window held none; `stale` is that age missing or beyond the window |
 | `cluster.nodes[]` | `{name, ready}` from `homelabs_cluster_node_ready` |
 | `cluster.pods[]` | `{namespace, pod, ready, restarts}` |
 | `cluster.workloads[]` | `{namespace, kind, name, ready, restarts, images}`; restarts are summed over pods whose name starts with the workload name |
@@ -255,6 +271,27 @@ two companion `*-from-digest` ingress policies are additive to the broker-only
 ones in `observability/network/` (Kubernetes unions policies that select the
 same pod). No Service selects the pod, so nothing can dial it by name, and no
 RBAC object names its ServiceAccount.
+
+### Network
+
+The `observability` namespace is **default-deny in both directions**
+(`observability/network/default-deny.yaml`). Every flow is its own file and the
+full set is asserted by `tests/observability/check.sh`:
+
+| File | Flow |
+| --- | --- |
+| `dns-egress.yaml` | every pod → `kube-system` 53 (UDP/TCP) |
+| `loki-flows.yaml` | Vector → Loki 3100 (writes); gateway → Loki 3100 (reads); Loki ingress from exactly those two pods |
+| `prometheus-flows.yaml` | Prometheus → `observability` 8686/9090/9101 and `flux-system` 8080 (the annotated targets); Vector ingress from Prometheus 8686; exporter ingress from Prometheus 9101 |
+| `kubernetes-api-egress.yaml` | Vector, Prometheus, exporter → k3s service range `10.43.0.0/16` 443 |
+| `loki-gateway-from-broker.yaml`, `broker-to-loki-gateway.yaml` | broker → gateway 3100 (both directions) |
+| `status-exporter-from-broker.yaml`, `broker-to-status-exporter.yaml` | broker → exporter 9101 (both directions) |
+| digest stage | digest → gateway/exporter, and the two `*-from-digest` ingress policies |
+
+Nothing in the namespace has public egress, and no rule omits its destination.
+Prometheus selects targets by annotation, which NetworkPolicy cannot express, so
+its egress is a namespace+port allowlist: a new annotated workload means adding
+its namespace and port; an unlisted one fails closed as a down target.
 
 The only mounted Secret is `loki-gateway-token` (key `password`, projected as
 the file `token`). It is the ESO `Password` generator's value, scoped by the
@@ -314,17 +351,19 @@ nix run nixpkgs#kubeconform -- -strict -ignore-missing-schemas /tmp/manifests/*.
 Recorded 2026-11-11 (agent VM, Vector 0.61.0, Loki 3.7.9, Python 3.13, k3s
 schema v1.34):
 
-- `tests/observability/check.sh` → `observability: 29 passed, 0 failed`
-  (6 `vector test` cases, 33 Python unit tests);
+- `tests/observability/check.sh` → `observability: 51 passed, 0 failed`
+  (6 `vector test` cases, 35 Python unit tests, the rendered default-deny and
+  allowlist set from `observability/network/`);
 - `vector validate` and `loki -verify-config` both accept the shipped configs;
 - `promtool check config` accepts the Prometheus config;
 - `tests/policies/check.sh` → `static: 361 passed, 0 failed`;
-- `tests/policies/check.sh --runtime` → not re-run this wave; the runtime half
-  tracks the static stack plus the fixture/RBAC rows and needs the throwaway
-  API server (last recorded 457 at the previous stack);
+- `tests/policies/check.sh --runtime` → `static+runtime: 474 passed, 0 failed`
+  (throwaway etcd + kube-apiserver, kube-apiserver v1.36.2), including the
+  exporter `can-i` probes: `list nodes` yes, `get pods` in `immich` yes,
+  `get pods` in `kube-system`/`observability`/`tenant-apps` no;
 - `tests/digest/check.sh` → `digest: 63 passed, 0 failed`;
 - `kustomize build` over every `clusters/**` tree and `kubeconform -strict`
-  → `387 resources found ... Valid: 309, Invalid: 0` (78 CRDs skipped).
+  → `409 resources found ... Valid: 331, Invalid: 0` (78 CRDs skipped).
 
 CI runs the `observability` job with Vector installed from the release tarball
 whose SHA-256 is pinned in `scripts/install-ci-tools.sh`.
@@ -334,9 +373,10 @@ whose SHA-256 is pinned in `scripts/install-ci-tools.sh`.
 | Not covered statically | Why | Where |
 | --- | --- | --- |
 | `kubernetes_logs` reading `/var/log/pods` and resolving pod/namespace metadata | needs a kubelet and the node's log directory | first cluster bring-up: `kubectl -n observability logs ds/vector` |
-| Loki accepting a batch under each tenant | needs the server | `curl` with `X-Scope-OrgID: raw` and the gateway with the token |
+| Loki accepting a batch under each tenant | needs the server | `curl` a push with `X-Scope-OrgID: raw` and one with `X-Scope-OrgID: data`; then a read through the gateway with the token |
+| The Vector → Loki data-tenant write (the sink names `tenant_id: data` itself) | needs Loki and a log-producing pod | `kubectl -n observability logs ds/vector`, then `{tier="data"}` through the gateway; `source_freshness.loki_gateway.age_seconds` must be a real number |
 | The planted-line end-to-end check | needs a running Immich | write the fixture line through a data app, then query `{tier="data"}` and confirm no filename/album |
-| NetworkPolicy enforcement on the gateway path | needs a CNI | broker pod → gateway succeeds on 3100; tenant-apps pod → gateway fails |
+| NetworkPolicy enforcement (default-deny, gateway 3100, Loki push 3100) | needs a CNI | broker pod → gateway succeeds on 3100; tenant-apps pod → gateway and → Loki fail; only Vector may push to Loki |
 | ESO materialising `loki-gateway-token` | needs the ESO operator | `docs/manual-steps.md` step 9 |
 | Image digest pinning | needs a registry lookup | `docs/manual-steps.md` step 10 |
 | PVC binding on `local-path` | needs the k3s provisioner | `kubectl -n observability get pvc` |

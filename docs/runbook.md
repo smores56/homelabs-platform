@@ -94,6 +94,7 @@ gh api -X PUT repos/smores56/homelabs-platform/branches/main/protection --input 
       "action SHA pins",
       "CODEOWNERS coverage",
       "policy checks",
+      "policy admission runtime",
       "fork-pr-secret-boundary"
     ]
   },
@@ -133,7 +134,7 @@ gh api repos/smores56/homelabs-platform/branches/main/protection --jq \
 ```
 
 Expected: `require_code_owner_reviews == true`, `linear == true`,
-`force_push == false`, `deletions == false`, and the nine contexts above.
+`force_push == false`, `deletions == false`, and the ten contexts above.
 
 ## Repo settings (blocked: 403)
 
@@ -304,8 +305,8 @@ kubectl -n observability get externalsecret
 Expected: `loki-gateway-token` in `observability` materialises from its
 `Password` generator (`refreshInterval: "0"`, so it mints once and stays stable
 until the target Secret is deleted). `loki-gateway-token` unblocks the Loki
-gateway and the Vector data sink; until then both pods stay unstarted on purpose
-(`docs/observability.md`). The broker's `broker-credentials` Secret is the SOPS
+gateway; until then that pod stays unstarted on purpose (`docs/observability.md`).
+Vector holds no token: both of its sinks write their tenant header directly. The broker's `broker-credentials` Secret is the SOPS
 contract from `docs/manual-steps.md` step 10, not an ESO generator.
 
 ### 5. Confirm the policy stack on the live cluster
@@ -416,10 +417,17 @@ ls /var/lib/data/cluster-digest | wc -l        # latest.json + at most 96
 ### Required CI contexts
 
 `.github/workflows/ci.yml` now includes the `policy checks` job. The
-branch-protection payload in "Branch protection on `main`" must list nine
+branch-protection payload in "Branch protection on `main`" must list ten
 contexts once the owner applies it: `kustomize build`, `kubeconform`,
 `yamllint`, `tofu fmt and validate`, `shellcheck`, `action SHA pins`,
-`CODEOWNERS coverage`, `policy checks`, `fork-pr-secret-boundary`.
+`CODEOWNERS coverage`, `policy checks`, `policy admission runtime`,
+`fork-pr-secret-boundary`.
+
+`policy admission runtime` boots etcd and kube-apiserver
+(`tests/policies/apiserver.sh`) and runs `tests/policies/check.sh --runtime`:
+every fixture is applied against real admission and every `rbac.tsv` row is a
+real `kubectl auth can-i` call. A static check cannot see a vacuous CEL
+expression; this job can.
 
 ### CI evidence for the platform stack
 

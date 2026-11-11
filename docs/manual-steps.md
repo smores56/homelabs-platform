@@ -197,8 +197,9 @@ kubectl -n broker get secret broker-credentials
 
 Expected: `loki-gateway-token` is generated and owned by its ExternalSecret;
 `broker-credentials` is the SOPS contract Secret from step 10. `loki-gateway-token`
-is what unblocks the Loki gateway and Vector's data sink; until it exists both
-stay unstarted (fail closed). The agent holds no broker token, so there is no
+is what unblocks the Loki gateway (its only reader besides the broker); Vector no
+longer holds it, because both sinks write their tenant directly. A missing token
+leaves the gateway unstarted (fail closed) and the broker's `loki` host dead. The agent holds no broker token, so there is no
 `nanobot-broker-token` to generate. Rotate a generated token by deleting its
 Secret and letting the `Password` generator mint a new one.
 
@@ -228,6 +229,14 @@ to `repo@sha256:<digest>` (keep the tag when the registry allows
 `tests/observability/check.sh`, and commit. The image-pin assertion in
 `tests/observability/check.sh` accepts either a version tag or a `sha256:` digest,
 so a half-finished sweep still fails CI rather than shipping `latest`.
+
+`alpine/git` is the one image already pinned, because the mirror job is the only
+place a tag alone would ship: `docker.io/alpine/git:2.54.0` resolves to the
+manifest list `sha256:6a1fdb962814ca11508ca8d1bab94375b5b7ac4e4a9a40981c29fc32c02f095d`
+(recorded 2026-11-11; verify with `crane digest docker.io/alpine/git:2.54.0`
+before trusting it). The nanobot image is pinned the same way in the
+`homelabs-apps` repository; its placeholder digest is a deliberate CI failure
+until that image is published and pinned (its `docs/manual-steps.md`, step 3).
 
 ## 10. Create the broker credential Secret
 
@@ -287,7 +296,6 @@ delete-and-roll, not a hot reload:
 kubectl -n observability delete secret loki-gateway-token
 # the ExternalSecret recreates it from the Password generator
 kubectl -n observability rollout restart deployment/loki-gateway
-kubectl -n observability rollout restart daemonset/vector
 ```
 
 Then repeat step 10 so the broker holds the new value, and query the `data`
@@ -641,10 +649,15 @@ removing them is `tofu state rm` first, then the dashboard.
    shows `CN = kanbei.sammohr.dev` from the ACME CA, not a Cloudflare edge
    certificate.
 
-4. Mint a service token only if an unattended client needs one (Zero Trust →
-   Access → Service Auth). The `service auth` policy is account-wide, so any
-   valid token is accepted; store the client id/secret outside the cluster and
-   delete a leaked token there. The owner uses the WARP identity, not a token.
+4. The application allows the owner email (and thus the owner's enrolled WARP
+   identity) and **nothing else**. It deliberately does not attach the
+   account-wide `Service Auth` policy: that decision accepts any valid service
+   token in the account, so the agent's own token would open Kanbei. Do not
+   attach it. An unattended client that must reach Kanbei needs its own Access
+   decision plus a reviewed terraform change, and the state-rm/import order in
+   step 3 applies to any policy edit on this app. The owner uses the WARP
+   identity, not a token. `tests/tofu/check.sh` fails if a second policy (or a
+   bypass) appears on the Kanbei application.
 
 ## 22. Create the read-only mirror PAT and run `github-backup`
 
@@ -761,8 +774,8 @@ inbox. The cluster holds no age key.
    ```
 
 4. Read the document on the host. `jq` shows the schema version, a fresh UTC
-   `generated_at`, both freshness entries `ok: true`, and an event count at or
-   below 400; `wc -c` must stay at or below 65536:
+   `generated_at`, and an event count at or below 400; `wc -c` must stay at or
+   below 65536. Both freshness entries carry a *measured* age, not a constant:
 
    ```sh
    jq -r '.schema_version, .generated_at, .source_freshness,
@@ -771,10 +784,20 @@ inbox. The cluster holds no age key.
    ls /var/lib/data/cluster-digest | wc -l    # latest.json + at most 96 snapshots
    ```
 
+   - `status_exporter.age_seconds` is `generated_at` minus the exporter's
+     `last_scrape_timestamp_seconds`, so it is under 90 s when the exporter is
+     refreshing. `ok: false` means the exporter was unreachable or its last
+     scrape failed, and the job exits 1.
+   - `loki_gateway.age_seconds` is `generated_at` minus the newest stored
+     data-tenant entry. `age_seconds: null` with `stale: true` means the 15 m
+     window held no data-tenant line at all: the Vector write path is broken
+     (or nothing logged), and the job logs `digest: stale source loki_gateway`
+     on stderr while still writing the document. Do not read an empty
+     `nanobot_activity` as a quiet host unless `stale` is false.
+
    The schedule is `*/15 * * * *` UTC, so `generated_at` should be no more than
-   15 minutes old at any time; a stale timestamp with `ok: false` means the
-   exporter or gateway was unreachable and the host writer should not be
-   expected to produce a new batch.
+   15 minutes old at any time. A stale `generated_at` means the CronJob is not
+   running; a fresh `generated_at` with `ok: false` means a source is down.
 
 5. Confirm the host writer's half. It watches only `latest.json` (snapshots are
    local debugging history), uses `generated_at` as a cursor so a restart does

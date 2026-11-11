@@ -137,7 +137,7 @@ apply without a kubelet in order, then drives every case with
 - 2 live attempts over the API (create a Secret, create a Kustomization), both
   `forbidden`.
 
-Result: `static+runtime: 348 passed, 0 failed`.
+Result: `static+runtime: 474 passed, 0 failed`.
 
 Two deliberate deviations from a production cluster, both so a failure is
 attributable:
@@ -166,9 +166,12 @@ attributable:
 ### Runtime result
 
 Executed on 2026-11-11 in the agent VM against the ephemeral control plane:
-`tests/policies/check.sh --runtime` → `static+runtime: 348 passed, 0 failed`.
-The same checker runs without `--runtime` in CI, so a regression in any static
-assertion fails the pull request that introduces it.
+`tests/policies/check.sh --runtime` → `static+runtime: 474 passed, 0 failed`.
+CI runs both halves as separate required jobs: `policy checks` (static, no
+cluster) and `policy admission runtime` (boots etcd + kube-apiserver with
+`tests/policies/apiserver.sh`, then drives every fixture and `rbac.tsv` row).
+A vacuous CEL expression or a wrong RBAC grant therefore fails the pull request
+that introduces it, not the next manual run.
 
 ## Data-tenant logs carry classification only
 
@@ -180,19 +183,20 @@ ships raw; and the `data` tenant is unreachable without the gateway token.
 ### What runs automatically (CI job `observability pipeline`)
 
 `tests/observability/check.sh` runs on every push and pull request with no
-cluster and no credentials. 29 assertions (recorded run, 2026-11-11):
+cluster and no credentials. 51 assertions (recorded run, 2026-11-11):
 
 | Family | Assertions |
 | --- | --- |
 | `vector test` on `tests/vector/vector.yaml`: planted fixture loses body, text log keeps only a level token, JSON without classification keeps metadata only, namespace-label routing for data/tenant/unlabelled | 6 cases in 1 assertion |
 | `vector validate --no-environment` on the shipped config, with the VRL staged where the container mounts it | 1 |
-| Shipped-vs-test drift: `tenant_route` source, both filter conditions, both `file:` paths, the `vector-vrl` generator entry | 5 |
+| Shipped-vs-test drift: `tenant_route` source, both filter conditions, both `file:` paths, the `vector-vrl` generator entry | 6 |
 | The planted fixture really carries `file`, `albumName`, `originalPath`, and the unit-test input parses to the same JSON | 2 |
-| Tenant separation: no `tenant_id` on the data sink, gateway endpoint, bearer auth, raw tenant direct, Loki `auth_enabled`, 168h retention, telemetry off | 7 |
-| Token contract: gateway and Vector read `loki-gateway-token`, ExternalSecret targets it, generator kind is `Password` | 4 |
-| Status exporter RBAC: resources and verbs exact, **no ClusterRoleBinding**, binding namespaced to `data`, subject in `observability` | 5 |
+| Tenant separation and Loki: `tenant_id: raw` and `tenant_id: data`, the data sink targets Loki directly (never the read-only gateway), no gateway token or Secret on Vector, `tier=data` label, `auth_enabled`, 168h retention, telemetry off | 8 |
+| Token contract: the gateway reads `loki-gateway-token`, ExternalSecret targets it, generator kind is `Password`, Vector holds no token and mounts no Secret | 5 |
+| Status exporter RBAC: workload ClusterRole (pods + apps) and nodes-only ClusterRole exact, one ClusterRoleBinding naming the nodes role, RoleBindings per data namespace, subject `observability`, and the rendered tree's binding set | 11 |
+| Network allowlists: default-deny both directions, exact policy set, DNS to `kube-system`, Loki ingress from Vector + gateway, Vector egress to Loki, gateway egress to Loki, Prometheus scrape ports and Flux controllers, broker paths kept, API egress range, no public egress, no destination-less rule | 14 |
 | Postgres fragment sets `terse` + `panic`; every observability image is version/digest pinned | 2 |
-| Python unit tests for `exporter.py` and `gateway.py` | 33 tests in 1 assertion |
+| Python unit tests for `exporter.py` and `gateway.py` (including the cache timestamp that makes freshness real) | 35 tests in 1 assertion |
 
 The deny-by-construction part is in the VRL itself: the event is rebuilt from an
 allowlist, so a parser failure or an unknown log format cannot fall back to
@@ -203,16 +207,20 @@ shipping the line. The negative assertions on the planted fixture are
 Two properties are asserted statically rather than exercised: the routing
 comparison (unit tests call the same `tenant_route` source the DaemonSet ships,
 and the drift check fails if the two strings differ) and the gateway's tenant
-header (unit tests prove the client's `X-Scope-OrgID` is replaced).
+header (unit tests prove the client's `X-Scope-OrgID` is replaced). The Vector
+sink and the gateway are checked to agree on the direction of traffic: Vector
+writes Loki's push API with `tenant_id: data`, and the gateway — which 403s
+`/loki/api/v1/push` — is only ever a read path, so no test can pass with a sink
+that the gateway would reject.
 
 ### What cannot run here
 
 No kubelet, so `kubernetes_logs` never reads `/var/log/pods`; no Loki, so no
 batch is actually accepted; no Immich, so the line is planted through a Vector
-unit test rather than through a container log; no CNI, so the broker→gateway
-NetworkPolicy is only shape-checked; no ESO, so `loki-gateway-token` does not
-exist and both readers stay unstarted (fail closed) until `docs/manual-steps.md`
-step 9.
+unit test rather than through a container log; no CNI, so the observability
+default-deny and the broker/gateway/Loki allowlists are only shape-checked; no
+ESO, so `loki-gateway-token` does not exist and the gateway stays unstarted
+(fail closed) until `docs/manual-steps.md` step 9.
 
 ### Manual runtime test
 
@@ -281,7 +289,7 @@ Static, in `tests/policies/check.sh` (no cluster, no credentials):
 
 Runtime, `tests/policies/check.sh --runtime` (throwaway kube-apiserver): the new
 fixtures are admitted/denied by the real API server, including the two new deny
-cases. Recorded run 2026-11-11: `static+runtime: 348 passed, 0 failed`.
+cases. Recorded run 2026-11-11: `static+runtime: 474 passed, 0 failed`.
 
 ### What cannot run here
 
@@ -447,7 +455,7 @@ the previous table in this document describes the #578 families; #582 adds:
 
 ### What runs on demand (runtime, real API server)
 
-`tests/policies/check.sh --runtime` — `static+runtime: 428 passed, 0 failed`
+`tests/policies/check.sh --runtime` — `static+runtime: 474 passed, 0 failed`
 (recorded run, 2026-11-11, kube-apiserver v1.36.2, etcd 3.6.13). The new
 fixtures are admitted/denied by the real API server:
 
@@ -504,7 +512,7 @@ cluster-kubectl -n broker logs deploy/broker | tail -5
 
 ### Runtime result
 
-Static and API-server halves executed on 2026-11-11 (`329` and `428` passing);
+Static and API-server halves executed on 2026-11-11 (`361` and `474` passing);
 the unit suite is green in CI. The live half needs the cluster, the broker
 image and the SOPS credentials, and is recorded here when the coordinator runs
 it.

@@ -22,6 +22,8 @@
 ```sh
 scripts/kustomize-build-all.sh          # every clusters/** kustomization renders
 tests/policies/check.sh                 # static policy, RBAC, network, broker assertions
+tests/policies/check.sh --runtime       # real admission + can-i probes on a throwaway
+                                        # apiserver (CI job `policy admission runtime`)
 python3 -m unittest discover -s apps/broker/tests -t apps/broker   # broker unit tests
 tests/tofu/check.sh                     # Cloudflare config shape, no credentials
 tests/backup/check.sh                   # mirror script args/URLs, no network
@@ -29,7 +31,7 @@ tests/observability/check.sh            # vector unit tests, config drift, expor
 tests/digest/check.sh                   # digest builder fixtures, egress and reverse-path contract
 nix run nixpkgs#yamllint -- .
 nix run nixpkgs#shellcheck -- scripts/*.sh tests/policies/*.sh tests/tofu/*.sh \
-  tests/access/*.sh tests/backup/*.sh tests/digest/*.sh \
+  tests/access/*.sh tests/backup/*.sh tests/digest/*.sh tests/observability/*.sh \
   clusters/homelab/flux-system/bootstrap.sh \
   clusters/homelab/platform/backup/*.sh
 scripts/check-action-pins.sh
