@@ -325,3 +325,16 @@ branch-protection payload in "Branch protection on `main`" must list nine
 contexts once the owner applies it: `kustomize build`, `kubeconform`,
 `yamllint`, `tofu fmt and validate`, `shellcheck`, `action SHA pins`,
 `CODEOWNERS coverage`, `policy checks`, `fork-pr-secret-boundary`.
+
+### CI evidence for the platform stack
+
+Push `bafa1f4` (2026-11-11), run
+[43028659181](https://github.com/smores56/homelabs-platform/actions/runs/43028659181):
+`kustomize build`, `kubeconform` (rendered manifests plus every policy fixture),
+`yamllint`, `tofu fmt and validate`, `shellcheck` (now covering
+`tests/policies/*.sh` and `bootstrap.sh`), `action SHA pins`,
+`CODEOWNERS coverage` and `policy checks` all success;
+`fork-pr-secret-boundary` skipped on push. `tofu-apply` still fails by design:
+`CLOUDFLARE_API_TOKEN` is absent until `docs/manual-steps.md` step 2 is done. The
+earlier run on `ac6556b` shows `cancelled` because `concurrency.cancel-in-progress`
+replaced it with the doc-fix push, not because a job failed.
