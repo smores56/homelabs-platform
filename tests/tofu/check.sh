@@ -136,7 +136,15 @@ if [[ -z $kanbei_app ]]; then
 else
   ok "kanbei Access application exists"
   if grep -q 'cloudflare_zero_trust_access_policy.email.id' <<<"$kanbei_app"; then ok "kanbei allows the owner email"; else bad "kanbei allows the owner email"; fi
-  if grep -q 'cloudflare_zero_trust_access_policy.service_auth.id' <<<"$kanbei_app"; then ok "kanbei accepts a service token"; else bad "kanbei accepts a service token"; fi
+  # The account service-auth decision accepts any valid token in the account
+  # (the agent's included), so the app must attach exactly the owner policy.
+  eq "$(grep -c 'cloudflare_zero_trust_access_policy\.' <<<"$kanbei_app")" "1" \
+    "kanbei attaches exactly one Access policy"
+  if grep -q 'cloudflare_zero_trust_access_policy.service_auth.id' <<<"$kanbei_app"; then
+    bad "kanbei has no service-token policy"
+  else
+    ok "kanbei has no service-token policy"
+  fi
   if grep -q 'cloudflare_zero_trust_access_policy.bypass.id' <<<"$kanbei_app"; then bad "kanbei has no bypass policy"; else ok "kanbei has no bypass policy"; fi
   if grep -qF 'prevent_destroy = true' <<<"$kanbei_app"; then ok "kanbei application is protected from destroy"; else bad "kanbei application is protected from destroy"; fi
   if grep -qF 'allow_authenticate_via_warp = true' <<<"$kanbei_app"; then ok "kanbei admits enrolled WARP devices"; else bad "kanbei admits enrolled WARP devices"; fi

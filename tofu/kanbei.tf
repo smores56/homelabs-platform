@@ -11,13 +11,16 @@
 #     and Access denies it first;
 #   - no tunnel ingress rule: the host tunnel's ingress stays in nix-config and
 #     is what keeps a protected name from gaining an origin path;
-#   - Access still gates the route, with the owner email as the human fallback
-#     and the account service-token policy for an unattended client.
+#   - Access still gates the route, but with the owner email only. The account
+#     `service_auth` policy is deliberately NOT attached: it accepts *any* valid
+#     service token in the account, including the agent's, which would let a
+#     machine identity open Kanbei behind the owner's back.
 #
 # The fragment is the one in nix-config `docs/kanbei-access.md`, adapted to the
 # provider v5 `destinations` form used by the rest of access.tf. No token is
-# created here: mint a service token in the dashboard when an unattended client
-# needs one (docs/manual-steps.md, "Kanbei private route and service token").
+# created here: an unattended client needs its own reviewed policy (and ideally
+# its own application), not the account-wide service-auth decision; see
+# docs/manual-steps.md, "Kanbei private route and service token".
 resource "cloudflare_zero_trust_network_hostname_route" "kanbei" {
   account_id = var.account_id
   hostname   = "kanbei.${var.domain}"
@@ -50,14 +53,12 @@ resource "cloudflare_zero_trust_access_application" "kanbei" {
     uri  = "kanbei.${var.domain}"
   }]
 
+  # Exactly one policy. `tests/tofu/check.sh` asserts the count, so adding the
+  # account-wide service-auth decision back here (or a bypass) fails CI.
   policies = [
     {
       id         = cloudflare_zero_trust_access_policy.email.id
       precedence = 1
-    },
-    {
-      id         = cloudflare_zero_trust_access_policy.service_auth.id
-      precedence = 2
     },
   ]
 
