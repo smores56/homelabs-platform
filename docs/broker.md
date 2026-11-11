@@ -200,11 +200,10 @@ agent.sammohr.dev --Access--> cluster tunnel --HTTP--> nanobot.tenant-apps.svc:8
 
 ```hcl
 # 1. Route the hostname at the cluster connector. tofu/dns.tf already creates a
-#    proxied CNAME per entry, and a specific record wins over *.sammohr.dev.
-#    Supplied as TF_VAR_cluster_hosts at apply time:
-variable "cluster_hosts" {
-  default = ["agent"] # plus each data app at its cutover
-}
+#    proxied CNAME per cluster_hosts entry, and a specific record wins over
+#    *.sammohr.dev. Set the existing variable at apply time (no new declaration):
+#      export TF_VAR_cluster_hosts='["agent"]'
+#    Add each data app to the same list at its own cutover.
 
 # 2. The tunnel's public hostname. If T7 keeps the cluster tunnel
 #    dashboard-managed, add this ingress entry in the dashboard instead of this
