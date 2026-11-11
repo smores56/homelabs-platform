@@ -20,7 +20,9 @@ changes by pull request from a fork, so no PR workflow can read a secret.
 | `clusters/homelab/observability/` | Prometheus, Loki, Vector, status exporter |
 | `clusters/homelab/broker/` | Egress broker for agent traffic |
 | `tests/policies/` | Static + runtime policy checks, fixtures, expectation tables |
-| `tofu/` | Cloudflare OpenTofu (provider v5) |
+| `tests/tofu/` | Static assertions on the Cloudflare config (`tests/tofu/check.sh`) |
+| `tests/access/` | Live Access default-deny probe (`tests/access/check.sh`, skips without a token) |
+| `tofu/` | Cloudflare OpenTofu (provider v5), Access default-deny, CAA (`docs/cloudflare.md`) |
 | `scripts/` | CI helpers, shellchecked |
 | `docs/` | Flux, tenancy, observability, runbook, negative tests, manual steps |
 
@@ -34,6 +36,8 @@ scripts/check-action-pins.sh
 scripts/check-pr-secret-boundary.sh
 scripts/check-codeowners.sh
 tests/policies/check.sh                  # static policy, RBAC and network checks
+tests/tofu/check.sh                      # Cloudflare config shape, no credentials
+tests/access/check.sh                    # live Access deny, skips without a token
 tests/observability/check.sh             # vector unit tests, config lint, exporter tests
 ```
 

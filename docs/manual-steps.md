@@ -65,11 +65,18 @@ Create Custom Token, then store it in the password manager and in the
 environment secret from step 2.
 
 - Permissions (least privilege for `tofu/`):
-  - Account → **Access: Apps and Policies: Edit**
+  - Account → **Access: Apps and Policies: Edit** (applications, policies,
+    bypass and service-auth decisions)
   - Account → **Access: Organizations, Identity Providers, and Groups: Read**
-  - Account → **Zero Trust: Edit** (network hostname routes)
-  - Zone → **DNS: Edit** (CAA record)
+  - Account → **Cloudflare Tunnel: Edit** (the cluster tunnel's hostname routes)
+  - Account → **Cloudflare One Networks: Edit** (same routes)
+  - Account → **Cloudflare Pages: Edit** (the recovery project and its domain)
+  - Account → **Workers R2 Storage: Edit** (the bucket CORS policy the recovery
+    page needs)
+  - Account → **Notifications: Edit** (tunnel health, service-token expiry)
+  - Zone → **DNS: Edit** (records, wildcard, CAA)
   - Zone → **Zone: Read** (zone lookup)
+  - Zone → **Zone Rulesets: Edit** (the public-app rate-limit ruleset)
 - Account resources: Include → the owner's account only.
 - Zone resources: Include → Specific zone → `sammohr.dev`.
 - Client IP filtering: leave unset. GitHub-hosted runners have no stable
@@ -256,8 +263,9 @@ Secret that the operator creates with `sops`. Same rule as the host's
 `/run/secrets`: ciphertext lives in the operator's secret store, plaintext only
 in the API server and the pod.
 
-Create the cluster tunnel, or take its token from the T7 work
-(`smores56/sdlc#580` depends on it), and write both files encrypted with the same
+Create the cluster tunnel (step 15), or take its token from the T7 work
+(`smores56/sdlc#581`; `smores56/sdlc#580` depends on it), and write both files
+encrypted with the same
 age key the host secrets use:
 
 ```sh
@@ -294,10 +302,12 @@ restore.
 Order, per-app checks and rollback are in `docs/data-migration.md`. Before the
 first cutover:
 
-1. Install the cluster tunnel's Cloudflare objects (T7): the tunnel itself, the
-   four proxied CNAMEs (`immich`, `music`, `calibre`, `memory`.`sammohr.dev`),
-   and the Access policies. The host tunnel keeps `ssh`, `llm`, `chat`, `agent`
-   and `memory` untouched.
+1. Install the cluster tunnel's Cloudflare objects (T7,
+   `smores56/sdlc#581`): the tunnel itself (step 15), then its DNS and Access
+   objects from `tofu/` by adding the hostname to `cluster_hosts` and applying.
+   The host tunnel keeps `ssh`, `agent`, `memory` and the Kanbei private route;
+   `llm` and `chat` are retired by step 17. Until a hostname's cutover the
+   wildcard record keeps it resolving to the host.
 2. Confirm the storage contract bound:
 
    ```sh
@@ -317,3 +327,151 @@ first cutover:
    has served from the cluster for a week; then enable
    `clusterDataApps.enable` in nix-config (`docs/kanbei-split.md` in that
    repository) and, after that has run, delete the modules.
+
+## 14. Move the Cloudflare OpenTofu state
+
+The config moved from `nix-config/tofu/` to `tofu/` here (SDLC #581) with the
+resource addresses unchanged, so the state file carries over rather than being
+re-imported. State is never committed.
+
+```sh
+# on smortress, as the operator
+cd ~/src/homelabs-platform
+sudo cp /var/lib/cloudflare-tofu/terraform.tfstate tofu/terraform.tfstate
+sudo chown "$(id -u):$(id -g)" tofu/terraform.tfstate
+```
+
+Export the variables from `docs/cloudflare.md` ("Applying"), then:
+
+```sh
+tofu -chdir=tofu init -input=false
+tofu -chdir=tofu plan -no-color
+```
+
+Expected: no replacements. The diff is the new wildcard application, the four
+public bypass applications, the two CAA records, and an in-place update of the
+four older applications from `domain` to `destinations`. Anything else — in
+particular `-/+` on an Access application or the wildcard DNS record — means the
+state does not match; stop before applying and compare IDs.
+
+```sh
+tofu -chdir=tofu apply -no-color
+```
+
+Then keep the state file with the rest of the operator credentials and delete
+the old copy once a second plan is clean:
+
+```sh
+sudo rm -rf /var/lib/cloudflare-tofu
+```
+
+The nix-config flake apps `cloudflare-plan` / `cloudflare-apply` are removed with
+this migration; do not run them after the move, because they copy the old `.tf`
+files over the state.
+
+Adopting an account whose state was lost needs imports instead: `<zone_id>/<record_id>`
+for records and `accounts/<account_id>/<app_id>` for applications, listed from
+`/zones/<zone>/dns_records` and `/accounts/<account>/access/apps`.
+
+## 15. Create the cluster tunnel
+
+The k3s connector (`clusters/homelab/ingress/`) has no token and stays
+unstarted until this exists.
+
+1. Zero Trust → Networks → Tunnels → **Create a tunnel** → `cloudflared`, name
+   `cluster`. Add **no** public hostname: DNS and Access come from `tofu/`.
+2. Copy the token into the SOPS contract `cloudflare-tunnel-token-sops` in the
+   `ingress` namespace (step 12). The token never enters git.
+3. Record the tunnel UUID and export it for the apply:
+
+```sh
+export TF_VAR_cluster_tunnel_id=<tunnel UUID>
+```
+
+4. At each app's cutover, add the hostname and apply:
+
+```sh
+export TF_VAR_cluster_hosts='["immich"]'
+tofu -chdir=tofu apply -no-color
+dig +short immich.sammohr.dev
+```
+
+Expected: the CNAME now points at `<cluster-uuid>.cfargotunnel.com` instead of
+the host tunnel, and `kubectl -n ingress get deploy cloudflared` shows
+two ready replicas. Removing the name from `cluster_hosts` flips it back to the
+host tunnel and is the rollback.
+
+## 16. Capture the ACME account id for the CAA pin
+
+`tofu/` pins `issue` and `issuewild` to the ACME account Kanbei's in-VM CSR
+client registers with. The account URL the client prints on first registration
+ends in `/acme/acct/<id>`:
+
+```
+Account URL: https://acme-v02.api.letsencrypt.org/acme/acct/<id>
+```
+
+Read it from that client's first-registration output or its persisted state;
+registering the same account key again returns the same URL, so a lost log
+costs a re-registration, not a new account. That trailing number is the input:
+
+```sh
+export TF_VAR_acme_account_id=<id>
+tofu -chdir=tofu plan -no-color   # two CAA records to add
+tofu -chdir=tofu apply -no-color
+```
+
+Then confirm what the world sees:
+
+```sh
+dig +short CAA sammohr.dev
+```
+
+Expected: the two pinned records (`issue` and `issuewild`, each with
+`accounturi=https://acme-v02.api.letsencrypt.org/acme/acct/<id>`) **and** the
+records Cloudflare appends for Universal SSL (`pki.goog`, `letsencrypt.org`,
+`ssl.com`, `sectigo.com`). Those are added because the zone now has CAA records
+and are not visible in the dashboard; `docs/cloudflare.md` explains why the pin
+narrows but does not lock down issuance.
+
+## 17. Retire `llm.sammohr.dev` and `chat.sammohr.dev`
+
+Both applications carried `prevent_destroy`, so dropping the block cannot delete
+them. Remove the state entry first, then the object:
+
+```sh
+tofu -chdir=tofu state rm cloudflare_zero_trust_access_application.llm
+tofu -chdir=tofu state rm cloudflare_zero_trust_access_application.chat
+```
+
+Then in Zero Trust → Access → Applications delete the `llm` and `chat`
+applications by hand, and confirm the state holds neither:
+
+```sh
+tofu -chdir=tofu state list | grep -E 'access_application\.(llm|chat)$' || echo "retired"
+```
+
+`webProxy.services` in nix-config loses both names in the change that removes
+`tofu/`; until the host rebuild runs, the tunnel ingress still lists them, but
+the wildcard application denies the hostnames, so the origin is unreachable:
+
+```sh
+curl -sS -o /dev/null -D - https://llm.sammohr.dev/ | head -3
+```
+
+Expected: `HTTP/2 302` with a `location:` on `*.cloudflareaccess.com`, never a
+response from the host.
+
+## 18. Prove the Access default-deny
+
+The static half runs in CI; this is the live half, and it needs the token:
+
+```sh
+CLOUDFLARE_API_TOKEN=... tests/access/check.sh
+```
+
+Expected output is in `docs/cloudflare.md` ("Verifying"). The script asks the
+API which application matches a fresh hostname (it must be the wildcard) and
+then makes a real request: a `302` to the Access login is a pass, an answer from
+the origin is a failure. Re-run it after any Access change; run it with
+`ACCESS_PROBE_HOST=name.sammohr.dev` to check a specific hostname instead.

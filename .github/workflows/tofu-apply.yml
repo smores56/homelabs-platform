@@ -36,5 +36,12 @@ jobs:
             echo "::error::CLOUDFLARE_API_TOKEN absent; cannot apply"
             exit 1
           fi
+          # State is operator-owned and never in git (docs/cloudflare.md). A
+          # runner with an empty local state would try to create every object
+          # that already exists, so refuse until a backend block lands.
+          if ! grep -qE '^[[:space:]]*backend[[:space:]]+"' tofu/*.tf; then
+            echo "::error::no remote state backend in tofu/; apply manually (docs/cloudflare.md, 'Applying')"
+            exit 1
+          fi
           tofu -chdir=tofu init -input=false
           tofu -chdir=tofu apply -input=false -auto-approve -no-color

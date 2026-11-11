@@ -124,7 +124,7 @@ be applied at any time (a missing share just leaves the pod unstarted).
    tree itself does not move — the `music` share already is the library).
 4. **Calibre.** The library does not move. Stop the host's `calibre-server`
    user unit (`systemctl --user stop calibre-server`), set the Calibre-Web admin
-   password on first login (`docs/manual-steps.md` step 14), and repoint the
+   password on first login (`docs/manual-steps.md` step 13), and repoint the
    agent-facing path (calibre-server's content server → Calibre-Web's `/opds`).
    That repoint touches the broker's `calibre` logical host and the agent
    `calibredb` wrapper, both outside this repository: live-gated.
@@ -145,8 +145,8 @@ host path until the copy step moved it, and a `mv` is reversed by moving it back
 Two tunnels, two tokens, no shared state:
 
 - **Host tunnel** (`modules/nixos/web-proxy.nix`, tunnel `smortress`): `ssh`,
-  `llm`, `chat`, `agent`, `memory` and every Access policy stay exactly as they
-  are. Human-owned, unchanged by this work.
+  `agent`, `memory`, the Kanbei private route and every Access policy stay
+  human-owned. `llm` and `chat` are retired (`docs/manual-steps.md` step 17).
 - **Cluster tunnel** (`clusters/homelab/ingress/`): `cloudflared` in the
   `ingress` namespace, token mode, two replicas, `--protocol http2` because the
   host's tap firewall only forwards 80/443/DNS/NTP out of the guest. Its token
@@ -154,9 +154,11 @@ Two tunnels, two tokens, no shared state:
   via ESO; no plaintext exists in this repository.
 
 The Cloudflare side — creating the tunnel, its DNS records, the Access
-applications and the ingress rules — is T7 (`smores56/sdlc#580` depends on it).
-The tunnel token is what T7 hands over; until then the Secret is absent and the
-connector pods stay unstarted (fail closed).
+applications and the ingress rules — is T7 (`smores56/sdlc#581`; #580 depends on
+it), and it is now code in `tofu/` (`docs/cloudflare.md`). A hostname joins the
+cluster tunnel by appearing in `cluster_hosts`; before its cutover the wildcard
+CNAME keeps it on the host. The tunnel token is what step 15 hands over; until
+then the Secret is absent and the connector pods stay unstarted (fail closed).
 
 Because a token-mode tunnel reads its ingress rules from the Cloudflare
 dashboard, the four `Ingress` objects in the app directories are the reviewed

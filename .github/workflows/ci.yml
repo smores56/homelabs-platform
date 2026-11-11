@@ -81,6 +81,10 @@ jobs:
         run: |
           tofu -chdir=tofu init -backend=false -input=false
           tofu -chdir=tofu validate
+      - name: static Access and DNS assertions
+        # Default-deny shape, the public bypass list, CAA pins, the retired
+        # hostnames and the tunnel split. No token, no API call.
+        run: tests/tofu/check.sh
 
   shellcheck:
     name: shellcheck
@@ -93,8 +97,8 @@ jobs:
       - name: lint scripts
         run: |
           shellcheck --version
-          shellcheck scripts/*.sh tests/policies/*.sh \
-            clusters/homelab/flux-system/bootstrap.sh
+          shellcheck scripts/*.sh tests/policies/*.sh tests/tofu/*.sh \
+            tests/access/*.sh clusters/homelab/flux-system/bootstrap.sh
 
   action-pins:
     name: action SHA pins

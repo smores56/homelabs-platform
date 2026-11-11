@@ -39,5 +39,11 @@ jobs:
             echo "::notice::CLOUDFLARE_API_TOKEN absent; skipping plan"
             exit 0
           fi
+          # State is operator-owned (docs/cloudflare.md, "State"): without a
+          # backend every existing object reads as new, so the plan is only a
+          # syntax-and-diff smoke test until the backend lands.
+          if ! grep -qE '^[[:space:]]*backend[[:space:]]+"' tofu/*.tf; then
+            echo "::notice::no remote state backend in tofu/; plan is state-free"
+          fi
           tofu -chdir=tofu init -input=false
           tofu -chdir=tofu plan -input=false -lock=false -no-color

@@ -1,0 +1,189 @@
+#!/usr/bin/env bash
+# Static checks for the Cloudflare OpenTofu config (SDLC #581).
+#
+# No credentials, no API calls, no state: it reads `tofu/*.tf` as text and
+# asserts the reviewed shape of the zone. Runtime behaviour (a hostname with no
+# application really being blocked) is tests/access/check.sh, which needs a
+# token.
+#
+#   tests/tofu/check.sh
+# shellcheck disable=SC2016  # patterns match HCL text: ${...} is literal, not a shell expansion
+set -uo pipefail
+
+root=$(git rev-parse --show-toplevel)
+cd "$root" || exit 1
+
+pass=0
+fail=0
+ok() {
+  pass=$((pass + 1))
+  printf 'ok   %s\n' "$1"
+}
+bad() {
+  fail=$((fail + 1))
+  printf 'FAIL %s\n' "$1"
+  [[ -n ${2:-} ]] && printf '     %s\n' "${2//$'\n'/$'\n'     }"
+  return 0
+}
+
+# has <description> <pattern> : pattern must appear in the whole config.
+has() {
+  if grep -Eq -- "$2" "$work/code.tf"; then ok "$1"; else bad "$1" "no match for /$2/ in tofu/*.tf"; fi
+}
+hasnt() {
+  if grep -Eq -- "$2" "$work/code.tf"; then bad "$1" "matched /$2/ in tofu/*.tf"; else ok "$1"; fi
+}
+eq() {
+  if [[ $1 == "$2" ]]; then ok "$3"; else bad "$3" "got '$1' want '$2'"; fi
+}
+
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+
+# Marker comment lines are file boundaries; a match is reported with its file.
+for f in tofu/*.tf; do
+  printf '# %s\n' "$f"
+  cat "$f"
+done >"$work/all.tf"
+
+# Comment lines are dropped for the assertions: a comment naming a retired
+# resource or a deprecated argument must not read as one being present.
+grep -Ev '^[[:space:]]*#' "$work/all.tf" >"$work/code.tf"
+
+# extract <type.name> : prints the resource block with that address.
+extract() {
+  awk -v want="$1" '
+    /^resource "/ {
+      n = split($0, parts, "\"")
+      inblock = (n >= 4 && parts[2] "." parts[4] == want)
+    }
+    inblock { print }
+    inblock && /^}/ { inblock = 0 }
+  ' "$work/code.tf"
+}
+
+command -v grep >/dev/null 2>&1 || {
+  echo "missing grep" >&2
+  exit 1
+}
+
+echo "== toolchain"
+if command -v tofu >/dev/null 2>&1; then
+  if tofu fmt -check -recursive tofu; then ok "tofu fmt -check"; else bad "tofu fmt -check" "run: tofu fmt -recursive tofu"; fi
+  if (cd tofu && tofu init -backend=false -input=false >/dev/null && tofu validate >"$work/validate.log" 2>&1); then
+    ok "tofu init -backend=false + validate"
+  else
+    bad "tofu init -backend=false + validate" "$(tail -5 "$work/validate.log")"
+  fi
+else
+  printf 'skip tofu fmt/validate (tofu not on PATH; CI runs both)\n'
+fi
+
+echo "== default-deny"
+wildcard_count=$(grep -Ec '^[[:space:]]*uri[[:space:]]*=[[:space:]]*"\*\.' "$work/code.tf")
+eq "$wildcard_count" "1" "exactly one Access destination is a wildcard"
+
+wildcard_app=$(extract cloudflare_zero_trust_access_application.wildcard)
+if [[ -n $wildcard_app ]]; then ok "the wildcard destination belongs to cloudflare_zero_trust_access_application.wildcard"; else bad "wildcard Access application exists"; fi
+if grep -qF 'uri  = "*.${var.domain}"' <<<"$wildcard_app"; then ok "wildcard application covers *.<zone>"; else bad "wildcard application covers *.<zone>"; fi
+if grep -q 'cloudflare_zero_trust_access_policy.email.id' <<<"$wildcard_app"; then ok "wildcard application allows the owner email"; else bad "wildcard application allows the owner email"; fi
+if grep -q 'cloudflare_zero_trust_access_policy.bypass.id' <<<"$wildcard_app"; then bad "wildcard application has no bypass policy"; else ok "wildcard application has no bypass policy"; fi
+if grep -q 'cloudflare_zero_trust_access_policy.service_auth.id' <<<"$wildcard_app"; then bad "wildcard application grants no service-token access"; else ok "wildcard application grants no service-token access"; fi
+
+if grep -q 'decision   = "bypass"' "$work/code.tf"; then ok "a bypass policy exists"; else bad "a bypass policy exists"; fi
+bypass_uses=$(grep -c 'cloudflare_zero_trust_access_policy.bypass.id' "$work/code.tf")
+eq "$bypass_uses" "1" "the bypass policy is attached to exactly one resource (the public set)"
+
+public_app=$(extract cloudflare_zero_trust_access_application.public)
+if grep -q 'for_each = local.public_apps' <<<"$public_app"; then ok "public applications iterate local.public_apps"; else bad "public applications iterate local.public_apps"; fi
+for host in recovery immich music calibre; do
+  if grep -qE "^[[:space:]]*\"${host}\",$" "$work/code.tf"; then ok "public application: $host"; else bad "public application: $host"; fi
+done
+
+echo "== protected applications"
+for app in ssh memory agent; do
+  block=$(extract "cloudflare_zero_trust_access_application.${app}")
+  if [[ -z $block ]]; then
+    bad "application ${app} exists"
+    continue
+  fi
+  ok "application ${app} exists"
+  if grep -q 'cloudflare_zero_trust_access_policy.service_auth.id' <<<"$block"; then ok "${app} accepts a service token"; else bad "${app} accepts a service token"; fi
+  if grep -q 'cloudflare_zero_trust_access_policy.email.id' <<<"$block"; then ok "${app} allows the owner email"; else bad "${app} allows the owner email"; fi
+done
+nanobot_app=$(extract cloudflare_zero_trust_access_application.nanobot)
+if grep -q 'service_auth' <<<"$nanobot_app"; then bad "nanobot holds no service-token policy for Cloudflare"; else ok "nanobot holds no service-token policy for Cloudflare"; fi
+
+echo "== retired hostnames"
+hasnt "no llm application" 'cloudflare_zero_trust_access_application" "llm"'
+hasnt "no chat application" 'cloudflare_zero_trust_access_application" "chat"'
+hasnt "no llm destination" 'uri[[:space:]]*=[[:space:]]*"llm\.'
+hasnt "no chat destination" 'uri[[:space:]]*=[[:space:]]*"chat\.'
+
+echo "== CAA"
+caa=$(grep -cE '^[[:space:]]*type[[:space:]]*=[[:space:]]*"CAA"' "$work/code.tf")
+eq "$caa" "2" "two CAA records (issue and issuewild)"
+has 'CAA issue carries accounturi' 'tag[[:space:]]*=[[:space:]]*"issue"' 
+has 'CAA issuewild carries accounturi' 'tag[[:space:]]*=[[:space:]]*"issuewild"'
+accounturi=$(grep -c 'accounturi=\${local.acme_account_uri}' "$work/code.tf")
+eq "$accounturi" "2" "both CAA records pin the ACME account"
+has 'acme_account_uri derives from the account id variable' 'acme_account_uri = "\$\{trimsuffix\(var\.acme_directory, "/directory"\)\}/acme/acct/\$\{var\.acme_account_id\}"'
+has 'acme_account_id is a variable' 'variable "acme_account_id"'
+
+echo "== tunnels"
+has 'host tunnel CNAME comes from the host tunnel variable' 'host_tunnel_cname[[:space:]]*=[[:space:]]*"\$\{var\.host_tunnel_id\}\.cfargotunnel\.com"'
+wildcard_dns=$(extract cloudflare_dns_record.wildcard)
+if grep -q 'content = local.host_tunnel_cname' <<<"$wildcard_dns"; then ok "wildcard DNS points at the host tunnel"; else bad "wildcard DNS points at the host tunnel"; fi
+if grep -q 'proxied = true' <<<"$wildcard_dns"; then ok "wildcard DNS is proxied"; else bad "wildcard DNS is proxied"; fi
+cluster_dns=$(extract cloudflare_dns_record.cluster)
+if grep -q 'for_each = toset(var.cluster_hosts)' <<<"$cluster_dns"; then ok "cluster DNS iterates var.cluster_hosts"; else bad "cluster DNS iterates var.cluster_hosts"; fi
+if grep -q 'content = local.cluster_tunnel_cname' <<<"$cluster_dns"; then ok "cluster DNS points at the cluster tunnel"; else bad "cluster DNS points at the cluster tunnel"; fi
+if grep -q 'condition     = var.cluster_tunnel_id != ""' <<<"$cluster_dns"; then ok "cluster DNS refuses an empty tunnel id"; else bad "cluster DNS refuses an empty tunnel id"; fi
+has 'cluster_tunnel_id is a variable' 'variable "cluster_tunnel_id"'
+hasnt "no tunnel UUID is authored in the config" '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
+
+echo "== preserved objects"
+for addr in cloudflare_pages_project.recovery cloudflare_pages_domain.recovery \
+  cloudflare_dns_record.recovery cloudflare_r2_bucket_cors.restic \
+  cloudflare_notification_policy.tunnel_health cloudflare_notification_policy.service_token_expiry \
+  cloudflare_ruleset.dav_rate_limit cloudflare_zero_trust_access_policy.email \
+  cloudflare_zero_trust_access_policy.service_auth; do
+  if [[ -n $(extract "$addr") ]]; then ok "preserved: $addr"; else bad "preserved: $addr"; fi
+done
+has 'tunnel health covers both tunnels' 'tunnel_id = compact\(\[var\.host_tunnel_id, var\.cluster_tunnel_id\]\)'
+has 'rate limit still covers the three public apps' 'http\.host eq \\"music\.\$\{var\.domain\}\\".*immich.*calibre'
+
+echo "== state and secrets"
+if grep -qE '^[[:space:]]*backend[[:space:]]+"' "$work/code.tf"; then
+  bad "no state backend is committed" "state is operator-local; see docs/cloudflare.md"
+else
+  ok "no state backend is committed"
+fi
+if git ls-files | grep -q '\.tfstate'; then
+  bad "no state file is tracked"
+else
+  ok "no state file is tracked"
+fi
+hasnt "no token variable" 'variable "[^"]*token'
+hasnt "no API token attribute" '(api_token|api-key|apikey)[[:space:]]*='
+hasnt "no bearer secret literal" 'Bearer [A-Za-z0-9]'
+if grep -rniE 'cloudflare[_-]?(api[_-])?token' clusters/ | grep -q .; then
+  bad "no cluster manifest carries a Cloudflare token"
+else
+  ok "no cluster manifest carries a Cloudflare token"
+fi
+if grep -rniE 'cloudflare[_-]?(api[_-])?token' clusters/ | grep -qi nanobot; then
+  bad "nanobot holds no Cloudflare token"
+else
+  ok "nanobot holds no Cloudflare token"
+fi
+
+echo "== provider pin and workflows"
+has 'provider is pinned to v5' 'version = "~> 5\.0"'
+hasnt "no v4 record resource" 'resource "cloudflare_record"'
+hasnt "no deprecated self_hosted_domains" 'self_hosted_domains'
+if scripts/check-action-pins.sh >"$work/pins.log" 2>&1; then ok "Actions stay SHA-pinned (scripts/check-action-pins.sh)"; else bad "Actions stay SHA-pinned (scripts/check-action-pins.sh)" "$(cat "$work/pins.log")"; fi
+if grep -q 'tests/tofu/check.sh' .github/workflows/ci.yml; then ok "ci.yml runs this check"; else bad "ci.yml runs this check"; fi
+
+printf '\n%s: %d passed, %d failed\n' tofu "$pass" "$fail"
+((fail == 0)) || exit 1

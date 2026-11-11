@@ -22,10 +22,11 @@
 ```sh
 scripts/kustomize-build-all.sh          # every clusters/** kustomization renders
 tests/policies/check.sh                 # static policy, RBAC, network assertions
+tests/tofu/check.sh                     # Cloudflare config shape, no credentials
 tests/observability/check.sh            # vector unit tests, config drift, exporter tests
 nix run nixpkgs#yamllint -- .
-nix run nixpkgs#shellcheck -- scripts/*.sh tests/policies/*.sh \
-  clusters/homelab/flux-system/bootstrap.sh
+nix run nixpkgs#shellcheck -- scripts/*.sh tests/policies/*.sh tests/tofu/*.sh \
+  tests/access/*.sh clusters/homelab/flux-system/bootstrap.sh
 scripts/check-action-pins.sh
 scripts/check-pr-secret-boundary.sh
 scripts/check-codeowners.sh

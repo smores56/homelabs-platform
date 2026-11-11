@@ -193,8 +193,10 @@ scripts/check-pr-secret-boundary.sh
 scripts/check-codeowners.sh
 scripts/kustomize-build-all.sh
 tests/policies/check.sh
+tests/tofu/check.sh
+tests/access/check.sh   # skips without CLOUDFLARE_API_TOKEN
 nix shell nixpkgs#yamllint nixpkgs#shellcheck nixpkgs#opentofu -c bash -c \
-  'yamllint -c .yamllint.yaml $(git ls-files "*.yaml" "*.yml") && shellcheck scripts/*.sh tests/policies/*.sh clusters/homelab/flux-system/bootstrap.sh && tofu fmt -check -recursive tofu'
+  'yamllint -c .yamllint.yaml $(git ls-files "*.yaml" "*.yml") && shellcheck scripts/*.sh tests/policies/*.sh tests/tofu/*.sh tests/access/*.sh clusters/homelab/flux-system/bootstrap.sh && tofu fmt -check -recursive tofu'
 ```
 
 All of the above pass on the bootstrap commit; see `docs/negative-tests.md` for
@@ -332,8 +334,31 @@ rest of the stack, but their pods stay unstarted until the operator has done
 `docs/manual-steps.md` steps 8, 12 and 13 (ESO, the SOPS-contract Secrets, and
 the cutover). The per-app order, checks and rollback are in
 `docs/data-migration.md`. Nothing here flips a Cloudflare route: the tunnel and
-its DNS/Access objects are T7, and the host tunnel keeps serving `ssh`, `llm`,
-`chat`, `agent` and `memory` throughout.
+its DNS/Access objects belong to `tofu/` (`docs/cloudflare.md`), and the host
+tunnel keeps serving `ssh`, `agent` and `memory` until each cutover. `llm` and
+`chat` are retired (`docs/manual-steps.md` step 17).
+
+### 7. Cloudflare objects, Access default-deny and CAA
+
+`tofu/` owns DNS, Access and notifications for both tunnels; the connectors stay
+where they run (host in nix-config, cluster in `clusters/homelab/ingress/`).
+The access model, the provider v5 mapping, the state move and the CAA caveat are
+in `docs/cloudflare.md`; the operator steps are `docs/manual-steps.md` 14-18.
+
+```sh
+tests/tofu/check.sh                       # static: 66 assertions, no token
+CLOUDFLARE_API_TOKEN=... tests/access/check.sh   # one fresh hostname is denied
+```
+
+Expected: the fresh hostname matches the wildcard application and the edge
+answers `302` to `*.cloudflareaccess.com`. An answer from the origin (200/404)
+or a tunnel error means the name is unprotected. Verify the CAA pin with
+`dig +short CAA sammohr.dev`: the two pinned records plus the ones Cloudflare
+appends for Universal SSL.
+
+`tofu-apply.yml` refuses to apply until a state backend exists, because state is
+operator-owned (`docs/cloudflare.md`, "State"); the manual apply is the only one
+until the backend is provisioned.
 
 ### Required CI contexts
 
