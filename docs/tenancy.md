@@ -128,7 +128,7 @@ Two mechanisms, no third:
    controller-wide `--sops-age-secret` flag is deliberately unset, so a
    namespace without the Secret fails instead of borrowing another key.
    `tenant-apps` carries the tenant ciphertext; `broker` holds the hand-made
-   `broker-credentials` Secret (five credential files, never a manifest); the
+   `broker-credentials` Secret (six credential files, never a manifest); the
    contract is spelled out in the `sops-contract` ConfigMaps in `flux-system`
    and `broker`, and in `docs/runbook.md`.
 2. **External Secrets, two shapes.** `platform/secrets/eso/` holds a

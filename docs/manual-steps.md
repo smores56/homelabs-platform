@@ -31,10 +31,15 @@ nanobot forked from `homelabs-platform` cannot be the owner's own account
      **Contents: read and write**, expiry 90 days. Logical host `github-apps`
      injects it as git basic auth (`x-access-token:<token>`) on `github.com`.
    - `github-platform-token`: fine-grained PAT, repository access
-     `homelabs-platform` (the fork counts), permission **Contents: read and
-     write**, **Pull requests: read and write**, expiry 90 days. Logical hosts
-     `github-platform` (REST on `api.github.com`, bearer) and `github-fork`
-     (git push to the fork, basic) use it.
+     `smores56/homelabs-platform`, permission **Contents: read**, **Pull
+     requests: read and write**, expiry 90 days. Logical host
+     `github-platform` (REST on `api.github.com`, bearer) uses it for fork and
+     PR calls.
+   - `github-fork-token`: fine-grained PAT, repository access
+     `smores56-nanobot/homelabs-platform` (the fork), permission **Contents:
+     read and write**, expiry 90 days. Logical host `github-fork` (git push to
+     the fork, basic) uses it. A fine-grained PAT covers one repository owner,
+     so the fork and the upstream cannot share one.
    Record both PATs in the broker's `broker-credentials` Secret (step 10), never
    in this repository and never in `homelabs-apps`.
 
@@ -230,7 +235,7 @@ materialise the Secret. The key names are the contract: the enrollment names
 ```sh
 # 1. collect the values (never echo them into a shell transcript you keep)
 #    neuralwatt-api-key: Neuralwatt key (the same provider the human uses)
-#    github-apps-token / github-platform-token: step 1
+#    github-apps-token / github-platform-token / github-fork-token: step 1
 #    tinyfish-api-key: TinyFish Search key
 #    loki-gateway-token: read from the generated Secret
 kubectl -n observability get secret loki-gateway-token \
@@ -244,6 +249,7 @@ kubectl -n broker create secret generic broker-credentials \
   --from-file=neuralwatt-api-key=<(sops -d broker-credentials.yaml | yq -r .neuralwatt-api-key) \
   --from-file=github-apps-token=<(sops -d broker-credentials.yaml | yq -r .github-apps-token) \
   --from-file=github-platform-token=<(sops -d broker-credentials.yaml | yq -r .github-platform-token) \
+  --from-file=github-fork-token=<(sops -d broker-credentials.yaml | yq -r .github-fork-token) \
   --from-file=tinyfish-api-key=<(sops -d broker-credentials.yaml | yq -r .tinyfish-api-key) \
   --from-file=loki-gateway-token=<(sops -d broker-credentials.yaml | yq -r .loki-gateway-token)
 kubectl -n broker rollout restart deployment/broker

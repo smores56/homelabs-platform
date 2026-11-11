@@ -50,7 +50,7 @@ class ShippedConfigTest(unittest.TestCase):
             if "secret" in enrollment:
                 self.assertIn(
                     enrollment["secret"],
-                    {"neuralwatt-api-key", "github-apps-token", "github-platform-token", "tinyfish-api-key", "loki-gateway-token"},
+                    {"neuralwatt-api-key", "github-apps-token", "github-platform-token", "github-fork-token", "tinyfish-api-key", "loki-gateway-token"},
                 )
         self.assertNotRegex(SHIPPED.read_text(), r"[A-Za-z0-9_-]{32,}")
 

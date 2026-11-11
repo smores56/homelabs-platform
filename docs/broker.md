@@ -62,15 +62,17 @@ the enrollment, read once at start.
 | `neuralwatt` | `https://api.neuralwatt.com:443` | `Authorization: Bearer` | `neuralwatt-api-key` | no |
 | `github-apps` | `https://github.com:443` | `Authorization: Basic x-access-token:<token>` | `github-apps-token` | no |
 | `github-platform` | `https://api.github.com:443` | `Authorization: Bearer` | `github-platform-token` | no |
-| `github-fork` | `https://github.com:443` | `Authorization: Basic x-access-token:<token>` | `github-platform-token` | no |
+| `github-fork` | `https://github.com:443` | `Authorization: Basic x-access-token:<token>` | `github-fork-token` | no |
 | `tinyfish` | `https://api.search.tinyfish.ai:443` | `X-Api-Key: <token>` | `tinyfish-api-key` | no |
 | `loki` | `http://loki-gateway.observability.svc.cluster.local:3100` | `Authorization: Bearer`, fixed `X-Scope-OrgID: data` | `loki-gateway-token` | yes |
 | `status` | `http://status-exporter.observability.svc.cluster.local:9101` | none (metrics text) | — | yes |
 
 `github-fork` is the git transport half of the `github-platform` capability:
 GitHub serves git smart HTTP only on `github.com`, while fork and PR calls are
-REST on `api.github.com`. Both use the same token and the same enrollment, so
-the capability is still "fork and open a PR on homelabs-platform".
+REST on `api.github.com`. A fine-grained PAT is scoped to one repository owner,
+so the upstream (`smores56/homelabs-platform`) and the fork
+(`smores56-nanobot/homelabs-platform`) need separate tokens; each is still the
+narrow half of "fork and open a PR on homelabs-platform".
 
 The two private enrollments are the only exception to the TLS rule: they never
 leave the cluster network and their credentials are already cluster-local. A

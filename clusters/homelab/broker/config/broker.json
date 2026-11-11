@@ -8,7 +8,9 @@
       "port": 443,
       "allow_private": false,
       "secret": "neuralwatt-api-key",
-      "inject": { "kind": "bearer" }
+      "inject": {
+        "kind": "bearer"
+      }
     },
     "github-apps": {
       "scheme": "https",
@@ -16,7 +18,10 @@
       "port": 443,
       "allow_private": false,
       "secret": "github-apps-token",
-      "inject": { "kind": "basic", "username": "x-access-token" }
+      "inject": {
+        "kind": "basic",
+        "username": "x-access-token"
+      }
     },
     "github-platform": {
       "scheme": "https",
@@ -24,15 +29,20 @@
       "port": 443,
       "allow_private": false,
       "secret": "github-platform-token",
-      "inject": { "kind": "bearer" }
+      "inject": {
+        "kind": "bearer"
+      }
     },
     "github-fork": {
       "scheme": "https",
       "host": "github.com",
       "port": 443,
       "allow_private": false,
-      "secret": "github-platform-token",
-      "inject": { "kind": "basic", "username": "x-access-token" }
+      "secret": "github-fork-token",
+      "inject": {
+        "kind": "basic",
+        "username": "x-access-token"
+      }
     },
     "tinyfish": {
       "scheme": "https",
@@ -40,7 +50,10 @@
       "port": 443,
       "allow_private": false,
       "secret": "tinyfish-api-key",
-      "inject": { "kind": "header", "header": "X-Api-Key" }
+      "inject": {
+        "kind": "header",
+        "header": "X-Api-Key"
+      }
     },
     "loki": {
       "scheme": "http",
@@ -48,8 +61,12 @@
       "port": 3100,
       "allow_private": true,
       "secret": "loki-gateway-token",
-      "inject": { "kind": "bearer" },
-      "headers": { "X-Scope-OrgID": "data" }
+      "inject": {
+        "kind": "bearer"
+      },
+      "headers": {
+        "X-Scope-OrgID": "data"
+      }
     },
     "status": {
       "scheme": "http",

@@ -15,7 +15,7 @@ data:
   secretName: broker-credentials
   namespace: broker
   keys: >-
-    neuralwatt-api-key,github-apps-token,github-platform-token,tinyfish-api-key,loki-gateway-token
+    neuralwatt-api-key,github-apps-token,github-platform-token,github-fork-token,tinyfish-api-key,loki-gateway-token
   source: >-
     broker-credentials.yaml, SOPS-encrypted with the flux-system age recipient;
     decrypt with `sops -d` and pipe each key into the Secret. Never commit the
