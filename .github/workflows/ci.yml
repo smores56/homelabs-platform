@@ -240,6 +240,16 @@ jobs:
             tests/policies/check.sh --runtime
       # check.sh stops the control plane on exit; this runs even when it is
       # killed mid-run (cancel, timeout) so no etcd/apiserver survives the job.
+      # The logs are printed here because a runner's TMPDIR is discarded, and a
+      # failed control-plane start is otherwise undiagnosable from the job.
       - name: stop the throwaway control plane
         if: always()
-        run: tests/policies/apiserver.sh stop || true
+        run: |
+          state="${TMPDIR:-/tmp}/homelabs-policy-apiserver"
+          for log in "$state"/etcd.log "$state"/apiserver.log; do
+            if [ -f "$log" ]; then
+              echo "--- $log"
+              tail -40 "$log"
+            fi
+          done
+          tests/policies/apiserver.sh stop || true

@@ -54,6 +54,14 @@ start() {
     curl -sf "http://127.0.0.1:${etcd_port}/health" >/dev/null 2>&1 && break
     sleep 1
   done
+  # A dead etcd makes the apiserver time out instead of failing, which hides the
+  # real cause; refuse to start the API server against it.
+  if ! curl -sf "http://127.0.0.1:${etcd_port}/health" >/dev/null 2>&1; then
+    echo "etcd did not become ready; see ${state_dir}/etcd.log" >&2
+    tail -25 "${state_dir}/etcd.log" >&2 || true
+    stop
+    exit 1
+  fi
 
   # --allow-privileged keeps the bench from rejecting privileged pods itself:
   # the policy, not the apiserver flag, is the control under test.
@@ -74,14 +82,26 @@ start() {
     >"${state_dir}/apiserver.log" 2>&1 &
   echo $! >"${state_dir}/apiserver.pid"
 
-  for _ in $(seq 1 60); do
+  for _ in $(seq 1 "${POLICY_TEST_READY_SECONDS:-90}"); do
     if curl -skf "https://127.0.0.1:${api_port}/readyz" >/dev/null 2>&1; then
+      break
+    fi
+    # Fail fast when the process is gone: the logs say why, and waiting out the
+    # whole timeout hides it.
+    if ! kill -0 "$(cat "${state_dir}/apiserver.pid")" 2>/dev/null; then
       break
     fi
     sleep 1
   done
   if ! curl -skf "https://127.0.0.1:${api_port}/readyz" >/dev/null 2>&1; then
     echo "apiserver did not become ready; see ${state_dir}/apiserver.log" >&2
+    # CI cannot upload the state directory, so the reason has to be in the log.
+    for log in apiserver etcd; do
+      if [[ -f "${state_dir}/${log}.log" ]]; then
+        echo "--- tail of ${log}.log" >&2
+        tail -25 "${state_dir}/${log}.log" >&2
+      fi
+    done
     stop
     exit 1
   fi
