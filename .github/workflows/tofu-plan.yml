@@ -1,0 +1,44 @@
+name: tofu-plan
+
+# No pull_request trigger on purpose: the Cloudflare token lives in the
+# `cloudflare` environment, and a plan that read it on PRs would hand it to
+# fork PRs. PRs get fmt/validate from ci.yml instead. See docs/negative-tests.md.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tofu
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    name: plan (cloudflare)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: cloudflare
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          persist-credentials: false
+      - name: install pinned tools
+        run: |
+          scripts/install-ci-tools.sh "$RUNNER_TEMP/bin"
+          echo "$RUNNER_TEMP/bin" >>"$GITHUB_PATH"
+      - name: plan
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        # Absent token means the environment has not been provisioned yet:
+        # report it and succeed rather than fail every push to main.
+        run: |
+          if [[ -z ${CLOUDFLARE_API_TOKEN:-} ]]; then
+            echo "::notice::CLOUDFLARE_API_TOKEN absent; skipping plan"
+            exit 0
+          fi
+          tofu -chdir=tofu init -input=false
+          tofu -chdir=tofu plan -input=false -lock=false -no-color

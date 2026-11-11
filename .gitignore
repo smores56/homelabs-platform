@@ -1,0 +1,12 @@
+# OpenTofu
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+
+# CI render output
+/manifests/
+
+# Local render output
+/.rendered/

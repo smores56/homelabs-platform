@@ -1,0 +1,134 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions: read-all
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  kustomize:
+    name: kustomize build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          persist-credentials: false
+      - name: install pinned tools
+        run: |
+          scripts/install-ci-tools.sh "$RUNNER_TEMP/bin"
+          echo "$RUNNER_TEMP/bin" >>"$GITHUB_PATH"
+      - name: build every clusters/** kustomization
+        run: scripts/kustomize-build-all.sh
+
+  kubeconform:
+    name: kubeconform
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          persist-credentials: false
+      - name: install pinned tools
+        run: |
+          scripts/install-ci-tools.sh "$RUNNER_TEMP/bin"
+          echo "$RUNNER_TEMP/bin" >>"$GITHUB_PATH"
+      - name: render manifests
+        run: scripts/kustomize-build-all.sh "$RUNNER_TEMP/manifests"
+      - name: validate against Kubernetes schemas
+        run: |
+          kubeconform -strict -summary -ignore-missing-schemas \
+            -kubernetes-version 1.34.0 "$RUNNER_TEMP"/manifests/*.yaml
+
+  yamllint:
+    name: yamllint
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          persist-credentials: false
+      - name: lint every tracked YAML file
+        run: |
+          yamllint --version
+          yamllint -c .yamllint.yaml $(git ls-files '*.yaml' '*.yml')
+
+  tofu:
+    name: tofu fmt and validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          persist-credentials: false
+      - name: install pinned tools
+        run: |
+          scripts/install-ci-tools.sh "$RUNNER_TEMP/bin"
+          echo "$RUNNER_TEMP/bin" >>"$GITHUB_PATH"
+      - name: fmt
+        run: tofu fmt -check -recursive tofu
+      - name: validate
+        # No backend and no secrets: validate only needs provider schemas.
+        run: |
+          tofu -chdir=tofu init -backend=false -input=false
+          tofu -chdir=tofu validate
+
+  shellcheck:
+    name: shellcheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          persist-credentials: false
+      - name: lint scripts
+        run: |
+          shellcheck --version
+          shellcheck scripts/*.sh
+
+  action-pins:
+    name: action SHA pins
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          persist-credentials: false
+      - name: every action is pinned to a full SHA
+        run: scripts/check-action-pins.sh
+
+  codeowners:
+    name: CODEOWNERS coverage
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          persist-credentials: false
+      - name: CODEOWNERS covers every Kanbei-critical path
+        run: scripts/check-codeowners.sh
+
+  fork-pr-secret-boundary:
+    name: fork-pr-secret-boundary
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          persist-credentials: false
+      - name: fork PRs receive no secrets
+        run: |
+          echo "This job is triggered by pull_request from fork and branch PRs."
+          echo "It holds no environment and no repository secret; a fork PR run"
+          echo "reaches only a read-only GITHUB_TOKEN. docs/negative-tests.md"
+          echo "records the runtime half as a manual step."
+          test -z "${CLOUDFLARE_API_TOKEN:-}"
+      - name: no pull_request workflow references a secret
+        run: scripts/check-pr-secret-boundary.sh

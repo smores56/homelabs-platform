@@ -1,0 +1,41 @@
+name: tofu-apply
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tofu
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    name: apply (cloudflare)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # Only a push to main may apply, and only from the environment that is
+    # itself restricted to main: a dispatch or branch run cannot reach the token.
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    environment: cloudflare
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          persist-credentials: false
+      - name: install pinned tools
+        run: |
+          scripts/install-ci-tools.sh "$RUNNER_TEMP/bin"
+          echo "$RUNNER_TEMP/bin" >>"$GITHUB_PATH"
+      - name: apply
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          if [[ -z ${CLOUDFLARE_API_TOKEN:-} ]]; then
+            echo "::error::CLOUDFLARE_API_TOKEN absent; cannot apply"
+            exit 1
+          fi
+          tofu -chdir=tofu init -input=false
+          tofu -chdir=tofu apply -input=false -auto-approve -no-color

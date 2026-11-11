@@ -1,0 +1,13 @@
+# Default owner: every path in this repository requires a review from the owner.
+* @smores56
+
+# Kanbei-critical paths. CODEOWNERS cannot express severity, so these entries
+# are duplicated in docs/kanbei-critical.md and scripts/check-codeowners.sh
+# fails CI if either list drifts. A diff here can change which Cloudflare route
+# fronts kanbei.sammohr.dev, or run code with the deploy token.
+
+# Cloudflare OpenTofu: the token can repoint the Kanbei route.
+*.tf @smores56
+
+# Workflows and repo automation: run with the deploy token in the environment.
+.github/ @smores56
