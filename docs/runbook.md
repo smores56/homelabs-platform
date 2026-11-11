@@ -312,7 +312,7 @@ contract from `docs/manual-steps.md` step 10, not an ESO generator.
 ### 5. Confirm the policy stack on the live cluster
 
 ```sh
-tests/policies/check.sh            # 361 static assertions, no cluster
+tests/policies/check.sh            # 364 static assertions, no cluster
 nix shell nixpkgs#etcd nixpkgs#kubernetes nixpkgs#openssl nixpkgs#kustomize \
   nixpkgs#yq-go nixpkgs#jq -c tests/policies/check.sh --runtime
 kubectl get validatingadmissionpolicies,validatingadmissionpolicybindings

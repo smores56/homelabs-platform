@@ -137,7 +137,7 @@ apply without a kubelet in order, then drives every case with
 - 2 live attempts over the API (create a Secret, create a Kustomization), both
   `forbidden`.
 
-Result: `static+runtime: 474 passed, 0 failed`.
+Result: `static+runtime: 477 passed, 0 failed`.
 
 Two deliberate deviations from a production cluster, both so a failure is
 attributable:
@@ -166,7 +166,7 @@ attributable:
 ### Runtime result
 
 Executed on 2026-11-11 in the agent VM against the ephemeral control plane:
-`tests/policies/check.sh --runtime` → `static+runtime: 474 passed, 0 failed`.
+`tests/policies/check.sh --runtime` → `static+runtime: 477 passed, 0 failed`.
 CI runs both halves as separate required jobs: `policy checks` (static, no
 cluster) and `policy admission runtime` (boots etcd + kube-apiserver with
 `tests/policies/apiserver.sh`, then drives every fixture and `rbac.tsv` row).
@@ -289,7 +289,7 @@ Static, in `tests/policies/check.sh` (no cluster, no credentials):
 
 Runtime, `tests/policies/check.sh --runtime` (throwaway kube-apiserver): the new
 fixtures are admitted/denied by the real API server, including the two new deny
-cases. Recorded run 2026-11-11: `static+runtime: 474 passed, 0 failed`.
+cases. Recorded run 2026-11-11: `static+runtime: 477 passed, 0 failed`.
 
 ### What cannot run here
 
@@ -455,7 +455,7 @@ the previous table in this document describes the #578 families; #582 adds:
 
 ### What runs on demand (runtime, real API server)
 
-`tests/policies/check.sh --runtime` — `static+runtime: 474 passed, 0 failed`
+`tests/policies/check.sh --runtime` — `static+runtime: 477 passed, 0 failed`
 (recorded run, 2026-11-11, kube-apiserver v1.36.2, etcd 3.6.13). The new
 fixtures are admitted/denied by the real API server:
 
@@ -512,7 +512,7 @@ cluster-kubectl -n broker logs deploy/broker | tail -5
 
 ### Runtime result
 
-Static and API-server halves executed on 2026-11-11 (`361` and `474` passing);
+Static and API-server halves executed on 2026-11-11 (`364` and `477` passing);
 the unit suite is green in CI. The live half needs the cluster, the broker
 image and the SOPS credentials, and is recorded here when the coordinator runs
 it.

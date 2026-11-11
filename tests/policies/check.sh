@@ -838,6 +838,27 @@ EXPORTER_RBAC
   fi
 fi
 
+# --------------------------------------------------------- CI wiring (static)
+# The runtime half is only worth having if CI runs it: a vacuous CEL expression
+# passes the static half by construction. The job name is the branch-protection
+# context, so it is asserted here and in docs/runbook.md.
+if grep -Fq 'tests/policies/check.sh --runtime' .github/workflows/ci.yml; then
+  ok "ci.yml runs the runtime half"
+else
+  bad "ci.yml does not run tests/policies/check.sh --runtime"
+fi
+if grep -Fq 'name: policy admission runtime' .github/workflows/ci.yml &&
+  grep -Fq 'policy admission runtime' docs/runbook.md; then
+  ok "the policy admission runtime job is a documented required context"
+else
+  bad "the policy admission runtime job is missing or undocumented"
+fi
+if grep -Fq 'tests/policies/apiserver.sh stop' .github/workflows/ci.yml; then
+  ok "ci.yml always stops the throwaway control plane"
+else
+  bad "ci.yml leaves the throwaway control plane running"
+fi
+
 # ---------------------------------------------------------------------- summary
 mode="static"
 ((runtime)) && mode="static+runtime"

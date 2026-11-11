@@ -342,7 +342,7 @@ deliberately has no namespace that holds only shared configuration.
 
 ```sh
 tests/observability/check.sh          # vector test + validate, drift, unit tests
-tests/policies/check.sh               # static policy stack (361 assertions)
+tests/policies/check.sh               # static policy stack (364 assertions)
 tests/digest/check.sh                 # digest builder fixtures + rendered contract
 scripts/kustomize-build-all.sh        # every clusters/** kustomization
 nix run nixpkgs#kubeconform -- -strict -ignore-missing-schemas /tmp/manifests/*.yaml
@@ -356,8 +356,8 @@ schema v1.34):
   allowlist set from `observability/network/`);
 - `vector validate` and `loki -verify-config` both accept the shipped configs;
 - `promtool check config` accepts the Prometheus config;
-- `tests/policies/check.sh` → `static: 361 passed, 0 failed`;
-- `tests/policies/check.sh --runtime` → `static+runtime: 474 passed, 0 failed`
+- `tests/policies/check.sh` → `static: 364 passed, 0 failed`;
+- `tests/policies/check.sh --runtime` → `static+runtime: 477 passed, 0 failed`
   (throwaway etcd + kube-apiserver, kube-apiserver v1.36.2), including the
   exporter `can-i` probes: `list nodes` yes, `get pods` in `immich` yes,
   `get pods` in `kube-system`/`observability`/`tenant-apps` no;
