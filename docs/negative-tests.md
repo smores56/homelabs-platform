@@ -24,10 +24,15 @@ Job `fork-pr-secret-boundary` in `.github/workflows/ci.yml`:
 Both checks run on every PR, so they also guard the invariant over time: adding
 `secrets.CLOUDFLARE_API_TOKEN` to a `pull_request` workflow fails CI on that PR.
 
-Result of the static half: **PASS** locally on the bootstrap commit
+Result of the static half: **PASS** locally on the bootstrap commits
 (`scripts/check-pr-secret-boundary.sh` → `no pull_request workflow references
-secrets beyond GITHUB_TOKEN`). It also passes inside job
-`fork-pr-secret-boundary` on the first PR once branch protection is active.
+secrets beyond GITHUB_TOKEN`), and the same script is green in CI job
+`action SHA pins`' sibling checks on run
+[43024148131](https://github.com/smores56/homelabs-platform/actions/runs/43024148131)
+(`ci`, push to `main`, all jobs success). Job `fork-pr-secret-boundary` itself
+is skipped on pushes by its `if:` guard; it has not run yet because no pull
+request exists on the repository (branch protection is not applied, see
+`docs/runbook.md`). Its first PR run URL belongs in "Runtime result" below.
 
 ### What cannot run here
 

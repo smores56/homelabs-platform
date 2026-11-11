@@ -197,3 +197,22 @@ nix shell nixpkgs#yamllint nixpkgs#shellcheck nixpkgs#opentofu -c bash -c \
 
 All of the above pass on the bootstrap commit; see `docs/negative-tests.md` for
 the fork-PR boundary and `docs/manual-steps.md` for the owner-only steps.
+
+## CI evidence on `main` (2026-11-11)
+
+Runs triggered by the bootstrap pushes, state read from the Actions API:
+
+| Workflow | Run | Result |
+| --- | --- | --- |
+| `ci` | [43024148131](https://github.com/smores56/homelabs-platform/actions/runs/43024148131) | success (`kustomize build`, `kubeconform`, `yamllint`, `tofu fmt and validate`, `shellcheck`, `action SHA pins`, `CODEOWNERS coverage` all success; `fork-pr-secret-boundary` skipped on push) |
+| `tofu-plan` | [43024148058](https://github.com/smores56/homelabs-platform/actions/runs/43024148058) | success; logs `CLOUDFLARE_API_TOKEN absent; skipping plan` |
+| `tofu-apply` | [43024148159](https://github.com/smores56/homelabs-platform/actions/runs/43024148159) | failure; step `apply` errors with `CLOUDFLARE_API_TOKEN absent; cannot apply` |
+
+The `tofu-apply` failure is the intended loud signal until
+`docs/manual-steps.md` step 2 stores the token: with the environment secret
+absent, the workflow cannot apply and must not pretend it did. It also ran
+without an approval prompt because the environment has no protection rules,
+which is why the missing `main` branch policy in the section above matters.
+
+`ci` on the first push (`4d1229f`) has no run entry; the workflow files landed
+in that same commit, so the first observable run is on `c5a6dca`.
