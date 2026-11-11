@@ -156,16 +156,19 @@ Two tunnels, two tokens, no shared state:
 The Cloudflare side — creating the tunnel, its DNS records, the Access
 applications and the ingress rules — is T7 (`smores56/sdlc#581`; #580 depends on
 it), and it is now code in `tofu/` (`docs/cloudflare.md`). A hostname joins the
-cluster tunnel by appearing in `cluster_hosts`; before its cutover the wildcard
-CNAME keeps it on the host. The tunnel token is what step 15 hands over; until
-then the Secret is absent and the connector pods stay unstarted (fail closed).
+cluster tunnel by appearing in `cluster_hosts` **and** in
+`local.cluster_ingress` in `tofu/cluster.tf`; the plan refuses the first without
+the second. Before a cutover the wildcard CNAME keeps the name on the host. The
+tunnel token is what step 15 hands over; until then the Secret is absent and the
+connector pods stay unstarted (fail closed).
 
-Because a token-mode tunnel reads its ingress rules from the Cloudflare
-dashboard, the four `Ingress` objects in the app directories are the reviewed
-routing contract that dashboard config must mirror, not something an in-cluster
-controller consumes (k3s's traefik is disabled in the guest). The policy check
-asserts host and backend service/port against each app's Service, so the two
-cannot drift silently.
+Because the tunnel runs in token mode but its configuration is managed by
+`cloudflare_zero_trust_tunnel_cloudflared_config.cluster`, the ingress rules are
+what `tofu apply` writes, not a dashboard edit. The four `Ingress` objects in the
+app directories are the reviewed routing contract that those rules mirror, not
+something an in-cluster controller consumes (k3s's traefik is disabled in the
+guest). The policy check asserts host and backend service/port against each
+app's Service, so the two cannot drift silently.
 
 ## What is live-gated
 

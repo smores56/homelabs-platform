@@ -113,7 +113,9 @@ jobs:
         run: |
           shellcheck --version
           shellcheck scripts/*.sh tests/policies/*.sh tests/tofu/*.sh \
-            tests/access/*.sh clusters/homelab/flux-system/bootstrap.sh
+            tests/access/*.sh tests/backup/*.sh \
+            clusters/homelab/flux-system/bootstrap.sh \
+            clusters/homelab/platform/backup/*.sh
 
   action-pins:
     name: action SHA pins
@@ -192,3 +194,5 @@ jobs:
       # throwaway kube-apiserver and is run by hand (docs/negative-tests.md).
       - name: static policy, RBAC and network checks
         run: tests/policies/check.sh
+      - name: repository-mirror script shape tests
+        run: tests/backup/check.sh

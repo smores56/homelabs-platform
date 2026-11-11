@@ -1,0 +1,21 @@
+# Mirrors and bundles live on the k3s `local-path` provisioner, the same class
+# the observability claims use. This is a working copy, not the system of
+# record: GitHub remains authoritative, and the PVC is lost with the node's
+# disk. The host's restic walk covers the data tier's virtiofs shares, not this
+# claim; the retention that matters for the two repositories is the upstream
+# history itself.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: github-backup-data
+  namespace: platform
+  labels:
+    app.kubernetes.io/name: github-backup
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: platform
+spec:
+  accessModes: ["ReadWriteOnce"]
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 5Gi

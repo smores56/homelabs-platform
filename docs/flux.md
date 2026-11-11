@@ -115,7 +115,7 @@ policy bindings treat it like the rest of the platform tier.
 
 ## Stage ordering
 
-`clusters/homelab/platform/kustomization.yaml` applies eleven Flux Kustomizations;
+`clusters/homelab/platform/kustomization.yaml` applies twelve Flux Kustomizations;
 each one's `dependsOn` is asserted by `tests/policies/check.sh`.
 
 ```text
@@ -128,6 +128,8 @@ platform-secrets      sops contract ConfigMap    (dependsOn namespaces, policies
 platform-broker       broker Deployment/Service  (dependsOn namespaces, rbac,
                       policies, network, secrets)
 platform-storage      StorageClass + static PVs  (dependsOn namespaces)
+platform-backup       repository mirror CronJob/PVC (dependsOn namespaces,
+                      policies)
 platform-data-apps    Immich, Navidrome, Calibre, Graphiti
                       (dependsOn policies, network, storage)
 platform-ingress      cloudflared + routing contract (dependsOn namespaces, network)

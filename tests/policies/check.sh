@@ -523,6 +523,99 @@ eq "$(jq -r '.[] | select(.kind == "NetworkPolicy" and .metadata.name == "egress
   "0.0.0.0/8,10.0.0.0/8,100.64.0.0/10,127.0.0.0/8,169.254.0.0/16,172.16.0.0/12,192.0.0.0/24,192.168.0.0/16,198.18.0.0/15,224.0.0.0/4,240.0.0.0/4" \
   "broker egress excludes every non-global IPv4 range"
 
+# ------------------------------------------------ repository mirror (backup)
+# The mirror is platform-tier and holds one read-only credential. Its shape is
+# asserted here so a widened egress, a classic token or a writable rootfs never
+# reaches review.
+backup_dir=clusters/homelab/platform/backup
+kustomize build "$backup_dir" >"$work/backup.yaml"
+json_of "$work/backup.yaml" >"$work/backup.json"
+
+backup_cj='.[] | select(.kind == "CronJob" and .metadata.name == "github-backup")'
+eq "$(jq -r "$backup_cj | [.metadata.namespace, .spec.schedule, .spec.timeZone, .spec.concurrencyPolicy] | join(\":\")" "$work/backup.json")" \
+  "platform:15 4 * * *:Europe/Berlin:Forbid" \
+  "github-backup runs nightly in the platform namespace and never overlaps"
+eq "$(jq -r "$backup_cj | .spec.jobTemplate.spec.activeDeadlineSeconds" "$work/backup.json")" \
+  "1800" "github-backup is bounded to 30 minutes"
+
+backup_pod="$backup_cj | .spec.jobTemplate.spec.template.spec"
+eq "$(jq -r "$backup_pod | .serviceAccountName" "$work/backup.json")" \
+  "github-backup" "github-backup runs as its own service account"
+eq "$(jq -r "$backup_pod | if has(\"automountServiceAccountToken\") then .automountServiceAccountToken else true end" "$work/backup.json")" \
+  "false" "github-backup never mounts a service-account token"
+eq "$(jq -r "$backup_pod | .securityContext.runAsNonRoot" "$work/backup.json")" \
+  "true" "github-backup runs non-root"
+eq "$(jq -r "$backup_pod | .securityContext.runAsUser" "$work/backup.json")" \
+  "65532" "github-backup uses the distroless nonroot uid"
+eq "$(jq -r "$backup_pod | .containers[0].securityContext.readOnlyRootFilesystem" "$work/backup.json")" \
+  "true" "github-backup rootfs is read-only"
+eq "$(jq -r "$backup_pod | .containers[0].securityContext.allowPrivilegeEscalation" "$work/backup.json")" \
+  "false" "github-backup forbids privilege escalation"
+eq "$(jq -r "$backup_pod | .containers[0].securityContext.capabilities.drop | join(\",\")" "$work/backup.json")" \
+  "ALL" "github-backup drops every capability"
+eq "$(jq -r "$backup_pod | .containers[0].resources.limits | keys | join(\",\")" "$work/backup.json")" \
+  "cpu,memory" "github-backup sets resource limits"
+
+eq "$(jq -r "$backup_pod | [.volumes[] | select(.name == \"token\") | .secret] | .[0] | [.secretName, (.optional // false)] | join(\":\")" "$work/backup.json")" \
+  "github-backup-read-pat:false" "the PAT volume is fail-closed"
+eq "$(jq -r "$backup_pod | [.volumes[] | select(.name == \"backup\") | .persistentVolumeClaim.claimName] | join(\",\")" "$work/backup.json")" \
+  "github-backup-data" "the mirror writes to its own PVC"
+if jq -e "$backup_pod | .volumes[] | select(.name == \"script\") | .configMap.name | startswith(\"github-backup-script\")" "$work/backup.json" >/dev/null; then
+  ok "the backup script is mounted from the generated ConfigMap"
+else
+  bad "the backup script is mounted from the generated ConfigMap"
+fi
+if jq -r "$backup_pod | .containers[0].args[0]" "$work/backup.json" | grep -q -- '--repo homelabs-apps'; then
+  ok "the job mirrors both repositories"
+else
+  bad "the job mirrors both repositories"
+fi
+
+eq "$(jq -r '.[] | select(.kind == "PersistentVolumeClaim" and .metadata.name == "github-backup-data") | [.metadata.namespace, .spec.storageClassName, .spec.accessModes[0]] | join(":")' "$work/backup.json")" \
+  "platform:local-path:ReadWriteOnce" "the mirror claim uses the k3s local-path class"
+
+backup_np='.[] | select(.kind == "NetworkPolicy" and .metadata.name == "github-backup-egress")'
+eq "$(jq -r "$backup_np | [.spec.podSelector.matchLabels[\"app.kubernetes.io/name\"], (.spec.policyTypes | join(\",\"))] | join(\":\")" "$work/backup.json")" \
+  "github-backup:Egress" "the backup egress policy selects only the backup pod"
+eq "$(jq -r "$backup_np | [.spec.egress[] | .ports[]?.port] | unique | sort | join(\",\")" "$work/backup.json")" \
+  "53,443" "the backup pod may reach DNS and 443 only"
+if jq -r "$backup_np | .spec.egress[] | .to[] | .ipBlock.cidr // empty" "$work/backup.json" | grep -qx '0.0.0.0/0'; then
+  bad "backup egress is not a public catch-all"
+else
+  ok "backup egress is not a public catch-all"
+fi
+if jq -r "$backup_np | .spec.egress[] | select(.to[0].ipBlock) | .to[0].ipBlock.cidr" "$work/backup.json" | grep -q '^140\.82\.112\.0/20$'; then
+  ok "backup egress includes GitHub's git range"
+else
+  bad "backup egress includes GitHub's git range"
+fi
+
+eq "$(jq -r '.[] | select(.kind == "ConfigMap" and .metadata.name == "github-backup-read-pat-contract") | [.metadata.namespace, .data.key, .data.secretName] | join(":")' "$work/backup.json")" \
+  "platform:token:github-backup-read-pat" "the PAT contract names the projected Secret and key"
+if jq -r '.[] | select(.kind == "ConfigMap" and .metadata.name == "github-backup-read-pat-contract") | .data.scope' "$work/backup.json" | grep -q 'Contents: read'; then
+  ok "the PAT contract is read-only"
+else
+  bad "the PAT contract is read-only"
+fi
+
+# A classic token (ghp_) must never appear in a manifest, and the job refuses
+# one at start (clusters/homelab/platform/backup/github-backup.sh).
+if grep -rEn 'ghp_[A-Za-z0-9]{20,}' clusters/ >/dev/null 2>&1; then
+  bad "no classic GitHub token is present"
+else
+  ok "no classic GitHub token is present"
+fi
+if grep -rEn 'GITHUB_TOKEN' clusters/homelab/platform/backup clusters/homelab/broker >/dev/null 2>&1; then
+  bad "the backup and broker manifests never name GITHUB_TOKEN"
+else
+  ok "the backup and broker manifests never name GITHUB_TOKEN"
+fi
+if grep -qiE 'revoke.*classic|classic.*revoke' docs/manual-steps.md; then
+  ok "manual steps revoke the classic write PAT"
+else
+  bad "manual steps revoke the classic write PAT"
+fi
+
 # ------------------------------------------------------- stage ordering (DAG)
 declare -A stage_edges=(
   [platform-namespaces]=""
@@ -532,6 +625,7 @@ declare -A stage_edges=(
   [platform-secrets]="platform-namespaces,platform-policies"
   [platform-broker]="platform-namespaces,platform-network,platform-policies,platform-rbac,platform-secrets"
   [platform-storage]="platform-namespaces"
+  [platform-backup]="platform-namespaces,platform-policies"
   [platform-data-apps]="platform-network,platform-policies,platform-storage"
   [platform-ingress]="platform-namespaces,platform-network"
   [platform-observability]="platform-policies"
@@ -560,7 +654,7 @@ done
 
 listed=$(yq -o=json -I=0 '.' clusters/homelab/platform/kustomization.yaml |
   jq -r '[.resources[] | sub("^kustomizations/"; "") | sub("\\.yaml$"; "")] | .[]')
-eq "$listed" "$(printf '%s\n' namespaces rbac policies network secrets broker storage data ingress observability tenants)" \
+eq "$listed" "$(printf '%s\n' namespaces rbac policies network secrets broker storage backup data ingress observability tenants)" \
   "platform/kustomization.yaml lists every stage in apply order"
 missing=$(comm -23 <(find "$stages_dir" -maxdepth 1 -name '*.yaml' -printf '%f\n' | sed 's|\.yaml$||' | sort) \
   <(yq -o=json -I=0 '.' clusters/homelab/platform/kustomization.yaml |
@@ -654,7 +748,7 @@ if ((runtime)); then
   else
     bad "runtime: applying flux components failed" "$(cat "$work/crds.err")"
   fi
-  for stage in namespaces rbac policies network secrets storage tenants; do
+  for stage in namespaces rbac policies network secrets storage backup tenants; do
     if kubectl apply -k "clusters/homelab/platform/$stage" >/dev/null 2>"$work/stage.err"; then
       ok "runtime: stage $stage applied"
     else

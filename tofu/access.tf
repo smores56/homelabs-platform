@@ -171,30 +171,11 @@ resource "cloudflare_zero_trust_access_application" "agent" {
   }
 }
 
-# nanobot on the host today; it moves into the cluster and retires this hostname
-# at its cutover, at which point the application goes with it. Email only: the
-# workload holds no Cloudflare credential of its own, so it cannot present a
-# service token (docs/cloudflare.md).
-resource "cloudflare_zero_trust_access_application" "nanobot" {
-  account_id       = var.account_id
-  name             = "nanobot"
-  type             = "self_hosted"
-  session_duration = "720h"
-
-  destinations = [{
-    type = "public"
-    uri  = "nanobot.${var.domain}"
-  }]
-
-  policies = [{
-    id         = cloudflare_zero_trust_access_policy.email.id
-    precedence = 1
-  }]
-
-  lifecycle {
-    prevent_destroy = true
-  }
-}
+# `nanobot.sammohr.dev` is retired with the agent cutover (SDLC #583): the
+# cluster serves the same app on `agent.sammohr.dev`, and the old application is
+# gone rather than left as an email-only fallback. The block carried
+# `prevent_destroy`, so its state entry is removed first and the object deleted
+# at the edge (docs/manual-steps.md step 20).
 
 locals {
   # Public hostnames: each one gets an explicit bypass application so the

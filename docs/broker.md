@@ -187,57 +187,50 @@ The hostname terminates on the **cluster** tunnel, not the host tunnel:
 agent.sammohr.dev --Access--> cluster tunnel --HTTP--> nanobot.tenant-apps.svc:80 --> pod:8080
 ```
 
-- Access application `agent` already exists in `tofu/access.tf` with the owner's
-  email policy (precedence 1) and the `service auth` policy (precedence 2,
+- Access application `agent` exists in `tofu/access.tf` with the owner's email
+  policy (precedence 1) and the `service auth` policy (precedence 2,
   `any_valid_service_token`). No bypass.
 - maki uses an account service token in `cloudflared access`; the owner uses
   the browser identity. Access is evaluated at the edge, before the tunnel.
-- `nanobot.sammohr.dev` is retired with the host tunnel cutover.
+- `nanobot.sammohr.dev` is retired (SDLC #583). Its Access application was
+  removed from `tofu/access.tf`; the operator runs `tofu state rm` first because
+  the block carried `prevent_destroy` (`docs/manual-steps.md` step 20).
 - nanobot holds **no Cloudflare token**: the tunnel token lives in `ingress`,
   and the agent's egress policy admits the broker and DNS only.
 
-### OpenTofu fragment (T7 owns `tofu/`; the coordinator applies this)
+### OpenTofu: `tofu/cluster.tf`
+
+The tunnel config is managed, not dashboard-only. `tofu/cluster.tf` maps every
+`var.cluster_hosts` entry to one ingress rule through `local.cluster_ingress`
+and appends the `http_status:404` catch-all. The plan refuses a `cluster_hosts`
+entry with no rule, so a DNS cutover cannot leave a name on the catch-all.
 
 ```hcl
-# 1. Route the hostname at the cluster connector. tofu/dns.tf already creates a
-#    proxied CNAME per cluster_hosts entry, and a specific record wins over
-#    *.sammohr.dev. Set the existing variable at apply time (no new declaration):
-#      export TF_VAR_cluster_hosts='["agent"]'
-#    Add each data app to the same list at its own cutover.
-
-# 2. The tunnel's public hostname. If T7 keeps the cluster tunnel
-#    dashboard-managed, add this ingress entry in the dashboard instead of this
-#    resource; the two are equivalent.
-resource "cloudflare_zero_trust_tunnel_cloudflared_config" "cluster" {
-  account_id = var.account_id
-  tunnel_id  = var.cluster_tunnel_id
-  config {
-    ingress = [
-      {
-        hostname = "agent.${var.domain}"
-        service  = "http://nanobot.tenant-apps.svc.cluster.local:80"
-      },
-      { service = "http_status:404" },
-    ]
+# tofu/cluster.tf, excerpt
+locals {
+  cluster_ingress = {
+    agent = "http://nanobot.tenant-apps.svc.cluster.local:80"
   }
 }
 
-# 3. Access. The `agent` application and both policies already exist; the
-#    fragment asserts the shape and adds the maki service token if T7 manages
-#    tokens in tofu. `any_valid_service_token` already accepts it.
-resource "cloudflare_zero_trust_access_service_token" "maki" {
+resource "cloudflare_zero_trust_tunnel_cloudflared_config" "cluster" {
+  count      = var.cluster_tunnel_id == "" ? 0 : 1
   account_id = var.account_id
-  name       = "maki"
-  duration   = "8760h"
+  tunnel_id  = var.cluster_tunnel_id
+  config = {
+    ingress = concat(local.cluster_ingress_rules, [{ hostname = null, service = "http_status:404" }])
+  }
 }
+```
 
-# 4. Retire nanobot.sammohr.dev. Remove the
-#    `cloudflare_zero_trust_access_application.nanobot` block, then:
-#      tofu -chdir=tofu state rm cloudflare_zero_trust_access_application.nanobot
-#      tofu -chdir=tofu apply -no-color
-#    The wildcard CNAME moves the name back to the host tunnel until the host
-#    tunnel's nanobot route is removed in the T9 change; the Access application
-#    is the control that keeps it unreachable once deleted.
+`tofu/dns.tf` creates the proxied CNAME per `cluster_hosts` entry, and a
+specific record wins over `*.sammohr.dev`. The apply is:
+
+```sh
+export TF_VAR_cluster_tunnel_id=<cluster UUID>
+export TF_VAR_cluster_hosts='["agent"]'
+tofu -chdir=tofu plan -no-color    # one CNAME + the tunnel config, no replacements
+tofu -chdir=tofu apply -no-color
 ```
 
 Verification after apply:
@@ -247,6 +240,14 @@ dig +short agent.sammohr.dev            # CNAME <cluster-uuid>.cfargotunnel.com
 curl -sS -o /dev/null -D - https://agent.sammohr.dev/ | head -3
 # expect HTTP/2 302 to *.cloudflareaccess.com, never an origin response
 ```
+
+### Repository mirror cross-reference
+
+The platform's `github-backup` CronJob (`clusters/homelab/platform/backup/`,
+`docs/runbook.md` "Repository mirror") uses a separate fine-grained read-only
+PAT, not a broker logical host. It never shares the `github-*-token` values:
+the broker's tokens are scoped to the machine user's fork/PR capability, and
+the mirror's token is scoped to `Contents: read` on the two repositories.
 
 ## Verification
 

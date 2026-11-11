@@ -1,0 +1,111 @@
+# Nightly mirror of the two repositories, off-peak: host restic starts at 03:30
+# Europe/Berlin and runs up to 15 minutes late, so 04:15 is after it and still
+# well before the day's CI. The job is bounded to 30 minutes and never overlaps
+# itself; a missed start is retried inside 15 minutes.
+#
+# Output on the github-backup-data claim:
+#   mirror/<owner>/<repo>.git        bare mirror (all refs)
+#   bundles/<owner>/<repo>.bundle    one-file bundle of every ref
+#   bundles/<owner>/<repo>.bundle.manifest   commit, ref count, size, timestamp
+#
+# A restore is `git clone <bundle>`; the manifest names the commit the mirror
+# held, so a backup that silently cloned nothing is visible.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: github-backup
+  namespace: platform
+  labels:
+    app.kubernetes.io/name: github-backup
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: platform
+spec:
+  schedule: "15 4 * * *"
+  timeZone: Europe/Berlin
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 900
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 1800
+      ttlSecondsAfterFinished: 86400
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: github-backup
+            app.kubernetes.io/part-of: homelabs
+            homelabs.dev/tier: platform
+            homelabs.dev/managed-by: platform
+        spec:
+          serviceAccountName: github-backup
+          automountServiceAccountToken: false
+          restartPolicy: OnFailure
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            runAsGroup: 65532
+            fsGroup: 65532
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: backup
+              image: docker.io/alpine/git:2.54.0
+              command: ["/bin/sh", "-c"]
+              args:
+                - |
+                  set -eu
+                  script=/opt/github-backup/github-backup.sh
+                  "$script" --owner smores56 --repo homelabs-platform --out /backup
+                  "$script" --owner smores56 --repo homelabs-apps --out /backup
+              env:
+                - name: TZ
+                  value: UTC
+                # readOnlyRootFilesystem: git still wants a writable HOME for
+                # its lock files.
+                - name: HOME
+                  value: /tmp
+                - name: GIT_CONFIG_GLOBAL
+                  value: /dev/null
+                - name: GIT_CONFIG_SYSTEM
+                  value: /dev/null
+                - name: GIT_TERMINAL_PROMPT
+                  value: "0"
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
+                limits:
+                  cpu: 500m
+                  memory: 256Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
+              volumeMounts:
+                - name: script
+                  mountPath: /opt/github-backup
+                  readOnly: true
+                - name: token
+                  mountPath: /var/run/secrets/github-backup
+                  readOnly: true
+                - name: backup
+                  mountPath: /backup
+                - name: tmp
+                  mountPath: /tmp
+          volumes:
+            - name: script
+              configMap:
+                name: github-backup-script
+            - name: token
+              secret:
+                secretName: github-backup-read-pat
+                optional: false
+            - name: backup
+              persistentVolumeClaim:
+                claimName: github-backup-data
+            - name: tmp
+              emptyDir:
+                sizeLimit: 64Mi

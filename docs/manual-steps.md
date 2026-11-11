@@ -40,8 +40,14 @@ nanobot forked from `homelabs-platform` cannot be the owner's own account
      read and write**, expiry 90 days. Logical host `github-fork` (git push to
      the fork, basic) uses it. A fine-grained PAT covers one repository owner,
      so the fork and the upstream cannot share one.
-   Record both PATs in the broker's `broker-credentials` Secret (step 10), never
-   in this repository and never in `homelabs-apps`.
+   - `github-backup-read-pat` (not a broker host): fine-grained PAT owned by
+     the operator, resource owner `smores56`, repository access exactly
+     `homelabs-platform` and `homelabs-apps`, permission **Contents: read**
+     only, expiry 90 days. It is the platform mirror's credential (step 22),
+     and a classic `repo`-scoped PAT is refused by the job at start.
+   Record these PATs in the broker's `broker-credentials` Secret (step 10) or
+   the mirror's Secret (step 22), never in this repository and never in
+   `homelabs-apps`.
 
 ## 2. Create the `cloudflare` environment secret
 
@@ -208,15 +214,15 @@ for ref in prom/prometheus:v3.16.0 grafana/loki:3.7.9 \
   ghcr.io/immich-app/immich-machine-learning:v3.0.3 \
   ghcr.io/immich-app/postgres:17-vectorchord0.4.3-pgvector0.8.1 \
   deluan/navidrome:0.63.2 crocodilestick/calibre-web-automated:4.0.8 \
-  cloudflare/cloudflared:2026.10.2; do
+  cloudflare/cloudflared:2026.10.2 alpine/git:2.54.0; do
   printf '%s -> %s\n' "$ref" "$(crane digest "$ref")"
 done
 ```
 
 Then rewrite those `image:` lines under
 `clusters/homelab/observability/{prometheus,loki,vector,status-exporter,loki-gateway}`,
-`clusters/homelab/data/{immich,navidrome,calibre,graphiti}` and
-`clusters/homelab/ingress`
+`clusters/homelab/data/{immich,navidrome,calibre,graphiti}`,
+`clusters/homelab/ingress` and `clusters/homelab/platform/backup`
 to `repo@sha256:<digest>` (keep the tag when the registry allows
 `repo:tag@sha256:...`), run `scripts/kustomize-build-all.sh` and
 `tests/observability/check.sh`, and commit. The image-pin assertion in
@@ -537,37 +543,44 @@ The hostname moves from the host tunnel to the cluster tunnel, behind the
 existing Access application `agent` (owner email plus service auth for maki).
 No Cloudflare credential goes into the agent pod.
 
-1. After the broker and nanobot serve in the cluster, add the hostname to the
-   cluster tunnel's routed set (T7 owns `tofu/`; the fragment is in
-   `docs/broker.md`, "OpenTofu fragment"):
+**Order matters.** This change removes the `nanobot` Access application from
+`tofu/access.tf`. It carried `prevent_destroy`, so the state entry is removed
+before the first apply; applying first fails on the destroy.
+
+1. Drop the retired object from state (the object still exists at the edge):
+
+   ```sh
+   tofu -chdir=tofu state rm cloudflare_zero_trust_access_application.nanobot
+   ```
+
+2. Set the cluster contract and apply. `tofu/cluster.tf` owns the tunnel's
+   hostname config and refuses a `cluster_hosts` entry with no origin rule:
 
    ```sh
    export TF_VAR_cluster_tunnel_id=<cluster UUID from step 15>
    export TF_VAR_cluster_hosts='["agent"]'
-   tofu -chdir=tofu plan -no-color   # one CNAME, no replacements
+   tofu -chdir=tofu plan -no-color
+   # expect: the agent CNAME, cloudflare_zero_trust_tunnel_cloudflared_config.cluster
+   # with agent -> http://nanobot.tenant-apps.svc.cluster.local:80, the `agent`
+   # Access application unchanged, and no `nanobot` application in the plan
    tofu -chdir=tofu apply -no-color
    dig +short agent.sammohr.dev      # CNAME <cluster-uuid>.cfargotunnel.com
    ```
 
-   In the tunnel's configuration, map `agent.sammohr.dev` to
-   `http://nanobot.tenant-apps.svc.cluster.local:80`; if the tunnel is
-   dashboard-managed, add that public hostname there instead of the tofu
-   resource.
+   Do not add the public hostname in the Zero Trust dashboard. The
+   `cloudflare_zero_trust_tunnel_cloudflared_config.cluster` resource is the
+   source of truth; a dashboard edit is replaced by the next apply.
 
-2. Mint the maki service token in Zero Trust → Access → Service Auth. The
+3. Mint the maki service token in Zero Trust → Access → Service Auth. The
    `service auth` policy already accepts any valid service token; store the
    `CF-Access-Client-Id`/`CF-Access-Client-Secret` pair in maki's client config,
    never in the cluster. The owner uses the browser identity.
 
-3. Retire the old hostname: remove the `cloudflare_zero_trust_access_application.nanobot`
-   block, then
+4. Delete the `nanobot` application at the edge: Zero Trust → Access →
+   Applications → `nanobot` → Delete. Its state entry is already gone, so a
+   later apply neither recreates nor destroys it.
 
-   ```sh
-   tofu -chdir=tofu state rm cloudflare_zero_trust_access_application.nanobot
-   tofu -chdir=tofu apply -no-color
-   ```
-
-4. Verify the edge and the pod:
+5. Verify the edge and the pod:
 
    ```sh
    curl -sS -o /dev/null -D - https://agent.sammohr.dev/ | head -3     # 302 to *.cloudflareaccess.com
@@ -579,3 +592,122 @@ No Cloudflare credential goes into the agent pod.
 
    Expected: `BROKER_URL` is set, no `CLOUDFLARE_*` variable exists, and the
    pod has no mounted service-account token.
+
+## 21. Kanbei private route and service token
+
+`tofu/kanbei.tf` creates the private WARP hostname route and its Access
+application. It deliberately creates **no** DNS record and **no** tunnel ingress
+rule: a record would make `kanbei.sammohr.dev` public, and the host tunnel's
+ingress stays in nix-config. The route and the application both carry
+`prevent_destroy`; re-adopting them after a state loss is `tofu import`, and
+removing them is `tofu state rm` first, then the dashboard.
+
+1. Finish the WARP client posture before applying (nix-config
+   `docs/kanbei-access.md` has the full table): Gateway proxy on with TCP,
+   split-tunnel include `100.80.0.0/16` and `2606:4700:0cf1:4000::/64`, DNS
+   through Gateway with no local-domain fallback for `dev`, and TLS decryption
+   off for this hostname so the guest certificate stays end to end.
+
+2. Apply the two objects; the plan must show no DNS record:
+
+   ```sh
+   export TF_VAR_account_id=<32-hex account tag>
+   export TF_VAR_host_tunnel_id=$(jq -r .TunnelID /run/secrets/cloudflared-credentials)
+   export TF_VAR_acme_account_id=<id from step 16>
+   tofu -chdir=tofu plan -no-color
+   # expect: cloudflare_zero_trust_network_hostname_route.kanbei (create) and
+   # cloudflare_zero_trust_access_application.kanbei (create), nothing else
+   tofu -chdir=tofu apply -no-color
+   ```
+
+3. Verify the route is private and the application exists. The wildcard CNAME
+   still resolves the name (that is expected); a *specific* record is the
+   regression:
+
+   ```sh
+   ZONE=$(curl -sS -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+     "https://api.cloudflare.com/client/v4/zones?name=sammohr.dev" |
+     jq -r '.result[0].id')
+   curl -sS -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+     "https://api.cloudflare.com/client/v4/zones/$ZONE/dns_records?name=kanbei.sammohr.dev" |
+     jq '.result | length'        # expect 0
+   tofu -chdir=tofu state list | grep -E 'network_hostname_route\.kanbei|access_application\.kanbei$'
+   ```
+
+   With WARP paused, `curl -sS -o /dev/null -D - https://kanbei.sammohr.dev/`
+   must not reach the guest (Access denies, or the tunnel 404s); with WARP on
+   and TLS inspection off, the certificate is the guest's:
+   `openssl s_client -connect kanbei.sammohr.dev:443 -servername kanbei.sammohr.dev </dev/null`
+   shows `CN = kanbei.sammohr.dev` from the ACME CA, not a Cloudflare edge
+   certificate.
+
+4. Mint a service token only if an unattended client needs one (Zero Trust →
+   Access → Service Auth). The `service auth` policy is account-wide, so any
+   valid token is accepted; store the client id/secret outside the cluster and
+   delete a leaked token there. The owner uses the WARP identity, not a token.
+
+## 22. Create the read-only mirror PAT and run `github-backup`
+
+The CronJob in `clusters/homelab/platform/backup/` mirrors
+`smores56/homelabs-platform` and `smores56/homelabs-apps` into a bundle on the
+`github-backup-data` PVC. Its only credential is a fine-grained read-only PAT;
+the script refuses a classic `ghp_` token at start.
+
+1. Mint a fine-grained PAT (GitHub → Settings → Developer settings →
+   Fine-grained tokens → Generate new token):
+
+   - Resource owner: `smores56`.
+   - Repository access: **Only select repositories** → `homelabs-platform`,
+     `homelabs-apps`.
+   - Permissions: **Contents: Read-only**; `Metadata: Read-only` is added
+     automatically and is the only other permission. Nothing else — no
+     Administration, no Pull requests, no Workflows.
+   - Expiration: 90 days.
+
+2. Store it as a SOPS contract Secret. `github-backup-read-pat.yaml` holds one
+   key, `token`, and is encrypted with the operator's key:
+
+   ```sh
+   sops -e -i github-backup-read-pat.yaml
+   kubectl -n platform create secret generic github-backup-read-pat-sops \
+     --from-file=token=<(sops -d github-backup-read-pat.yaml | yq -r .token)
+   ```
+
+3. Resume the ESO stage (step 8) if it is not already running, then verify the
+   projection without printing the value:
+
+   ```sh
+   kubectl -n platform get secret github-backup-read-pat -o jsonpath='{.data.token}' |
+     base64 -d | cut -c1-12        # expect github_pat_
+   ```
+
+4. Run the job once and read its log. The log names the commit, ref count and
+   bundle size; a missing bundle for an empty repository is reported as
+   `commit=none` rather than a silent success.
+
+   ```sh
+   kubectl -n platform create job --from=cronjob/github-backup github-backup-manual
+   kubectl -n platform logs job/github-backup-manual -f
+   kubectl -n platform get pvc github-backup-data    # Bound
+   ```
+
+   Restore check: copy the bundle out of a completed job pod before its
+   24-hour TTL expires and clone it offline.
+
+   ```sh
+   pod=$(kubectl -n platform get pods -l job-name=github-backup-manual -o name | head -1)
+   kubectl -n platform cp "$pod:/backup/bundles/smores56/homelabs-platform.bundle" .
+   git clone homelabs-platform.bundle /tmp/restore-check
+   ```
+
+5. Revoke the classic write PAT the old host-side mirror used. The cluster job
+   never needs one: it clones over HTTPS with `x-access-token` and the
+   fine-grained token. GitHub → Settings → Developer settings → Personal access
+   tokens → **Tokens (classic)** → delete the token with `repo` scope. Confirm
+   the list is empty (or holds only unrelated tokens) before recording the step
+   as done.
+
+6. The nightly run is `15 4 * * *` Europe/Berlin, after the host's restic walk.
+   Rotation is: mint the replacement in step 1, repeat step 2, wait for the 1h
+   ESO refresh (or delete the projected Secret so it is recreated), then revoke
+   the old PAT.

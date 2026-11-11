@@ -111,14 +111,63 @@ for app in ssh memory agent; do
   if grep -q 'cloudflare_zero_trust_access_policy.service_auth.id' <<<"$block"; then ok "${app} accepts a service token"; else bad "${app} accepts a service token"; fi
   if grep -q 'cloudflare_zero_trust_access_policy.email.id' <<<"$block"; then ok "${app} allows the owner email"; else bad "${app} allows the owner email"; fi
 done
-nanobot_app=$(extract cloudflare_zero_trust_access_application.nanobot)
-if grep -q 'service_auth' <<<"$nanobot_app"; then bad "nanobot holds no service-token policy for Cloudflare"; else ok "nanobot holds no service-token policy for Cloudflare"; fi
+
+# nanobot.sammohr.dev is retired in favour of agent.sammohr.dev (SDLC #583).
+if [[ -n $(extract cloudflare_zero_trust_access_application.nanobot) ]]; then
+  bad "no nanobot application remains"
+else
+  ok "no nanobot application remains"
+fi
+
+# The Kanbei route is a private WARP path, not a public hostname (SDLC #586).
+echo "== kanbei private route"
+kanbei_route=$(extract cloudflare_zero_trust_network_hostname_route.kanbei)
+if [[ -z $kanbei_route ]]; then
+  bad "kanbei hostname route exists"
+else
+  ok "kanbei hostname route exists"
+  if grep -qF 'hostname   = "kanbei.${var.domain}"' <<<"$kanbei_route"; then ok "kanbei route covers kanbei.<zone>"; else bad "kanbei route covers kanbei.<zone>"; fi
+  if grep -qF 'tunnel_id  = var.host_tunnel_id' <<<"$kanbei_route"; then ok "kanbei route uses the host tunnel"; else bad "kanbei route uses the host tunnel"; fi
+  if grep -qF 'prevent_destroy = true' <<<"$kanbei_route"; then ok "kanbei route is protected from destroy"; else bad "kanbei route is protected from destroy"; fi
+fi
+kanbei_app=$(extract cloudflare_zero_trust_access_application.kanbei)
+if [[ -z $kanbei_app ]]; then
+  bad "kanbei Access application exists"
+else
+  ok "kanbei Access application exists"
+  if grep -q 'cloudflare_zero_trust_access_policy.email.id' <<<"$kanbei_app"; then ok "kanbei allows the owner email"; else bad "kanbei allows the owner email"; fi
+  if grep -q 'cloudflare_zero_trust_access_policy.service_auth.id' <<<"$kanbei_app"; then ok "kanbei accepts a service token"; else bad "kanbei accepts a service token"; fi
+  if grep -q 'cloudflare_zero_trust_access_policy.bypass.id' <<<"$kanbei_app"; then bad "kanbei has no bypass policy"; else ok "kanbei has no bypass policy"; fi
+  if grep -qF 'prevent_destroy = true' <<<"$kanbei_app"; then ok "kanbei application is protected from destroy"; else bad "kanbei application is protected from destroy"; fi
+  if grep -qF 'allow_authenticate_via_warp = true' <<<"$kanbei_app"; then ok "kanbei admits enrolled WARP devices"; else bad "kanbei admits enrolled WARP devices"; fi
+fi
+hasnt "kanbei has no public DNS record" '^[[:space:]]*name[[:space:]]*=[[:space:]]*"kanbei\.'
+hasnt "kanbei has no tunnel ingress rule" 'kanbei[[:space:]]*=[[:space:]]*"http'
+if [[ -n $(extract cloudflare_dns_record.kanbei) ]]; then
+  bad "kanbei has no cloudflare_dns_record"
+else
+  ok "kanbei has no cloudflare_dns_record"
+fi
+
+# The operator-facing half of the same contract: the state-rm order for a
+# prevent_destroy object and the service-token mint step.
+if grep -qF 'state rm cloudflare_zero_trust_access_application.nanobot' docs/manual-steps.md; then
+  ok "manual steps remove the nanobot state entry first"
+else
+  bad "manual steps remove the nanobot state entry first"
+fi
+if grep -qF 'kanbei.sammohr.dev' docs/manual-steps.md && grep -qF 'Service Auth' docs/manual-steps.md; then
+  ok "manual steps cover the Kanbei route and service token"
+else
+  bad "manual steps cover the Kanbei route and service token"
+fi
 
 echo "== retired hostnames"
 hasnt "no llm application" 'cloudflare_zero_trust_access_application" "llm"'
 hasnt "no chat application" 'cloudflare_zero_trust_access_application" "chat"'
 hasnt "no llm destination" 'uri[[:space:]]*=[[:space:]]*"llm\.'
 hasnt "no chat destination" 'uri[[:space:]]*=[[:space:]]*"chat\.'
+hasnt "no nanobot destination" 'uri[[:space:]]*=[[:space:]]*"nanobot\.'
 
 echo "== CAA"
 caa=$(grep -cE '^[[:space:]]*type[[:space:]]*=[[:space:]]*"CAA"' "$work/code.tf")
@@ -141,6 +190,34 @@ if grep -q 'content = local.cluster_tunnel_cname' <<<"$cluster_dns"; then ok "cl
 if grep -q 'condition     = var.cluster_tunnel_id != ""' <<<"$cluster_dns"; then ok "cluster DNS refuses an empty tunnel id"; else bad "cluster DNS refuses an empty tunnel id"; fi
 has 'cluster_tunnel_id is a variable' 'variable "cluster_tunnel_id"'
 hasnt "no tunnel UUID is authored in the config" '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
+
+# The cluster tunnel's hostname config lives here, not in a dashboard (SDLC #583).
+echo "== cluster tunnel ingress"
+cluster_cfg=$(extract cloudflare_zero_trust_tunnel_cloudflared_config.cluster)
+if [[ -z $cluster_cfg ]]; then
+  bad "cluster tunnel config exists"
+else
+  ok "cluster tunnel config exists"
+  if grep -qF 'tunnel_id  = var.cluster_tunnel_id' <<<"$cluster_cfg"; then ok "cluster config targets the cluster tunnel"; else bad "cluster config targets the cluster tunnel"; fi
+  if grep -qF 'count = var.cluster_tunnel_id == "" ? 0 : 1' <<<"$cluster_cfg"; then ok "cluster config tolerates a missing tunnel"; else bad "cluster config tolerates a missing tunnel"; fi
+fi
+if grep -qF 'agent = "http://nanobot.tenant-apps.svc.cluster.local:80"' "$work/code.tf"; then
+  ok "agent maps to the in-cluster nanobot Service"
+else
+  bad "agent maps to the in-cluster nanobot Service"
+fi
+if grep -qF 'http_status:404' "$work/code.tf"; then ok "cluster ingress ends with a 404 catch-all"; else bad "cluster ingress ends with a 404 catch-all"; fi
+if grep -qF 'contains(keys(local.cluster_ingress), host)' "$work/code.tf"; then
+  ok "cluster DNS and ingress must agree"
+else
+  bad "cluster DNS and ingress must agree"
+fi
+if grep -qF 'TF_VAR_cluster_hosts=' docs/manual-steps.md &&
+  grep -qF '["agent"]' docs/manual-steps.md; then
+  ok "manual steps document the agent cluster host"
+else
+  bad "manual steps document the agent cluster host"
+fi
 
 echo "== preserved objects"
 for addr in cloudflare_pages_project.recovery cloudflare_pages_domain.recovery \

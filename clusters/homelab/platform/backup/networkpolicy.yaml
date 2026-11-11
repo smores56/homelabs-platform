@@ -1,0 +1,51 @@
+# The only egress the backup pod gets: DNS, then TCP 443 to GitHub's published
+# `git` ranges. Another pod in the platform namespace is unaffected (a policy
+# isolates the pods its podSelector selects), so ESO and the webhooks keep their
+# own traffic.
+#
+# The ranges are the stable aggregates from https://api.github.com/meta (`git`).
+# GitHub also lists regional /32 frontends there; when a run fails to connect,
+# refresh the set with
+#   curl -s https://api.github.com/meta | jq -r '.git[]'
+# and add the missing range here. `tests/policies/check.sh` asserts 443 only and
+# refuses a 0.0.0.0/0 catch-all.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: github-backup-egress
+  namespace: platform
+  labels:
+    app.kubernetes.io/name: github-backup
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: platform
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: github-backup
+  policyTypes: ["Egress"]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    - to:
+        - ipBlock:
+            cidr: 140.82.112.0/20
+        - ipBlock:
+            cidr: 143.55.64.0/20
+        - ipBlock:
+            cidr: 192.30.252.0/22
+        - ipBlock:
+            cidr: 185.199.108.0/22
+        - ipBlock:
+            cidr: 2606:50c0::/32
+        - ipBlock:
+            cidr: 2a0a:a440::/29
+      ports:
+        - protocol: TCP
+          port: 443

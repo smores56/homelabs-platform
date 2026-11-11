@@ -236,9 +236,10 @@ flux -n flux-system get kustomizations
 Expected: `flux-system` Kustomization Ready on the pinned
 `serviceAccountName: kustomize-controller` (see `docs/flux.md` for why bootstrap
 re-renders `gotk-sync.yaml`), then the `platform-*` stages appear in order:
-namespaces, rbac, policies, network, secrets, data config, observability,
-tenants. `platform-secrets-eso` and `platform-observability-secrets` stay
-suspended until step 4 installs the operator.
+namespaces, rbac, policies, network, secrets, data config, backup,
+observability, tenants. `platform-secrets-eso` and
+`platform-observability-secrets` stay suspended until step 4 installs the
+operator.
 
 ### 2. Age key for SOPS
 
@@ -310,7 +311,7 @@ contract from `docs/manual-steps.md` step 10, not an ESO generator.
 ### 5. Confirm the policy stack on the live cluster
 
 ```sh
-tests/policies/check.sh            # 192 static assertions, no cluster
+tests/policies/check.sh            # 357 static assertions, no cluster
 nix shell nixpkgs#etcd nixpkgs#kubernetes nixpkgs#openssl nixpkgs#kustomize \
   nixpkgs#yq-go nixpkgs#jq -c tests/policies/check.sh --runtime
 kubectl get validatingadmissionpolicies,validatingadmissionpolicybindings
@@ -330,24 +331,25 @@ Expected: rejected with a `violates PodSecurity "restricted"` violation
 
 ### 6. Data apps and the cluster tunnel
 
-`platform-storage`, `platform-data-apps` and `platform-ingress` apply with the
-rest of the stack, but their pods stay unstarted until the operator has done
-`docs/manual-steps.md` steps 8, 12 and 13 (ESO, the SOPS-contract Secrets, and
-the cutover). The per-app order, checks and rollback are in
-`docs/data-migration.md`. Nothing here flips a Cloudflare route: the tunnel and
-its DNS/Access objects belong to `tofu/` (`docs/cloudflare.md`), and the host
-tunnel keeps serving `ssh`, `agent` and `memory` until each cutover. `llm` and
-`chat` are retired (`docs/manual-steps.md` step 17).
+`platform-storage`, `platform-backup`, `platform-data-apps` and
+`platform-ingress` apply with the rest of the stack, but their pods stay
+unstarted until the operator has done `docs/manual-steps.md` steps 8, 12 and 13
+(ESO, the SOPS-contract Secrets, and the cutover). The per-app order, checks and
+rollback are in `docs/data-migration.md`. Nothing here flips a Cloudflare route:
+the tunnel and its DNS/Access objects belong to `tofu/` (`docs/cloudflare.md`),
+and the host tunnel keeps serving `ssh` and `agent` until each cutover. `llm`,
+`chat` and `nanobot` are retired (`docs/manual-steps.md` steps 17 and 20).
 
 ### 7. Cloudflare objects, Access default-deny and CAA
 
 `tofu/` owns DNS, Access and notifications for both tunnels; the connectors stay
 where they run (host in nix-config, cluster in `clusters/homelab/ingress/`).
 The access model, the provider v5 mapping, the state move and the CAA caveat are
-in `docs/cloudflare.md`; the operator steps are `docs/manual-steps.md` 14-18.
+in `docs/cloudflare.md`; the operator steps are `docs/manual-steps.md` 14-18,
+20 and 21.
 
 ```sh
-tests/tofu/check.sh                       # static: 66 assertions, no token
+tests/tofu/check.sh                       # static: 89 assertions, no token
 CLOUDFLARE_API_TOKEN=... tests/access/check.sh   # one fresh hostname is denied
 ```
 
@@ -360,6 +362,37 @@ appends for Universal SSL.
 `tofu-apply.yml` refuses to apply until a state backend exists, because state is
 operator-owned (`docs/cloudflare.md`, "State"); the manual apply is the only one
 until the backend is provisioned.
+
+### 8. Repository mirror
+
+`platform-backup` reconciles `clusters/homelab/platform/backup/`: ServiceAccount
+`github-backup`, the `github-backup-data` PVC on `local-path`, the egress policy
+(GitHub 443 + DNS) and the `15 4 * * *` Europe/Berlin CronJob. The pod stays
+unstarted until the PAT Secret exists; there is no dashboard step for the
+schedule.
+
+```sh
+# after docs/manual-steps.md step 22
+kubectl -n platform get cronjob github-backup
+kubectl -n platform get secret github-backup-read-pat \
+  -o jsonpath='{.data.token}' | base64 -d | cut -c1-12      # github_pat_
+kubectl -n platform create job --from=cronjob/github-backup github-backup-manual
+kubectl -n platform logs job/github-backup-manual -f
+kubectl -n platform get pvc github-backup-data               # Bound
+```
+
+Expected: the log prints `commit=<sha>`, a ref count and a byte count for each
+repository; nothing prints the token. A classic `ghp_` token in the Secret makes
+the job fail at start with `token is not a fine-grained PAT`, which is the
+intended failure (the mirror never needs write access). Restore is
+`git clone bundles/<owner>/<repo>.bundle <dir>`.
+
+Offline shape tests for the script (arguments, URL, classic-token refusal) run
+in CI:
+
+```sh
+tests/backup/check.sh
+```
 
 ### Required CI contexts
 

@@ -1,0 +1,41 @@
+# The credential contract for the repository mirror, recorded as data rather
+# than prose. No value is here. `github-backup-read-pat-sops` is a SOPS+age
+# Secret in the platform namespace, created by hand because no age key exists in
+# this repository; the ExternalSecret in platform/secrets/eso projects it under
+# the name the CronJob reads, the same two-step shape as the ingress tunnel
+# token.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: github-backup-read-pat-contract
+  namespace: platform
+  labels:
+    app.kubernetes.io/name: github-backup
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: platform
+data:
+  secretName: github-backup-read-pat
+  sopsSecretName: github-backup-read-pat-sops
+  key: token
+  scope: >-
+    Fine-grained PAT owned by the operator, repository access exactly
+    smores56/homelabs-platform and smores56/homelabs-apps, permission
+    Contents: read. No other repository and no other permission. A classic
+    ghp_ token with repo scope is refused by the job at start.
+  source: >-
+    github-backup-read-pat.yaml, SOPS-encrypted with the operator's key, then
+    `kubectl -n platform create secret generic github-backup-read-pat-sops
+    --from-file=token=<(...)`. Never commit the encrypted file to this
+    repository or to homelabs-apps.
+  rotate: >-
+    Mint the replacement PAT, replace github-backup-read-pat-sops, wait for the
+    ExternalSecret refresh (1h) or restart the operator's refresh, then revoke
+    the old PAT in GitHub settings. The next job run picks up the new value.
+  verify: >-
+    kubectl -n platform get secret github-backup-read-pat -o
+    jsonpath='{.data.token}' | base64 -d | cut -c1-12   # expect github_pat_
+  revokeClassic: >-
+    After the first successful run, revoke every classic PAT that was used for
+    repository mirroring in the old host backup (GitHub Settings > Developer
+    settings > Personal access tokens > Classic). The cluster job never needs
+    one: it clones over HTTPS with x-access-token and the fine-grained PAT.

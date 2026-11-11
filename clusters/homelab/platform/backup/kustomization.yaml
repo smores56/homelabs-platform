@@ -1,0 +1,25 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Stage 5c: the off-cluster mirror of the two repositories. Everything here is
+# platform-tier: the CronJob holds a read-only PAT, writes to a local-path PVC
+# and may reach GitHub on 443 only.
+resources:
+  - serviceaccount.yaml
+  - pvc.yaml
+  - sops-contract.yaml
+  - networkpolicy.yaml
+  - cronjob.yaml
+
+# The script ships in a ConfigMap so the manifest and the tested source are one
+# file. `tests/backup/check.sh` runs this exact copy with --print-url/--dry-run.
+configMapGenerator:
+  - name: github-backup-script
+    namespace: platform
+    files:
+      - github-backup.sh
+    options:
+      labels:
+        app.kubernetes.io/name: github-backup
+        app.kubernetes.io/part-of: homelabs
+        homelabs.dev/tier: platform

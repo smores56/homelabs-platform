@@ -217,7 +217,7 @@ deliberately has no namespace that holds only shared configuration.
 
 ```sh
 tests/observability/check.sh          # vector test + validate, drift, unit tests
-tests/policies/check.sh               # static policy stack (192 assertions)
+tests/policies/check.sh               # static policy stack (357 assertions)
 scripts/kustomize-build-all.sh        # every clusters/** kustomization
 nix run nixpkgs#kubeconform -- -strict -ignore-missing-schemas /tmp/manifests/*.yaml
 ```
@@ -229,8 +229,8 @@ schema v1.34):
   (6 `vector test` cases, 29 Python unit tests);
 - `vector validate` and `loki -verify-config` both accept the shipped configs;
 - `promtool check config` accepts the Prometheus config;
-- `tests/policies/check.sh` → `static: 192 passed, 0 failed`;
-- `tests/policies/check.sh --runtime` → `static+runtime: 258 passed, 0 failed`;
+- `tests/policies/check.sh` → `static: 357 passed, 0 failed`;
+- `tests/policies/check.sh --runtime` → `static+runtime: 457 passed, 0 failed`;
 - `kustomize build` over every `clusters/**` tree and `kubeconform -strict`
   → `237 resources found ... Valid: 175, Invalid: 0`.
 

@@ -9,7 +9,7 @@ Kanbei-critical (`docs/kanbei-critical.md`): the token can repoint a route.
 
 | Tunnel | Runs where | Serves | Owner |
 | --- | --- | --- | --- |
-| Host tunnel | `cloudflared` on `smortress`, declared from `nix-config` `modules/nixos/web-proxy.nix` | `ssh.sammohr.dev`, the Kanbei private WARP route, and — until their cutover — `agent`, `memory`, `nanobot` | human, nix-config |
+| Host tunnel | `cloudflared` on `smortress`, declared from `nix-config` `modules/nixos/web-proxy.nix` | `ssh.sammohr.dev`, the Kanbei private WARP route, and `agent`/`memory` until their cluster cutovers | human, nix-config |
 | Cluster tunnel | `cloudflared` in the `ingress` namespace (`clusters/homelab/ingress/`) | the apps whose origin moved into the cluster (`immich`, `music`, `calibre`, later `memory`, `agent`) | this repository |
 
 `tofu/` owns DNS, Access and notifications for **both** tunnels; it does not
@@ -20,9 +20,10 @@ ingress rules stay in nix-config. The cluster tunnel's DNS comes from
 
 The Kanbei route is a **private hostname route**, not a public DNS record:
 `kanbei.sammohr.dev` is reached only through WARP, with Gateway TLS decryption
-off. T12 owns it; it is not in `tofu/` because the host tunnel is human-owned
-and the route needs a verified WARP posture before it exists. When T12 lands it
-is this shape:
+off. `tofu/kanbei.tf` creates the route and its Access application (SDLC #586),
+reusing `var.host_tunnel_id`; it deliberately creates no `cloudflare_dns_record`
+and no tunnel ingress rule. The route is only useful after the WARP posture in
+`docs/manual-steps.md` step 21 is in place. The shape is:
 
 ```hcl
 resource "cloudflare_zero_trust_network_hostname_route" "kanbei" {
@@ -30,7 +31,17 @@ resource "cloudflare_zero_trust_network_hostname_route" "kanbei" {
   hostname   = "kanbei.${var.domain}"
   tunnel_id  = var.host_tunnel_id
 }
+
+resource "cloudflare_zero_trust_access_application" "kanbei" {
+  # owner email + service auth, no bypass, prevent_destroy
+}
 ```
+
+`*.sammohr.dev` still resolves the name to the host tunnel, but the tunnel has
+no ingress rule for it, so a request that bypasses WARP reaches the 404
+fallback and Access denies it first. A specific DNS record or a dashboard
+ingress entry would reopen the path; `tests/tofu/check.sh` asserts neither
+exists.
 
 Nothing about the host tunnel's ingress rules is asserted here; the
 `webProxy.services` assertion in nix-config is what keeps a protected hostname
@@ -106,7 +117,7 @@ export TF_VAR_email=sam@sammohr.dev
 export TF_VAR_host_tunnel_id=$(jq -r .TunnelID /run/secrets/cloudflared-credentials)
 export TF_VAR_acme_account_id=<numeric ACME account id>
 export TF_VAR_cluster_tunnel_id=<cluster tunnel UUID>   # omit until the tunnel exists
-export TF_VAR_cluster_hosts=[]                          # add names at cutover
+export TF_VAR_cluster_hosts='["agent"]'                 # tofu/cluster.tf maps each entry to an origin
 tofu -chdir=tofu init -input=false
 tofu -chdir=tofu plan -no-color
 tofu -chdir=tofu apply -no-color
@@ -122,7 +133,7 @@ provider's environment credential.
 | `email` | the only Access principal admitted, and the alert recipient |
 | `host_tunnel_id` | UUID of the nix-config host tunnel |
 | `cluster_tunnel_id` | UUID of the k3s tunnel; empty until it exists |
-| `cluster_hosts` | subdomains routed to the cluster tunnel; empty until a cutover |
+| `cluster_hosts` | subdomains routed to the cluster tunnel; each needs a `local.cluster_ingress` rule in `tofu/cluster.tf` |
 | `acme_account_id` | numeric Let's Encrypt account pinned in CAA |
 | `acme_directory` | ACME directory of that account (staging pins staging) |
 
@@ -158,10 +169,12 @@ zone with no application of its own is reachable only by the owner's identity.
 - **Protected applications** keep the email allow policy and add `service auth`
   (`non_identity`, any valid service token) where an unattended client connects:
   `ssh` (`cloudflared access ssh`), `memory` (the MCP wrapper's device), `agent`
-  (a blessed device's proxy). `nanobot` keeps the email policy only — the pod
-  holds no Cloudflare credential, so it cannot present a service token.
+  (a blessed device's proxy), and `kanbei` (the private WARP route, with
+  `allow_authenticate_via_warp` so an enrolled device passes without a browser
+  redirect). `nanobot` is retired (SDLC #583): the cluster serves the same app on
+  `agent`, and the old application is gone rather than left email-only.
 - The `service auth` policy is account-wide: any service token minted in that
-  account is accepted by those three applications. Rotate a leaked token in
+  account is accepted by those applications. Rotate a leaked token in
   Zero Trust → Access → Service Auth; the notification policy emails before one
   expires.
 
@@ -211,23 +224,29 @@ whole policy.
 ## Retired hostnames
 
 `llm.sammohr.dev` is retired (the cluster serves models) and `chat.sammohr.dev`
-was replaced by `agent.sammohr.dev`. Neither is in `tofu/`. Both applications
-carried `prevent_destroy`, so they cannot be deleted by dropping the block: the
-state entry goes first, then the object is deleted in Zero Trust.
+was replaced by `agent.sammohr.dev`. `nanobot.sammohr.dev` is retired with the
+agent cutover (SDLC #583): the wildcard CNAME moves it back to the host tunnel
+until the host's ingress entry is removed, and the wildcard Access application
+denies it once its own application is gone.
+
+All three applications carried `prevent_destroy`, so they cannot be deleted by
+dropping the block: the state entry goes first, then the object is deleted in
+Zero Trust.
 
 ```sh
 tofu -chdir=tofu state rm cloudflare_zero_trust_access_application.llm
 tofu -chdir=tofu state rm cloudflare_zero_trust_access_application.chat
+tofu -chdir=tofu state rm cloudflare_zero_trust_access_application.nanobot
 ```
 
-`docs/manual-steps.md` step 17 has the surrounding steps (dashboard deletion and
-the nix-config ingress removal).
+`docs/manual-steps.md` steps 17 and 20 have the surrounding steps (dashboard
+deletion, the nix-config ingress removal and the agent cutover).
 
-## Token and nanobot
+## Token and agent
 
 `CLOUDFLARE_API_TOKEN` exists in exactly two places: the `cloudflare` Actions
 environment and the operator's secret store. It is never a variable in
-`tofu/`, never in a manifest, and never in a workflow file. nanobot holds no
+`tofu/`, never in a manifest, and never in a workflow file. The agent holds no
 Cloudflare token at all: it has no Cloudflare egress through the broker and no
 service-token secret, and `tests/tofu/check.sh` asserts that no cluster manifest
 names one.
@@ -240,7 +259,7 @@ Static half — no credentials, what CI runs:
 tests/tofu/check.sh
 ```
 
-Expected: `tofu: 66 passed, 0 failed` with `tofu` on `PATH`; 64 without it, because the fmt/validate pair skips (CI runs both). The count grows with the config.
+Expected: `tofu: 89 passed, 0 failed` with `tofu` on `PATH`; 87 without it, because the fmt/validate pair skips (CI runs both). The count grows with the config.
 
 Runtime half — needs a token that can read Access:
 
