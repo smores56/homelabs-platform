@@ -211,7 +211,6 @@ fi
 network_json="$work/network.json"
 jq '[.[] | select(.kind == "NetworkPolicy" and .metadata.namespace == "observability")]' \
   "$work/observability.json" >"$network_json"
-np() { jq -r --arg name "$1" '.[] | select(.metadata.name == $name)' "$network_json"; }
 
 eq "$(jq -r '[.[] | select(.metadata.name == "default-deny") | (.spec.policyTypes | sort | join(","))] | join(",")' \
   "$network_json")" "Egress,Ingress" "observability is default-deny in both directions"
