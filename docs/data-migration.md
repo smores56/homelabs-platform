@@ -123,7 +123,10 @@ be applied at any time (a missing share just leaves the pod unstarted).
    Then stop the cluster's server and machine-learning so nothing holds the
    database while it is replaced, restore the dump once, and scale back:
    `cluster-kubectl -n immich scale deploy/immich-server deploy/immich-machine-learning --replicas=0`,
-   `cluster-kubectl -n immich exec -i deploy/immich-postgres -- pg_restore -U immich -d immich --no-owner --clean --if-exists < /var/lib/data/immich/db-dumps/immich.dump`,
+   `cluster-kubectl -n immich exec deploy/immich-postgres -- pg_restore -U immich -d immich --no-owner --clean --if-exists /data/db-dumps/immich.dump`
+   (the archive is already on the share, so the pod reads it directly; piping
+   it through `exec -i` stalls once the stream's flow-control window fills, and
+   `pg_restore` then sits unconnected with no backend to watch),
    then the two Deployments back to `--replicas=1`. The server migrates the
    schema at start. If the restore lands inside the 02:45 dump window, suspend
    `cluster-kubectl -n immich patch cronjob immich-dump -p '{"spec":{"suspend":true}}'`
