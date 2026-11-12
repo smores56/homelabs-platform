@@ -138,7 +138,8 @@ platform-secrets      sops contract ConfigMap    (dependsOn namespaces, policies
     └── platform-secrets-eso   ESO objects, suspended
 platform-broker       broker Deployment/Service  (dependsOn namespaces, rbac,
                       policies, network, secrets)
-platform-storage      StorageClass + static PVs  (dependsOn namespaces)
+platform-storage      StorageClasses, static PVs, local-path provisioner
+                      (dependsOn namespaces)
 platform-backup       repository mirror CronJob/PVC (dependsOn namespaces,
                       policies)
 platform-digest       cluster digest CronJob + PV/PVC (dependsOn namespaces,

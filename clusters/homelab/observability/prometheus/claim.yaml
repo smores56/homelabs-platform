@@ -1,5 +1,6 @@
-# k3s ships the `local-path` provisioner; on a single node that is the only
-# storage class. 10 Gi holds 7 days of a handful of targets at 30s.
+# `local-path` is the repo's own provisioner (platform/storage/
+# local-path-provisioner.yaml); the k3s addon is disabled. On a single node it is
+# the only dynamic class. 10 Gi holds 7 days of a handful of targets at 30s.
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:

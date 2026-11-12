@@ -3,6 +3,13 @@ kind: Kustomization
 
 # Storage is cluster-scoped, so it cannot be reconciled by a namespaced identity.
 # The stage runs as kustomize-controller, like the namespaces stage.
+#
+# No `namespace:` override here, on purpose: it would rewrite the provisioner's
+# Role/RoleBinding/Deployment out of `local-path-storage` while the Namespace and
+# the cluster-scoped objects kept their names. tests/policies/check.sh asserts
+# that the rendered Namespace, StorageClass and ClusterRole(Binding) carry no
+# namespace.
 resources:
   - storageclass.yaml
   - persistentvolumes.yaml
+  - local-path-provisioner.yaml

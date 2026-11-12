@@ -379,7 +379,7 @@ whose SHA-256 is pinned in `scripts/install-ci-tools.sh`.
 | NetworkPolicy enforcement (default-deny, gateway 3100, Loki push 3100) | needs a CNI | broker pod → gateway succeeds on 3100; tenant-apps pod → gateway and → Loki fail; only Vector may push to Loki |
 | ESO materialising `loki-gateway-token` | needs the ESO operator | `docs/manual-steps.md` step 9 |
 | Image digest pinning | needs a registry lookup | `docs/manual-steps.md` step 10 |
-| PVC binding on `local-path` | needs the k3s provisioner | `kubectl -n observability get pvc` |
+| PVC binding on `local-path` | needs the provisioner `platform-storage` reconciles (Rancher v0.0.31, digest-pinned) | `kubectl -n observability get pvc` |
 | The digest writing through the share | needs the `cluster-digest` virtiofs share and the static PV | `docs/manual-steps.md` step 23 |
 | Digest egress and the absent reverse path | needs a CNI | `docs/manual-steps.md` step 23, steps 3 and 6 |
 | The host writer age-encrypting a digest into the inbox | needs the T14 writer and Kanbei's recipient | `docs/manual-steps.md` step 23, step 5 |

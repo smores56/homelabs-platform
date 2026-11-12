@@ -376,6 +376,37 @@ else
   ok "no data or ingress manifest uses hostPath"
 fi
 
+# The `local-path` provisioner ships from this repository because the packaged
+# k3s `local-storage` addon is disabled. The pin and the RBAC are the review
+# surface: an unpinned image may create and delete directories on the node, and a
+# wildcard ClusterRole would be a cluster-wide grant.
+lpp="$storage_dir/local-path-provisioner.yaml"
+eq "$(yq -r 'select(.kind == "StorageClass" and .metadata.name == "local-path") | .provisioner' "$lpp")" \
+  "rancher.io/local-path" "the local-path StorageClass is declared with the Rancher provisioner"
+lpp_image=$(yq -r 'select(.kind == "Deployment" and .metadata.name == "local-path-provisioner") | .spec.template.spec.containers[0].image' "$lpp")
+if [[ $lpp_image =~ ^rancher/local-path-provisioner:v0\.0\.31@sha256:[0-9a-f]{64}$ ]]; then
+  ok "the local-path provisioner image is v0.0.31 pinned by digest"
+else
+  bad "the local-path provisioner image is not the pinned digest ($lpp_image)"
+fi
+lpp_wildcards=$(json_of "$lpp" | jq -r '.[] | select(.kind == "ClusterRole") | .rules[] | (.verbs[]?, .resources[]?, .apiGroups[]?) | select(. == "*")')
+if [[ -z $lpp_wildcards ]]; then
+  ok "the local-path ClusterRole grants no wildcard verbs or resources"
+else
+  bad "the local-path ClusterRole uses a wildcard" "$lpp_wildcards"
+fi
+# A `namespace:` override added to this stage later would move the namespaced
+# Role/Binding/Deployment into it while the Namespace and the cluster-scoped
+# objects kept their names, splitting the provisioner across objects.
+kustomize build "$storage_dir" >"$work/storage.yaml"
+json_of "$work/storage.yaml" >"$work/storage.json"
+scoped=$(jq -r '.[] | select(.kind == "Namespace" or .kind == "StorageClass" or .kind == "ClusterRole" or .kind == "ClusterRoleBinding") | select(.metadata.namespace != null) | "\(.kind)/\(.metadata.name): \(.metadata.namespace)"' "$work/storage.json")
+if [[ -z $scoped ]]; then
+  ok "the storage stage keeps its cluster-scoped objects unnamespaced"
+else
+  bad "a namespace override reached the storage stage's cluster-scoped objects" "$scoped"
+fi
+
 for ns in "${data_namespaces[@]}"; do
   eq "$(yq -r '[.metadata.namespace, .metadata.name, .spec.storageClassName] | join(":")' \
     "clusters/homelab/data/$ns/storage.yaml")" "$ns:$ns-data:data-local" \
@@ -572,7 +603,7 @@ else
 fi
 
 eq "$(jq -r '.[] | select(.kind == "PersistentVolumeClaim" and .metadata.name == "github-backup-data") | [.metadata.namespace, .spec.storageClassName, .spec.accessModes[0]] | join(":")' "$work/backup.json")" \
-  "platform:local-path:ReadWriteOnce" "the mirror claim uses the k3s local-path class"
+  "platform:local-path:ReadWriteOnce" "the mirror claim uses the platform local-path class"
 
 backup_np='.[] | select(.kind == "NetworkPolicy" and .metadata.name == "github-backup-egress")'
 eq "$(jq -r "$backup_np | [.spec.podSelector.matchLabels[\"app.kubernetes.io/name\"], (.spec.policyTypes | join(\",\"))] | join(\":\")" "$work/backup.json")" \
