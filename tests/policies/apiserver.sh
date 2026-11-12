@@ -65,8 +65,16 @@ start() {
 
   # --allow-privileged keeps the bench from rejecting privileged pods itself:
   # the policy, not the apiserver flag, is the control under test.
+  #
+  # --endpoint-reconciler-type=none: the bench never uses the kubernetes
+  # Service, and since 1.37 a reconciler of lease/master-count rejects a
+  # loopback --advertise-address, so the server would exit at startup on a
+  # newer kube-apiserver than the one last tested. Disabling the reconciler
+  # keeps the flags version-independent and also silences the endpoint-sync
+  # errors a loopback advertise address otherwise logs.
   kube-apiserver \
     --etcd-servers="http://127.0.0.1:${etcd_port}" \
+    --endpoint-reconciler-type=none \
     --secure-port="${api_port}" \
     --bind-address=127.0.0.1 \
     --advertise-address=127.0.0.1 \
