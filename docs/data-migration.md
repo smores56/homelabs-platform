@@ -12,7 +12,7 @@ host's restic job already looks. This document is the contract between
 | --- | --- | --- | --- | --- | --- |
 | `immich` | `/var/lib/data/immich` | `/mnt/data/immich` | `immich-data` | Immich server, machine-learning, Postgres, Valkey | `ghcr.io/immich-app/immich-{server,machine-learning}:v3.0.3`, `ghcr.io/immich-app/postgres:17-vectorchord0.4.3-pgvector0.8.1`, `valkey:9` |
 | `navidrome` | `/var/lib/data/music` | `/mnt/data/music` | `navidrome-data` | Navidrome | `deluan/navidrome:0.63.2` |
-| `calibre` | `/var/lib/data/books` | `/mnt/data/books` | `calibre-data` | Calibre-Web (CWA image) | `crocodilestick/calibre-web-automated:4.0.8` |
+| `calibre` | `/var/lib/data/books` | `/mnt/data/books` | `calibre-data` | Calibre-Web (CWA image) | `crocodilestick/calibre-web-automated:v4.0.8` |
 | `graphiti` | `/var/lib/data/graphiti` | `/mnt/data/graphiti` | `graphiti-data` | Graphiti + FalkorDB | `zepai/knowledge-graph-mcp:1.1.3-graphiti-0.31.2-standalone`, `falkordb/falkordb-server:v4.22.2` |
 
 The guest mounts the share at `/mnt/data/<share>` with a uid translation

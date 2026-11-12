@@ -214,7 +214,7 @@ for ref in prom/prometheus:v3.16.0 grafana/loki:3.7.9 \
   ghcr.io/immich-app/immich-server:v3.0.3 \
   ghcr.io/immich-app/immich-machine-learning:v3.0.3 \
   ghcr.io/immich-app/postgres:17-vectorchord0.4.3-pgvector0.8.1 \
-  deluan/navidrome:0.63.2 crocodilestick/calibre-web-automated:4.0.8 \
+  deluan/navidrome:0.63.2 crocodilestick/calibre-web-automated:v4.0.8 \
   cloudflare/cloudflared:2026.10.2 alpine/git:2.54.0; do
   printf '%s -> %s\n' "$ref" "$(crane digest "$ref")"
 done
