@@ -461,6 +461,11 @@ client registers with. Nothing blocks earlier applies: `acme_account_id`
 defaults to empty and the two CAA records are created only once it is set, so
 until this client has registered the zone simply has no CAA pin.
 
+The responder exists only while the Kanbei VM is enabled (`kanbeiVm.enable`,
+which waits on the GPU cutover): until then `kanbei-acme.service` is not defined,
+`/var/lib/kanbei-acme` does not exist, and an empty `acme_account_id` is the
+correct value. Re-run this step after that VM first requests a certificate.
+
 The account URL the client prints on first registration ends in
 `/acme/acct/<id>`:
 
