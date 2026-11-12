@@ -37,6 +37,10 @@ spec:
       # A hostPath directory is created root-owned, so one root init container
       # hands the checkpoint directory to the vector user; the agent itself
       # never runs as root and never writes outside /var/lib/vector.
+      # chown(2) needs CAP_CHOWN: with drop: ["ALL"] this container ran as root
+      # with an empty capability set, chown failed with EPERM on every retry and
+      # the pod never left Init:0/1. Grant exactly that one capability here; the
+      # vector container still drops ALL and runs at uid 10001.
       initContainers:
         - name: volume-permissions
           image: busybox:1.37.0
@@ -48,6 +52,7 @@ spec:
             readOnlyRootFilesystem: true
             capabilities:
               drop: ["ALL"]
+              add: ["CHOWN"]
           volumeMounts:
             - name: data
               mountPath: /var/lib/vector
