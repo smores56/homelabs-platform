@@ -22,6 +22,8 @@ spec:
   interval: 10m0s
   path: ./clusters/homelab
   prune: true
+  timeout: 10m
+  serviceAccountName: kustomize-controller
   sourceRef:
     kind: GitRepository
     name: flux-system
