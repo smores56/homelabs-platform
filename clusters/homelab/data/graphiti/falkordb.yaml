@@ -51,10 +51,13 @@ spec:
           # Same digest as the host (modules/features/ai/memory/service.nix).
           image: falkordb/falkordb-server:v4.22.2@sha256:103b70949bc9019dd025e62e077665349b73e96add5c45738e73ddf73eef6220
           env:
-            # `--dir /data/falkordb` because the working directory inside the
-            # image is not the mount; `--save ""` disables RDB snapshots.
+            # The image's run.sh appends its own
+            # `--dir "${FALKORDB_DATA_PATH}"` (/var/lib/falkordb/data) after
+            # REDIS_ARGS, so a --dir here would only be overridden; the PVC is
+            # mounted at that exact path instead. `--save ""` disables RDB
+            # snapshots.
             - name: REDIS_ARGS
-              value: '--appendonly yes --appendfsync everysec --save "" --dir /data/falkordb'
+              value: '--appendonly yes --appendfsync everysec --save ""'
             - name: TZ
               value: UTC
           ports:
@@ -85,8 +88,16 @@ spec:
             capabilities:
               drop: ["ALL"]
           volumeMounts:
+            # The image hardcodes FALKORDB_DATA_PATH=/var/lib/falkordb/data:
+            # run.sh mkdirs it (EACCES under the image's root-owned prefix) and
+            # redis writes the AOF there. subPath `falkordb` is the share's
+            # subdirectory (docs/data-migration.md), created by prepare-data on
+            # the /data mount before this container starts. No emptyDir on the
+            # parent: it would hide the image's bin/ (ENTRYPOINT) and nothing
+            # writes to the prefix itself (TLS is off, RDB saves are off).
             - name: data
-              mountPath: /data
+              mountPath: /var/lib/falkordb/data
+              subPath: falkordb
             - name: tmp
               mountPath: /tmp
       volumes:
