@@ -110,21 +110,22 @@ becomes authoritative. Until then the manual apply below is the only one.
 
 ```sh
 # On smortress, from a homelabs-platform checkout, as the operator.
-export CLOUDFLARE_API_TOKEN=$(sops -d --extract '["cloudflare-api-token"]' ~/nix-config/secrets/common.yaml)
-export TF_VAR_account_id=<32-hex account tag>
-export TF_VAR_domain=sammohr.dev
-export TF_VAR_email=sam@sammohr.dev
-export TF_VAR_host_tunnel_id=$(jq -r .TunnelID /run/secrets/cloudflared-credentials)
-export TF_VAR_acme_account_id=<numeric ACME account id>
-export TF_VAR_cluster_tunnel_id=<cluster tunnel UUID>   # omit until the tunnel exists
-export TF_VAR_cluster_hosts='["agent"]'                 # tofu/cluster.tf maps each entry to an origin
-tofu -chdir=tofu init -input=false
-tofu -chdir=tofu plan -no-color
-tofu -chdir=tofu apply -no-color
+./scripts/tofu-cloudflare.sh init -input=false
+./scripts/tofu-cloudflare.sh plan -no-color
+./scripts/tofu-cloudflare.sh apply -no-color
 ```
 
-No variable carries a token or a tunnel secret; the token is only ever the
-provider's environment credential.
+The account, apex, alert address and both tunnel ids come from the committed
+`tofu/terraform.tfvars`; `acme_account_id` there stays empty until step 16. The
+cluster host set is not a variable either — it follows `local.cluster_ingress`
+in `tofu/cluster.tf`.
+
+The provider credential is the only environment input, and the script is the
+one place that fetches it: SOPS decrypts `secrets/smortress.yaml` from the
+nix-config checkout (override the path with `CLOUDFLARE_SECRETS_FILE`), and a
+preset `CLOUDFLARE_API_TOKEN` skips SOPS entirely. Nothing else needs exporting.
+
+No variable carries a tunnel secret, and none is a credential.
 
 | Variable | Meaning |
 | --- | --- |
@@ -133,7 +134,7 @@ provider's environment credential.
 | `email` | the only Access principal admitted, and the alert recipient |
 | `host_tunnel_id` | UUID of the nix-config host tunnel |
 | `cluster_tunnel_id` | UUID of the k3s tunnel; empty until it exists |
-| `cluster_hosts` | subdomains routed to the cluster tunnel; each needs a `local.cluster_ingress` rule in `tofu/cluster.tf` |
+| `cluster_hosts` | subdomains routed to the cluster tunnel; unset by default, derived from `local.cluster_ingress` in `tofu/cluster.tf`. Pin it only to roll a single name back to the host tunnel |
 | `acme_account_id` | numeric Let's Encrypt account pinned in CAA |
 | `acme_directory` | ACME directory of that account (staging pins staging) |
 

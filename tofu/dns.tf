@@ -1,9 +1,9 @@
 # Cluster tunnel routes. A specific record wins over *.<domain>, so a name in
-# cluster_hosts resolves to the cluster connector while everything else keeps
-# resolving to the host tunnel in main.tf. The set is empty until a cutover, so
-# the split is a variable change and a rollback is deleting the entry.
+# local.cluster_hosts resolves to the cluster connector while everything else
+# keeps resolving to the host tunnel in main.tf. The set defaults to the
+# tunnel's own ingress keys, so DNS moves with the route rather than beside it.
 resource "cloudflare_dns_record" "cluster" {
-  for_each = toset(var.cluster_hosts)
+  for_each = toset(local.cluster_hosts)
 
   zone_id = data.cloudflare_zone.this.zone_id
   name    = "${each.value}.${var.domain}"

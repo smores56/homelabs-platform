@@ -431,24 +431,22 @@ unstarted until this exists.
    `cluster`. Add **no** public hostname: DNS and Access come from `tofu/`.
 2. Copy the token into the SOPS contract `cloudflare-tunnel-token-sops` in the
    `ingress` namespace (step 12). The token never enters git.
-3. Record the tunnel UUID and export it for the apply:
+3. Record the tunnel UUID in `tofu/terraform.tfvars` (`cluster_tunnel_id`) and
+   commit it: the apply reads every identifier from that file.
+
+4. At each app's cutover, add its origin to `local.cluster_ingress` in
+   `tofu/cluster.tf` and apply. DNS follows the map, so the record and the
+   tunnel rule cannot drift:
 
 ```sh
-export TF_VAR_cluster_tunnel_id=<tunnel UUID>
-```
-
-4. At each app's cutover, add the hostname and apply:
-
-```sh
-export TF_VAR_cluster_hosts='["agent","photos"]'
 tofu -chdir=tofu apply -no-color
 dig +short photos.sammohr.dev
 ```
 
-Expected: the CNAME now points at `<cluster-uuid>.cfargotunnel.com` instead of
-the host tunnel, and `kubectl -n ingress get deploy cloudflared` shows
-two ready replicas. Removing the name from `cluster_hosts` flips it back to the
-host tunnel and is the rollback.
+Expected: the CNAME points at `<cluster-uuid>.cfargotunnel.com` instead of the
+host tunnel, and `kubectl -n ingress get deploy cloudflared` shows two ready
+replicas. Deleting the entry from `local.cluster_ingress` flips that name back
+to the host tunnel and is the rollback.
 
 ## 16. Capture the ACME account id for the CAA pin
 
@@ -466,10 +464,9 @@ Account URL: https://acme-v02.api.letsencrypt.org/acme/acct/<id>
 
 Read it from that client's first-registration output or its persisted state;
 registering the same account key again returns the same URL, so a lost log
-costs a re-registration, not a new account. That trailing number is the input:
+costs a re-registration, not a new account. That trailing number goes into `acme_account_id` in `tofu/terraform.tfvars`:
 
 ```sh
-export TF_VAR_acme_account_id=<id>
 tofu -chdir=tofu plan -no-color   # two CAA records to add
 tofu -chdir=tofu apply -no-color
 ```
@@ -571,8 +568,6 @@ before the first apply; applying first fails on the destroy.
    hostname config and refuses a `cluster_hosts` entry with no origin rule:
 
    ```sh
-   export TF_VAR_cluster_tunnel_id=<cluster UUID from step 15>
-   export TF_VAR_cluster_hosts='["agent"]'
    tofu -chdir=tofu plan -no-color
    # expect: the agent CNAME, cloudflare_zero_trust_tunnel_cloudflared_config.cluster
    # with agent -> http://nanobot.tenant-apps.svc.cluster.local:80, the `agent`
@@ -625,9 +620,6 @@ removing them is `tofu state rm` first, then the dashboard.
 2. Apply the two objects; the plan must show no DNS record:
 
    ```sh
-   export TF_VAR_account_id=<32-hex account tag>
-   export TF_VAR_host_tunnel_id=$(jq -r .TunnelID /run/secrets/cloudflared-credentials)
-   export TF_VAR_acme_account_id=<id from step 16>
    tofu -chdir=tofu plan -no-color
    # expect: cloudflare_zero_trust_network_hostname_route.kanbei (create) and
    # cloudflare_zero_trust_access_application.kanbei (create), nothing else

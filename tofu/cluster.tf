@@ -16,6 +16,10 @@ locals {
     photos = "http://immich-server.immich.svc.cluster.local:2283"
   }
 
+  # The DNS set follows the ingress map unless explicitly pinned, so a cutover
+  # is one edit here and the two cannot disagree.
+  cluster_hosts = var.cluster_hosts == null ? sort(keys(local.cluster_ingress)) : var.cluster_hosts
+
   # Ordered rules; the catch-all is appended last and must stay last.
   cluster_ingress_rules = [
     for host in sort(keys(local.cluster_ingress)) : {
@@ -42,7 +46,7 @@ resource "cloudflare_zero_trust_tunnel_cloudflared_config" "cluster" {
 
   lifecycle {
     precondition {
-      condition     = alltrue([for host in var.cluster_hosts : contains(keys(local.cluster_ingress), host)])
+      condition     = alltrue([for host in local.cluster_hosts : contains(keys(local.cluster_ingress), host)])
       error_message = "cluster_hosts names a hostname with no cluster_ingress rule: add it in tofu/cluster.tf before moving the DNS record."
     }
   }

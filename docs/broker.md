@@ -227,8 +227,6 @@ resource "cloudflare_zero_trust_tunnel_cloudflared_config" "cluster" {
 specific record wins over `*.sammohr.dev`. The apply is:
 
 ```sh
-export TF_VAR_cluster_tunnel_id=<cluster UUID>
-export TF_VAR_cluster_hosts='["agent"]'
 tofu -chdir=tofu plan -no-color    # one CNAME + the tunnel config, no replacements
 tofu -chdir=tofu apply -no-color
 ```

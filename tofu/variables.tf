@@ -51,11 +51,12 @@ variable "cluster_tunnel_id" {
 
 variable "cluster_hosts" {
   type        = set(string)
-  description = "Subdomains routed to the cluster tunnel instead of the host tunnel. Add a name at its cutover, once the in-cluster origin serves it (docs/data-migration.md)."
-  default     = []
+  description = "Subdomains routed to the cluster tunnel instead of the host tunnel. Defaults to the keys of `local.cluster_ingress`, so a cutover is one edit in tofu/cluster.tf and DNS cannot drift from the tunnel's ingress. Set it explicitly only to pin a subset, which is the rollback for a single name."
+  default     = null
+  nullable    = true
 
   validation {
-    condition = alltrue([
+    condition = var.cluster_hosts == null || alltrue([
       for host in var.cluster_hosts : can(regex("^[a-z0-9]([a-z0-9-]*[a-z0-9])?$", host))
     ])
     error_message = "cluster_hosts holds bare one-label subdomains (no dots, lowercase, no wildcard)."

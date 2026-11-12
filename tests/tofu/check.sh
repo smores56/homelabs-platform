@@ -195,7 +195,8 @@ wildcard_dns=$(extract cloudflare_dns_record.wildcard)
 if grep -q 'content = local.host_tunnel_cname' <<<"$wildcard_dns"; then ok "wildcard DNS points at the host tunnel"; else bad "wildcard DNS points at the host tunnel"; fi
 if grep -q 'proxied = true' <<<"$wildcard_dns"; then ok "wildcard DNS is proxied"; else bad "wildcard DNS is proxied"; fi
 cluster_dns=$(extract cloudflare_dns_record.cluster)
-if grep -q 'for_each = toset(var.cluster_hosts)' <<<"$cluster_dns"; then ok "cluster DNS iterates var.cluster_hosts"; else bad "cluster DNS iterates var.cluster_hosts"; fi
+if grep -q 'for_each = toset(local.cluster_hosts)' <<<"$cluster_dns"; then ok "cluster DNS follows the derived host set"; else bad "cluster DNS follows the derived host set"; fi
+has 'cluster_hosts defaults to the ingress map' 'var\.cluster_hosts == null \? sort\(keys\(local\.cluster_ingress\)\) : var\.cluster_hosts'
 if grep -q 'content = local.cluster_tunnel_cname' <<<"$cluster_dns"; then ok "cluster DNS points at the cluster tunnel"; else bad "cluster DNS points at the cluster tunnel"; fi
 if grep -q 'condition     = var.cluster_tunnel_id != ""' <<<"$cluster_dns"; then ok "cluster DNS refuses an empty tunnel id"; else bad "cluster DNS refuses an empty tunnel id"; fi
 has 'cluster_tunnel_id is a variable' 'variable "cluster_tunnel_id"'
@@ -229,11 +230,31 @@ if grep -qF 'contains(keys(local.cluster_ingress), host)' "$work/code.tf"; then
 else
   bad "cluster DNS and ingress must agree"
 fi
-if grep -qF 'TF_VAR_cluster_hosts=' docs/manual-steps.md &&
-  grep -qF '["agent"]' docs/manual-steps.md; then
-  ok "manual steps document the agent cluster host"
+if [[ -f tofu/terraform.tfvars ]]; then ok "committed tfvars exists"; else bad "committed tfvars exists"; fi
+for key in account_id domain email host_tunnel_id cluster_tunnel_id; do
+  if grep -qE "^[[:space:]]*${key}[[:space:]]*=" tofu/terraform.tfvars 2>/dev/null; then
+    ok "tfvars sets $key"
+  else
+    bad "tfvars sets $key"
+  fi
+done
+if grep -qiE 'token|secret|password' tofu/terraform.tfvars 2>/dev/null; then
+  bad "tfvars carries no credential"
 else
-  bad "manual steps document the agent cluster host"
+  ok "tfvars carries no credential"
+fi
+if [[ -x scripts/tofu-cloudflare.sh ]]; then ok "zone apply wrapper is executable"; else bad "zone apply wrapper is executable"; fi
+if grep -qF "sops -d --extract" scripts/tofu-cloudflare.sh 2>/dev/null; then
+  ok "zone apply wrapper reads the credential from SOPS"
+else
+  bad "zone apply wrapper reads the credential from SOPS"
+fi
+# The identifiers live in tofu/terraform.tfvars, and the host set follows the
+# ingress map, so an apply needs no TF_VAR_ exports.
+if grep -qF 'TF_VAR_cluster_hosts' docs/manual-steps.md; then
+  bad "manual steps do not export cluster_hosts"
+else
+  ok "manual steps do not export cluster_hosts"
 fi
 
 echo "== preserved objects"
