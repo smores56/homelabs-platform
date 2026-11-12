@@ -156,7 +156,7 @@ zone with no application of its own is reachable only by the owner's identity.
   | Hostname | Why public |
   | --- | --- |
   | `recovery.sammohr.dev` | the data-recovery letter; its reader has no credentials by definition |
-  | `immich.sammohr.dev` | mobile clients cannot complete an Access login |
+  | `photos.sammohr.dev` | mobile clients cannot complete an Access login |
   | `music.sammohr.dev` | same, for the Navidrome clients |
   | `calibre.sammohr.dev` | OPDS readers and the web reader; app login and the per-IP rate limit are the gates |
 

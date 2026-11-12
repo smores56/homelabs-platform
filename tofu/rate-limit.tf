@@ -19,7 +19,7 @@ resource "cloudflare_ruleset" "dav_rate_limit" {
     {
       action      = "block"
       description = "Rate limit the public app hosts per IP"
-      expression  = "(http.host eq \"music.${var.domain}\" or http.host eq \"immich.${var.domain}\" or http.host eq \"calibre.${var.domain}\")"
+      expression  = "(http.host eq \"music.${var.domain}\" or http.host eq \"photos.${var.domain}\" or http.host eq \"calibre.${var.domain}\")"
       ratelimit = {
         characteristics = ["ip.src", "cf.colo.id"]
         # Free plan allows only a 10-second period and mitigation window.

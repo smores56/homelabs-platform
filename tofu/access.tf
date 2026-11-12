@@ -182,13 +182,13 @@ locals {
   # wildcard's default stays deny rather than being widened for an app.
   #   recovery - the data-recovery letter; its reader has no credentials by
   #              definition, and it is static on Pages, not behind a tunnel.
-  #   immich   - mobile clients cannot complete an Access login.
+  #   photos   - mobile clients cannot complete an Access login.
   #   music    - ditto, for the Navidrome clients.
   #   calibre  - OPDS readers and the web reader; the app's own login is the
   #              only gate, and it is rate limited (rate-limit.tf).
   public_apps = toset([
     "recovery",
-    "immich",
+    "photos",
     "music",
     "calibre",
   ])

@@ -440,9 +440,9 @@ export TF_VAR_cluster_tunnel_id=<tunnel UUID>
 4. At each app's cutover, add the hostname and apply:
 
 ```sh
-export TF_VAR_cluster_hosts='["immich"]'
+export TF_VAR_cluster_hosts='["agent","photos"]'
 tofu -chdir=tofu apply -no-color
-dig +short immich.sammohr.dev
+dig +short photos.sammohr.dev
 ```
 
 Expected: the CNAME now points at `<cluster-uuid>.cfargotunnel.com` instead of

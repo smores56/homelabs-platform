@@ -16,7 +16,7 @@ metadata:
     homelabs.dev/tier: data
 spec:
   rules:
-    - host: immich.sammohr.dev
+    - host: photos.sammohr.dev
       http:
         paths:
           - path: /

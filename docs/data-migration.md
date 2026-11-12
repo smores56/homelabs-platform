@@ -118,7 +118,7 @@ be applied at any time (a missing share just leaves the pod unstarted).
    then let the cluster Postgres come up and restore it once:
    `cluster-kubectl -n immich exec -i deploy/immich-postgres -- pg_restore -U immich -d immich --no-owner --clean --if-exists < /var/lib/data/immich/db-dumps/immich.dump`.
    The server migrates the schema at start. Verify `/api/server/ping`, then flip
-   the `immich.sammohr.dev` route Cloudflare-side (T7).
+   the `photos.sammohr.dev` route Cloudflare-side (T7).
 3. **Navidrome.** `sudo systemctl stop navidrome`, then
    `sudo mv /var/lib/data/navidrome /var/lib/data/music/navidrome` (the music
    tree itself does not move — the `music` share already is the library).

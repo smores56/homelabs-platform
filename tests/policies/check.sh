@@ -449,7 +449,7 @@ while IFS=: read -r ns host svc port; do
   eq "$(yq -r '.spec.rules[0].http.paths[0].backend.service.port.number' "$file")" "$port" \
     "$host routes to port $port"
 done <<'INGRESS'
-immich:immich.sammohr.dev:immich-server:2283
+immich:photos.sammohr.dev:immich-server:2283
 navidrome:music.sammohr.dev:navidrome:4533
 calibre:calibre.sammohr.dev:calibre:8083
 graphiti:memory.sammohr.dev:graphiti:8184
