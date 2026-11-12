@@ -255,10 +255,10 @@ eq "$(jq -r 'select(.kind == "RoleBinding" and .metadata.name == "agent-debug") 
 
 # ------------------------------------------------------------ controller flags
 declare -A controller_flags=(
-  [kustomize-controller]="--no-cross-namespace-refs=true --no-remote-bases=true --default-service-account=default --default-decryption-service-account=default --default-kubeconfig-service-account=default"
-  [helm-controller]="--no-cross-namespace-refs=true --default-service-account=default --default-kubeconfig-service-account=default"
-  [notification-controller]="--no-cross-namespace-refs=true --default-service-account=default"
-  [source-controller]="--default-service-account=default"
+  [kustomize-controller]="--feature-gates=ExternalArtifact=true,ObjectLevelWorkloadIdentity=true --no-cross-namespace-refs=true --no-remote-bases=true --default-service-account=default --default-decryption-service-account=default --default-kubeconfig-service-account=default"
+  [helm-controller]="--feature-gates=ExternalArtifact=true,ObjectLevelWorkloadIdentity=true --no-cross-namespace-refs=true --default-service-account=default --default-kubeconfig-service-account=default"
+  [notification-controller]="--feature-gates=ObjectLevelWorkloadIdentity=true --no-cross-namespace-refs=true --default-service-account=default"
+  [source-controller]="--feature-gates=ObjectLevelWorkloadIdentity=true --default-service-account=default"
   [source-watcher]="--no-cross-namespace-refs=true"
 )
 

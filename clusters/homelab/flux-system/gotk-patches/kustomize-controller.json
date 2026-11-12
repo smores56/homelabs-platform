@@ -1,4 +1,5 @@
 [
+  { "op": "add", "path": "/spec/template/spec/containers/0/args/-", "value": "--feature-gates=ExternalArtifact=true,ObjectLevelWorkloadIdentity=true" },
   { "op": "add", "path": "/spec/template/spec/containers/0/args/-", "value": "--no-cross-namespace-refs=true" },
   { "op": "add", "path": "/spec/template/spec/containers/0/args/-", "value": "--no-remote-bases=true" },
   { "op": "add", "path": "/spec/template/spec/containers/0/args/-", "value": "--default-service-account=default" },

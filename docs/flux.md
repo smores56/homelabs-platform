@@ -3,7 +3,7 @@
 The cluster is bootstrapped from this repository into one root Kustomization:
 
 ```text
-GitRepository flux-system (ssh, deploy key)
+GitRepository flux-system (https, token auth)
 └── Kustomization flux-system        path ./clusters/homelab   SA kustomize-controller
     ├── flux-system/                 gotk-components.yaml + gotk-sync.yaml
     │                               (Deployments patched by clusters/homelab/kustomization.yaml)
@@ -12,7 +12,9 @@ GitRepository flux-system (ssh, deploy key)
 
 ## Bootstrap
 
-Needs a reachable cluster and a GitHub token with admin on the repository.
+Needs a reachable cluster and a GitHub token with contents write on the
+repository. `--token-auth` stores that token in the cluster; no deploy key is
+created.
 
 ```sh
 GITHUB_TOKEN=$(gh auth token) clusters/homelab/flux-system/bootstrap.sh
@@ -27,12 +29,14 @@ flux bootstrap github \
   --branch=main \
   --path=clusters/homelab \
   --personal \
+  --token-auth \
   --components-extra=source-watcher \
   --interval=10m
 ```
 
 `--personal` selects a personal account; the repository stays private (bootstrap
-default). The deploy key is read-only, so the cluster can never push. The two
+default). The token is write-capable because bootstrap needs to push the
+generated manifests; scope it to this repository only. The two
 insecure kubeconfig flags appear nowhere in this repository:
 `tests/policies/check.sh` fails if either is added to a manifest or script.
 
@@ -71,14 +75,21 @@ that carry telemetry and leader-election wiring.
 
 | Controller | Version | Flags added |
 | --- | --- | --- |
-| `kustomize-controller` | v1.9.3 | `--no-cross-namespace-refs=true`, `--no-remote-bases=true`, `--default-service-account=default`, `--default-decryption-service-account=default`, `--default-kubeconfig-service-account=default` |
-| `helm-controller` | v1.6.2 | `--no-cross-namespace-refs=true`, `--default-service-account=default`, `--default-kubeconfig-service-account=default` |
-| `notification-controller` | v1.9.2 | `--no-cross-namespace-refs=true`, `--default-service-account=default` |
-| `source-controller` | v1.9.3 | `--default-service-account=default` |
+| `kustomize-controller` | v1.9.3 | `--feature-gates=ObjectLevelWorkloadIdentity=true`, `--no-cross-namespace-refs=true`, `--no-remote-bases=true`, `--default-service-account=default`, `--default-decryption-service-account=default`, `--default-kubeconfig-service-account=default` |
+| `helm-controller` | v1.6.2 | `--feature-gates=ObjectLevelWorkloadIdentity=true`, `--no-cross-namespace-refs=true`, `--default-service-account=default`, `--default-kubeconfig-service-account=default` |
+| `notification-controller` | v1.9.2 | `--feature-gates=ObjectLevelWorkloadIdentity=true`, `--no-cross-namespace-refs=true`, `--default-service-account=default` |
+| `source-controller` | v1.9.3 | `--feature-gates=ObjectLevelWorkloadIdentity=true`, `--default-service-account=default` |
 | `source-watcher` | v2.2.2 | `--no-cross-namespace-refs=true` |
 
 Versions are the ones shipped by Flux 2.9.2 (`image:` lines in
 `gotk-components.yaml`).
+
+Flux 2.9 makes object-identity default service accounts opt-in behind
+`--feature-gates=ObjectLevelWorkloadIdentity=true`. Without it, every controller
+that receives a `--default-*-service-account` flag exits at startup with
+`cannot set default service accounts when the feature gate ... is not enabled`.
+Flux 2.10 retires the gate and enables the behavior unconditionally, so the
+flag is harmless there (it only logs a retirement message).
 
 Two entries differ from the obvious "same flags everywhere" reading, because the
 binaries do:
