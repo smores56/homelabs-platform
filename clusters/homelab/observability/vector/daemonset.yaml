@@ -31,6 +31,10 @@ spec:
       serviceAccountName: vector
       automountServiceAccountToken: true
       securityContext:
+        # containerd refuses a group without a user ("user group 10001 is
+        # specified without user"), and the sandbox never starts; the main
+        # container also sets both, so name the user here too.
+        runAsUser: 10001
         runAsGroup: 10001
         seccompProfile:
           type: RuntimeDefault
