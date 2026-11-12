@@ -110,8 +110,8 @@ the pod has no token or API route; the grant is a break-glass ceiling
 | `immich` | both directions | DNS; same-namespace any port; TCP 2283 from `ingress`; HTTPS from the machine-learning pod for model weights |
 | `navidrome` | both directions | DNS; same-namespace any port; TCP 4533 from `ingress` |
 | `calibre` | both directions | DNS; same-namespace any port; TCP 8083 from `ingress` |
-| `graphiti` | both directions | DNS; same-namespace any port; TCP 8184 from `ingress`; HTTPS from the graphiti pod to the Neuralwatt API |
-| `ingress` | both directions | DNS; the four app Services on their ports; `tenant-apps/nanobot` on 8080; TCP 443 to the Cloudflare edge (`cloudflared` only) |
+| `graphiti` | both directions | DNS; same-namespace any port; TCP 8182 from the host tap addresses only (the memory wrapper's NodePort, never the tunnel); HTTPS from the graphiti pod to the Neuralwatt API |
+| `ingress` | both directions | DNS; the three published app Services on their ports; `tenant-apps/nanobot` on 8080; TCP 443 to the Cloudflare edge (`cloudflared` only) |
 
 Adding an app flow means adding a policy with its exact port and namespace
 selector. Nothing matches all namespaces, and a missing allow fails closed.

@@ -453,6 +453,26 @@ eq "$(jq -r '.[] | select(.kind == "Deployment" and .metadata.name == "memory-mc
   "/secrets/memory-mcp-token" "the wrapper reads its bearer token from the contract Secret"
 eq "$(jq -r '.[] | select(.kind == "Deployment" and .metadata.name == "memory-mcp") | .spec.template.spec.containers[0].env[] | select(.name == "MEMORY_LLM_URL") | .value' "$work/data-apps.json")" \
   "" "the wrapper has no model gateway to probe in-cluster"
+# An absent variable would silently restore the 127.0.0.1:8082 default and re-arm
+# the model gate on an unreachable gateway, so the empty value must be explicit.
+eq "$(jq -r '.[] | select(.kind == "Deployment" and .metadata.name == "memory-mcp") | [.spec.template.spec.containers[0].env[] | select(.name == "MEMORY_LLM_URL")] | length' "$work/data-apps.json")" \
+  "1" "the wrapper's env names MEMORY_LLM_URL explicitly"
+
+# Both memory manifests must carry the digest `just publish-memory-image`
+# printed, never the zero placeholder that would fail the pull.
+eq "$(grep -ho 'ghcr.io/smores56/nix-config/memory-mcp@sha256:[0-9a-f]*' \
+  clusters/homelab/data/graphiti/memory-mcp.yaml \
+  clusters/homelab/data/graphiti/memory-export-cronjob.yaml | grep -vc ':0\{64\}$')" \
+  "2" "both memory manifests pin the published image digest"
+
+# The export has its own contract: it precedes the 02:45 graph dump (both trigger
+# an RDB save on the same FalkorDB) and the host's 03:30 restic walk.
+eq "$(yq -r '[.spec.schedule, .spec.timeZone, .spec.concurrencyPolicy, .spec.jobTemplate.spec.activeDeadlineSeconds] | join(":")' \
+  clusters/homelab/data/graphiti/memory-export-cronjob.yaml)" \
+  "20 2 * * *:Europe/Berlin:Forbid:900" "memory export runs ahead of the graph dump and restic"
+eq "$(yq -r '[.spec.jobTemplate.spec.template.spec.volumes[] | select(.persistentVolumeClaim) | .persistentVolumeClaim.claimName] | join(",")' \
+  clusters/homelab/data/graphiti/memory-export-cronjob.yaml)" \
+  "graphiti-data" "memory export writes into the app's own claim"
 
 # --------------------------------------------------------- hostname contract
 while IFS=: read -r ns host svc port; do

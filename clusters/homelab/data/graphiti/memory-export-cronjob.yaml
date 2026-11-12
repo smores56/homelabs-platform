@@ -1,11 +1,14 @@
 # The wrapper's own export, not a bare sqlite copy: it snapshots the registry
 # with the online backup API, writes episodes.jsonl (readable without SQLite),
-# and takes FalkorDB's dump through BGSAVE. Its `.restore-in-progress` lock and
-# schema-version stamp are what the restore Job checks.
+# and takes FalkorDB's dump through BGSAVE. It refuses to run while a restore's
+# `.restore-in-progress` lock exists, which is what keeps a half-restored state
+# from being backed up over.
 #
-# Runs before graphiti-dump (02:45) and well before the host's restic walk
-# (03:30 Europe/Berlin, up to 03:45 with its delay); the artefact lands on the
-# share, so restic picks it up with everything else under /var/lib/data.
+# Runs at 02:20, before graphiti-dump (02:45) — both trigger an RDB save on the
+# same FalkorDB, and an overlapping save makes the export's rewrite check fail —
+# and well before the host's restic walk (03:30 Europe/Berlin, up to 03:45 with
+# its delay). The artefact lands on the share, so restic picks it up with
+# everything else under /var/lib/data.
 apiVersion: batch/v1
 kind: CronJob
 metadata:
@@ -16,7 +19,7 @@ metadata:
     app.kubernetes.io/part-of: homelabs
     homelabs.dev/tier: data
 spec:
-  schedule: "35 2 * * *"
+  schedule: "20 2 * * *"
   timeZone: Europe/Berlin
   concurrencyPolicy: Forbid
   startingDeadlineSeconds: 600

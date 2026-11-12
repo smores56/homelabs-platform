@@ -159,7 +159,9 @@ spec:
         - name: token
           secret:
             secretName: memory-mcp-token
-            defaultMode: 0440
+            # Readable by the pod uid: no fsGroup (it would recursively chown the
+            # 5 TiB share), so kubelet would otherwise leave this root:root 0440.
+            defaultMode: 0444
         - name: tmp
           emptyDir: {}
 ---

@@ -77,13 +77,14 @@ walks `/var/lib/data` — which is every share, including the dumps.
 | --- | --- | --- | --- | --- |
 | `immich-dump` | `immich` | `45 2 * * *`, `timeZone: Europe/Berlin` | `/data/db-dumps/immich.dump` (`pg_dump -Fc`) | 30 min |
 | `graphiti-dump` | `graphiti` | `45 2 * * *`, `timeZone: Europe/Berlin` | `/data/db-dumps/graphiti.rdb` (`redis-cli --rdb`) | 30 min |
+| `memory-export` | `graphiti` | `20 2 * * *`, `timeZone: Europe/Berlin` | `/data/db-dumps/memory/` (registry backup, episodes.jsonl, graph.rdb) | 15 min |
 
-Contract: a dump starts at 02:45 local, is bounded to 30 minutes
-(`activeDeadlineSeconds: 1800`), and is therefore complete by 03:15 — 15 minutes
-before the earliest restic start, 30 before the latest. `concurrencyPolicy:
-Forbid` keeps a slow run from overlapping the next one, and
-`startingDeadlineSeconds: 600` drops a missed run rather than firing it late
-into the backup window.
+Contract: a dump starts at 02:45 local (the memory export at 02:20, because both
+it and `graphiti-dump` trigger an RDB save on the same FalkorDB), is bounded to
+its deadline, and is therefore complete by 03:15 — 15 minutes before the
+earliest restic start, 30 before the latest. `concurrencyPolicy: Forbid` keeps a
+slow run from overlapping the next one, and `startingDeadlineSeconds: 600` drops
+a missed run rather than firing it late into the backup window.
 
 The `timeZone` field is what makes the contract DST-safe: the CronJob's clock is
 the host's, not UTC. Do not drop it.
@@ -182,7 +183,9 @@ be applied at any time (a missing share just leaves the pod unstarted).
 6. **Memory wrapper.** The registry moves, not just the graph. With the host
    units stopped, run `memory export` (the online backup, never `cp` of a live
    WAL database), copy its `registry.sqlite` to
-   `/var/lib/data/graphiti/memory/`, and start `deploy/memory-mcp`. The host's
+   `/var/lib/data/graphiti/memory/`, and restore that same export's `graph.rdb`
+   into `/var/lib/data/graphiti/falkordb/` so the graph matches the registry at
+   the cutover instant. Then start `deploy/memory-mcp`. The host's
    `memory-forward` unit points loopback 8182 at the wrapper's tap NodePort, so
    maki and the agent VM keep their loopback convention and
    `memory.sammohr.dev` never leaves the host tunnel. Verify with
@@ -232,7 +235,7 @@ Everything above that needs the cluster, the tunnel or a credential:
   `platform-ingress`) and PV binding to node `cluster`;
 - ESO creating `immich-db`, `neuralwatt-api-key` and `cloudflare-tunnel-token`
   after `docs/manual-steps.md` steps 8 and 12;
-- the four cutover copies, and the tunnel route flips;
+- the four cutover copies; the wrapper's tap-forward cutover has no tunnel flip;
 - Cloudflare-side tunnel/DNS/Access (T7);
 - agent-facing calibre repoint and the memory wrapper cutover;
 - CNI enforcement of the NetworkPolicies (a bare API server only stores them).

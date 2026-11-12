@@ -305,16 +305,16 @@ tenant through the gateway to confirm (docs/observability.md, "Verification").
 
 ## 12. Create the cluster's SOPS-contract Secrets
 
-Four cluster workloads read a credential that Cloudflare, Neuralwatt or the
+Five cluster workloads read a credential that Cloudflare, Neuralwatt or the
 operator issued, and none may exist in git. The operator creates each Secret
 with `sops`; same rule as the host's `/run/secrets`: ciphertext lives in the
 operator's secret store, plaintext only in the API server and the pod. The ESO
-`kubernetes` provider projects the three issued ones; OPDShelf reads its admin
-password from the contract Secret directly, since it is a static value with no
-property mapping.
+`kubernetes` provider projects four of them; OPDShelf reads its admin password
+from the contract Secret directly, since it is a static value with no property
+mapping.
 
 Create the cluster tunnel (step 15), or take its token from the T7 work
-(`smores56/sdlc#581`; `smores56/sdlc#580` depends on it), and write both files
+(`smores56/sdlc#581`; `smores56/sdlc#580` depends on it), and write them all
 encrypted with the same
 age key the host secrets use:
 
@@ -392,13 +392,18 @@ first cutover:
    it, and make the GHCR package public (Packages -> memory-mcp -> Change
    visibility); the cluster has no image pull secret.
 6. **Move the wrapper.** Create `memory-mcp-token-sops` (step 12), then in the
-   same window: stop the host units (`sudo systemctl stop memory-mcp
+   same window: stop the host stack (`sudo systemctl stop memory-mcp
    memory-graphiti-mcp memory-llm-proxy memory-falkordb memory-export.timer`),
    `sudo memory export` (never `cp` the live WAL database), copy the export's
-   `registry.sqlite` to `/var/lib/data/graphiti/memory/`, start
-   `deploy/memory-mcp`, and flip `memoryForward.enable` in nix-config so
-   loopback 8182 forwards to the wrapper. Verify `memory status`, one write and
-   one search, then let the observation week run.
+   `registry.sqlite` to `/var/lib/data/graphiti/memory/` **and restore the same
+   export's `graph.rdb` into `/var/lib/data/graphiti/falkordb/`** — the graph
+   rsynced in `docs/data-migration.md` step 5 stops matching the registry the
+   moment the host writes again. Start `deploy/memory-mcp`, set
+   `memoryForward.enable = true` in nix-config (which also disables the host
+   units declaratively, so a reboot cannot resurrect them), rebuild, and verify
+   `memory status`, one write and one search. If the graph and registry still
+   disagree, `memory reindex --all` until it reports nothing left.
+   Keep the host state tree untouched for the observation week.
 7. Leave `modules/nixos/{immich,navidrome,memory}.nix` in place until every app
    has served from the cluster for a week; then enable
    `clusterDataApps.enable` in nix-config (`docs/kanbei-split.md` in that
@@ -414,21 +419,29 @@ CronJob wrote is `/data/db-dumps/memory` on the `graphiti-data` share:
 cluster-kubectl -n graphiti scale deploy/memory-mcp --replicas=0
 cluster-kubectl -n graphiti scale deploy/graphiti-falkordb --replicas=0
 
-# 2. Verify, then write, from the same image the wrapper runs.
+# 2. Verify first, then write, from the same image the wrapper runs. Deleting
+#    the job makes the command repeatable: a Job's template is immutable.
+cluster-kubectl -n graphiti delete job memory-restore --ignore-not-found
 cluster-kubectl -n graphiti create job memory-restore --image=<the pinned digest> \
   --dry-run=client -o yaml \
-  | yq '.spec.template.spec = {"securityContext": {"runAsUser": 1000, "runAsGroup": 1000, "runAsNonRoot": true, "seccompProfile": {"type": "RuntimeDefault"}, "restartPolicy": "Never", "serviceAccountName": "data-workload", "automountServiceAccountToken": false}, "containers": [{"name": "restore", "image": "<the pinned digest>", "command": ["memory-export", "restore", "/data/db-dumps/memory", "--state-dir", "/data/memory", "--graph-dir", "/data/falkordb", "--owner", "", "--no-stop"], "securityContext": {"allowPrivilegeEscalation": false, "readOnlyRootFilesystem": true, "capabilities": {"drop": ["ALL"]}}, "resources": {"limits": {"cpu": "500m", "memory": "512Mi"}}, "volumeMounts": [{"name": "data", "mountPath": "/data"}, {"name": "tmp", "mountPath": "/tmp"}]}], "volumes": [{"name": "data", "persistentVolumeClaim": {"claimName": "graphiti-data"}}, {"name": "tmp", "emptyDir": {}}]}' \
+  | yq '.spec.ttlSecondsAfterFinished = 86400 | .spec.template.spec = {"securityContext": {"runAsUser": 1000, "runAsGroup": 1000, "runAsNonRoot": true, "seccompProfile": {"type": "RuntimeDefault"}, "restartPolicy": "Never", "serviceAccountName": "data-workload", "automountServiceAccountToken": false}, "containers": [{"name": "restore", "image": "<the pinned digest>", "command": ["memory-export", "restore", "/data/db-dumps/memory", "--state-dir", "/data/memory", "--graph-dir", "/data/falkordb", "--owner", "", "--no-stop"], "securityContext": {"allowPrivilegeEscalation": false, "readOnlyRootFilesystem": true, "capabilities": {"drop": ["ALL"]}}, "resources": {"limits": {"cpu": "500m", "memory": "512Mi"}}, "volumeMounts": [{"name": "data", "mountPath": "/data"}, {"name": "tmp", "mountPath": "/tmp"}]}], "volumes": [{"name": "data", "persistentVolumeClaim": {"claimName": "graphiti-data"}}, {"name": "tmp", "emptyDir": {}}]}' \
   | cluster-kubectl -n graphiti apply -f -
-cluster-kubectl -n graphiti logs -f job/memory-restore     # run once with --dry-run first
+cluster-kubectl -n graphiti logs -f job/memory-restore
 
-# 3. Bring the graph and the wrapper back; the reconciler re-submits whatever
+# 3. A restore writes `/data/memory/.restore-in-progress` and removes it only on
+#    success; while it exists every export refuses to run. After an interrupted
+#    restore, reconcile state, then delete it with the same Job shape and the
+#    command `rm /data/memory/.restore-in-progress`.
+
+# 4. Bring the graph and the wrapper back; the reconciler re-submits whatever
 #    the restored registry still marks pending.
 cluster-kubectl -n graphiti scale deploy/graphiti-falkordb --replicas=1
 cluster-kubectl -n graphiti scale deploy/memory-mcp --replicas=1
 ```
 
-Rolling back to the host is this same job run against `/var/lib/memory` after
-copying the export out of the share, not a restart of the frozen host copy.
+Rolling back to the host is `sudo memory restore <export>` on smortress after
+copying the export out of the share — not a restart of the frozen host copy,
+which is missing every write since the cutover.
 
 ## 14. Move the Cloudflare OpenTofu state
 
