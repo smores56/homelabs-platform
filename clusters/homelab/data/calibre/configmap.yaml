@@ -14,7 +14,10 @@ metadata:
     app.kubernetes.io/part-of: homelabs
     homelabs.dev/tier: data
 data:
-  PORT: "3000"
+  # The tier contract names 8083 for this namespace (NetworkPolicy, Service and
+  # the Ingress object all use it), so the app listens there rather than making
+  # three files chase its default 3000.
+  PORT: "8083"
   HOST: 0.0.0.0
   BOOKS_DIR: /books
   # Edits, custom covers and the thumbnail cache land in books/.opdshelf, which
