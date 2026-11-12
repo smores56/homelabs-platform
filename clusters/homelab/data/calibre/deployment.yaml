@@ -4,9 +4,20 @@
 # in-cluster user database starts empty, so the admin password is set on first
 # login (docs/manual-steps.md).
 #
-# readOnlyRootFilesystem stays false: the s6 init inside the image writes /run
-# and /var before the app starts. Caps are dropped and privilege escalation is
-# off, so PSA restricted still holds.
+# This is the one data container that starts as root. The image is
+# linuxserver-style s6: preinit refuses a /run it does not own, init-adduser
+# maps `abc` onto PUID/PGID, and every service is exec'd through
+# `s6-setuidgid abc`. With runAsUser 1000 the preinit dies on
+# `/run belongs to uid 0 instead of 1000` (an emptyDir is kubelet-created as
+# root, and fsGroup only changes its gid, which preinit does not accept), and
+# without CAP_SETUID/SETGID the handoff to PUID 1000 would fail anyway. So the
+# calibre namespace enforces `baseline` (audit/warn stay `restricted`) and this
+# container alone omits runAsNonRoot and the capability drop; every application
+# process still runs as uid 1000, because setuid() to a non-root uid clears the
+# permitted/effective capability sets.
+#
+# readOnlyRootFilesystem stays false: s6 writes /run and /var before the app
+# starts.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -94,9 +105,18 @@ spec:
               cpu: "2"
               memory: 2Gi
           securityContext:
+            # The s6 preinit is the only root process, and only until it hands
+            # each service to `abc` (PUID 1000): runAsNonRoot false is what
+            # preinit needs, not what the app runs as.
+            runAsNonRoot: false
+            runAsUser: 0
+            runAsGroup: 0
             allowPrivilegeEscalation: false
-            capabilities:
-              drop: ["ALL"]
+            # The default capability set carries the handoff (CHOWN, SETUID,
+            # SETGID, FOWNER) and init-adduser's usermod/chown. The
+            # no-host-access policy forbids `capabilities.add` on data pods, so
+            # the block is omitted rather than spelled out; nothing is gained
+            # beyond the runtime default.
           volumeMounts:
             - name: data
               mountPath: /calibre-library

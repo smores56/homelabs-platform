@@ -14,7 +14,7 @@ virtiofs share and must not be able to reach another app's.
 | `broker` | `broker` | `broker` | `restricted` | Egress broker with per-host tokens |
 | `immich` | `immich` | `data` | `restricted` | Immich server, machine-learning, Postgres, Valkey |
 | `navidrome` | `navidrome` | `data` | `restricted` | Navidrome |
-| `calibre` | `calibre` | `data` | `restricted` | Calibre-Web over the books library |
+| `calibre` | `calibre` | `data` | `baseline` | Calibre-Web over the books library |
 | `graphiti` | `graphiti` | `data` | `restricted` | Graphiti and FalkorDB |
 | `ingress` | `ingress` | `ingress` | `restricted` | `cloudflared` for the cluster tunnel |
 | `observability` | `observability` | `observability` | `privileged` | Prometheus, Loki, Vector, status exporter |
@@ -23,6 +23,12 @@ virtiofs share and must not be able to reach another app's.
 permissions; audit and warn still record `restricted` violations there.
 `observability` enforces `privileged` because node-exporter needs `hostPath` and
 `hostNetwork`, which baseline forbids; audit and warn stay `restricted`.
+`calibre` is `baseline` because the Calibre-Web-Automated image is s6-backed:
+its preinit must start as root before it hands every service to PUID 1000, and
+`restricted` will not admit a container that may start as UID 0. Baseline still
+forbids privileged containers, host namespaces, `hostPath` and added
+capabilities, `no-host-access` still requires `allowPrivilegeEscalation: false`,
+and audit/warn stay `restricted`.
 `tenant-apps` was previously named `tenant`; the rename came with the tenant
 reconciler, which owns that namespace end to end.
 
