@@ -1,5 +1,5 @@
-# Same single-node `local-path` class as Prometheus. 10 Gi at 168h retention;
-# Vector refuses to batch faster than Loki can compact.
+# Same single-node provisioner as Prometheus. 10 Gi at 168h retention; Vector
+# refuses to batch faster than Loki can compact.
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:

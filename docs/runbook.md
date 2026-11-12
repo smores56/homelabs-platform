@@ -367,10 +367,8 @@ until the backend is provisioned.
 ### 8. Repository mirror
 
 `platform-backup` reconciles `clusters/homelab/platform/backup/`: ServiceAccount
-`github-backup`, the `github-backup-data` PVC on `local-path` (the class comes
-from the repo's own local-path-provisioner v0.0.31, digest-pinned; the k3s
-`local-storage` addon is disabled), the egress policy (GitHub 443 + DNS) and the
-`15 4 * * *` Europe/Berlin CronJob. The pod stays
+`github-backup`, the `github-backup-data` PVC on `local-path`, the egress policy
+(GitHub 443 + DNS) and the `15 4 * * *` Europe/Berlin CronJob. The pod stays
 unstarted until the PAT Secret exists; there is no dashboard step for the
 schedule.
 

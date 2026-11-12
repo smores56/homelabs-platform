@@ -1,10 +1,9 @@
-# Mirrors and bundles live on the `local-path` class this repository ships
-# (platform/storage/local-path-provisioner.yaml, Rancher v0.0.31 pinned by
-# digest), the same class the observability claims use. This is a working copy,
-# not the system of record: GitHub remains authoritative, and the PVC is lost
-# with the node's disk. The host's restic walk covers the data tier's virtiofs
-# shares, not this claim; the retention that matters for the two repositories is
-# the upstream history itself.
+# Mirrors and bundles live on the k3s `local-path` provisioner, the same class
+# the observability claims use. This is a working copy, not the system of
+# record: GitHub remains authoritative, and the PVC is lost with the node's
+# disk. The host's restic walk covers the data tier's virtiofs shares, not this
+# claim; the retention that matters for the two repositories is the upstream
+# history itself.
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:

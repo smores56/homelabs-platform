@@ -40,13 +40,7 @@ Inside `/data` the components use subdirectories, so a namespace owns one claim:
 
 - `StorageClass data-local`: `provisioner: kubernetes.io/no-provisioner`,
   `reclaimPolicy: Retain`, `volumeBindingMode: WaitForFirstConsumer`. There is no
-  dynamic provisioning for the data tier, so a data PVC can only bind to a PV
-  declared here.
-- `StorageClass local-path` and its Rancher local-path-provisioner (v0.0.31,
-  digest-pinned) for the non-data claims: `github-backup-data`, Prometheus and
-  Loki. The packaged k3s `local-storage` addon is disabled; `platform-storage`
-  reconciles this copy. It is not the default class, so a claim that omits
-  `storageClassName` fails instead of landing on node disk.
+  dynamic provisioning, so a PVC can only bind to a PV declared here.
 - One `local` PV per share (`immich-share`, `navidrome-share`, `calibre-share`,
   `graphiti-share`) with `local.path: /mnt/data/<share>` — a path inside the
   guest, not a host path. The `no-host-access` admission policy forbids
