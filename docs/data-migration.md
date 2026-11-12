@@ -110,7 +110,9 @@ be applied at any time (a missing share just leaves the pod unstarted).
 
 1. **Ingress first.** Apply `platform-ingress` and confirm
    `kubectl -n ingress get deploy cloudflared` is `Available` with two replicas.
-2. **Immich.** `sudo systemctl stop immich`. Create
+2. **Immich.** `sudo systemctl stop immich-server immich-machine-learning`
+   (nixpkgs names the unit `immich-server`; there is no `immich.service`, and
+   the ML unit keeps running GPU work if left alone). Create
    `/var/lib/data/immich/{library,postgres,valkey,db-dumps}` (the pods' init
    containers do it too). The host's media tree is **`/var/lib/data/photos`**
    (`modules/nixos/immich.nix` `mediaLocation`), owned `immich:immich` mode
@@ -132,7 +134,11 @@ be applied at any time (a missing share just leaves the pod unstarted).
    `cluster-kubectl -n immich patch cronjob immich-dump -p '{"spec":{"suspend":true}}'`
    first so restic cannot capture the pre-restore database, and unsuspend after.
    Verify `/api/server/ping`, then flip the
-   `photos.sammohr.dev` route Cloudflare-side (T7).
+   `photos.sammohr.dev` route Cloudflare-side (T7). Disable the units, do not
+   only stop them: until `clusterDataApps.enable` exists,
+   `sudo systemctl disable --now immich-server immich-machine-learning` keeps a
+   reboot from starting the host app against the media tree, and a
+   `nixos-rebuild` re-enables them while `services.immich.enable` is true.
 3. **Navidrome.** `sudo systemctl stop navidrome`. The music tree itself does
    not move — the `music` share already is the library — and the cluster
    Navidrome has been running since the share came up, so
