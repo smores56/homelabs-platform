@@ -1,7 +1,10 @@
 # Three pods in this namespace talk to the API server. The API server is not a
 # pod (kube-apiserver runs on the host in k3s), so a podSelector cannot express
-# it: the rule is the k3s service CIDR on 443, which is the only range a
-# ClusterIP can live in. `docs/broker.md` records the same range.
+# it. Two ranges are needed, because a ClusterIP is DNAT'd to the node before
+# the packet leaves the pod: the k3s service range on 443 covers the route a
+# client names, and the node's own address on 6443 covers the packet the
+# network policy actually sees (without it kube-router rejects with ICMP, which
+# a client reports as "connection refused").
 #
 #   vector          watches pods/namespaces to attach metadata and the tier label
 #   prometheus      `kubernetes_sd_configs` pod discovery
@@ -30,3 +33,11 @@ spec:
       ports:
         - protocol: TCP
           port: 443
+    - to:
+        # The `cluster` guest's own address (10.77.1.2/30 tap, nix-config
+        # modules/lib/vm-host.nix index 1); k3s serves the API on 6443 there.
+        - ipBlock:
+            cidr: 10.77.1.0/30
+      ports:
+        - protocol: TCP
+          port: 6443

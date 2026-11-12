@@ -289,7 +289,7 @@ full set is asserted by `tests/observability/check.sh`:
 | `dns-egress.yaml` | every pod → `kube-system` 53 (UDP/TCP) |
 | `loki-flows.yaml` | Vector → Loki 3100 (writes); gateway → Loki 3100 (reads); Loki ingress from exactly those two pods |
 | `prometheus-flows.yaml` | Prometheus → `observability` 8686/9090/9101 and `flux-system` 8080 (the annotated targets); Vector ingress from Prometheus 8686; exporter ingress from Prometheus 9101 |
-| `kubernetes-api-egress.yaml` | Vector, Prometheus, exporter → k3s service range `10.43.0.0/16` 443 |
+| `kubernetes-api-egress.yaml` | Vector, Prometheus, exporter → k3s service range `10.43.0.0/16` 443 and the node address `10.77.1.0/30` 6443 (the post-DNAT packet) |
 | `loki-gateway-from-broker.yaml`, `broker-to-loki-gateway.yaml` | broker → gateway 3100 (both directions) |
 | `status-exporter-from-broker.yaml`, `broker-to-status-exporter.yaml` | broker → exporter 9101 (both directions) |
 | digest stage | digest → gateway/exporter, and the two `*-from-digest` ingress policies |
