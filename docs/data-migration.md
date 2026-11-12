@@ -133,9 +133,20 @@ be applied at any time (a missing share just leaves the pod unstarted).
    first so restic cannot capture the pre-restore database, and unsuspend after.
    Verify `/api/server/ping`, then flip the
    `photos.sammohr.dev` route Cloudflare-side (T7).
-3. **Navidrome.** `sudo systemctl stop navidrome`, then
-   `sudo mv /var/lib/data/navidrome /var/lib/data/music/navidrome` (the music
-   tree itself does not move — the `music` share already is the library).
+3. **Navidrome.** `sudo systemctl stop navidrome`. The music tree itself does
+   not move — the `music` share already is the library — and the cluster
+   Navidrome has been running since the share came up, so
+   `/var/lib/data/music/navidrome` already holds a scan-only DB with no play
+   counts, ratings, playlists or stars. Scale the Deployment to 0, then park it
+   rather than nesting the source inside it:
+   `sudo mv /var/lib/data/music/navidrome /var/lib/data/music/navidrome.cluster-scan`,
+   `sudo install -d -o smores -g users /var/lib/data/music/navidrome`, copy the
+   host DB in
+   (`sudo rsync -a /var/lib/data/navidrome/ /var/lib/data/music/navidrome/`,
+   `sudo chown -R smores:users /var/lib/data/music/navidrome`), then scale back
+   to 1. Navidrome stores paths relative to the music folder, so the
+   `/var/lib/data/music` → `/music` remount is safe; confirm the track count is
+   unchanged after the scan.
 4. **Calibre.** The library does not move. Stop the host's `calibre-server`
    user unit (`systemctl --user stop calibre-server`), set the Calibre-Web admin
    password on first login (`docs/manual-steps.md` step 13), and repoint the
