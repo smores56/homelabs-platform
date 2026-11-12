@@ -301,3 +301,10 @@ spec:
       ports:
         - protocol: TCP
           port: 443
+        # The tunnel's control connection is 7844: QUIC over UDP, falling back to
+        # HTTP/2 over TCP. kube-router rejects the rest with ICMP, which the
+        # connector reports as "connection refused", so both must be named.
+        - protocol: TCP
+          port: 7844
+        - protocol: UDP
+          port: 7844
