@@ -426,8 +426,13 @@ eq "$(jq -r "$jq_workloads | podspec.serviceAccountName // \"none\"" "$work/data
   "data-workload" "every data workload runs as the data-workload service account"
 eq "$(jq -r "$jq_workloads | podmeta.labels[\"homelabs.dev/managed-by\"] // \"none\"" "$work/data-apps.json" | sort -u)" \
   "platform" "every data workload carries homelabs.dev/managed-by=platform"
-eq "$(jq -r "$jq_workloads | select(podspec.securityContext.runAsUser != 1000) | .metadata.name" "$work/data-apps.json")" \
-  "" "every data pod runs as uid 1000 (the share's host owner through the guest translation)"
+eq "$(jq -r "$jq_workloads | select((podspec.volumes // []) | any(.persistentVolumeClaim != null)) | select(podspec.securityContext.runAsUser != 1000) | .metadata.name" "$work/data-apps.json")" \
+  "" "every data pod that mounts a share runs as uid 1000 (the share's host owner through the guest translation)"
+# Graphiti mounts no share (FalkorDB owns the graph volume) and its image runs `uv`
+# from /root/.local/bin, so it starts as root. Allow exactly that one, so a new
+# root workload cannot appear unnoticed.
+eq "$(jq -r "$jq_workloads | select(podspec.securityContext.runAsUser == 0) | .metadata.name" "$work/data-apps.json" | sort -u)" \
+  "graphiti" "graphiti is the only data workload that starts as root"
 eq "$(jq -r "$jq_workloads | podspec.containers[] | select((.resources.limits // {}) == {}) | .name" "$work/data-apps.json")" \
   "" "every data container sets resource limits"
 # Probes are for long-running containers; a dump job's own exit code is its

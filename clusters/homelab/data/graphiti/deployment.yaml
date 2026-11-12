@@ -27,9 +27,12 @@ spec:
       serviceAccountName: data-workload
       automountServiceAccountToken: false
       securityContext:
-        runAsNonRoot: true
-        runAsUser: 1000
-        runAsGroup: 1000
+        # The image runs `uv` out of /root/.local/bin, which is unreadable to any
+        # other uid, so the container starts as root the way the host's does.
+        # Differential hardening stays: no added capabilities or escalation;
+        # falkordb beside it still runs at uid 1000.
+        runAsUser: 0
+        runAsNonRoot: false
         seccompProfile:
           type: RuntimeDefault
       initContainers:
@@ -109,7 +112,7 @@ spec:
               memory: 2Gi
           securityContext:
             allowPrivilegeEscalation: false
-            readOnlyRootFilesystem: true
+            # Not read-only: uv writes its cache under the working directory.
             capabilities:
               drop: ["ALL"]
           volumeMounts:

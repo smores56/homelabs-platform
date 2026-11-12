@@ -15,7 +15,7 @@ virtiofs share and must not be able to reach another app's.
 | `immich` | `immich` | `data` | `restricted` | Immich server, machine-learning, Postgres, Valkey |
 | `navidrome` | `navidrome` | `data` | `restricted` | Navidrome |
 | `calibre` | `calibre` | `data` | `baseline` | Calibre-Web over the books library |
-| `graphiti` | `graphiti` | `data` | `restricted` | Graphiti and FalkorDB |
+| `graphiti` | `graphiti` | `data` | `baseline` | Graphiti (root start for `uv`) and FalkorDB |
 | `ingress` | `ingress` | `ingress` | `restricted` | `cloudflared` for the cluster tunnel |
 | `observability` | `observability` | `observability` | `privileged` | Prometheus, Loki, Vector, status exporter |
 
