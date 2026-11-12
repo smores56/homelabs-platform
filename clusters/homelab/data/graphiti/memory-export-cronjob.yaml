@@ -1,0 +1,85 @@
+# The wrapper's own export, not a bare sqlite copy: it snapshots the registry
+# with the online backup API, writes episodes.jsonl (readable without SQLite),
+# and takes FalkorDB's dump through BGSAVE. Its `.restore-in-progress` lock and
+# schema-version stamp are what the restore Job checks.
+#
+# Runs before graphiti-dump (02:45) and well before the host's restic walk
+# (03:30 Europe/Berlin, up to 03:45 with its delay); the artefact lands on the
+# share, so restic picks it up with everything else under /var/lib/data.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: memory-export
+  namespace: graphiti
+  labels:
+    app.kubernetes.io/name: memory-export
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: data
+spec:
+  schedule: "35 2 * * *"
+  timeZone: Europe/Berlin
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 600
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 900
+      ttlSecondsAfterFinished: 86400
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: memory-export
+            app.kubernetes.io/part-of: homelabs
+            homelabs.dev/tier: data
+            homelabs.dev/managed-by: platform
+        spec:
+          serviceAccountName: data-workload
+          automountServiceAccountToken: false
+          restartPolicy: OnFailure
+          securityContext:
+            runAsUser: 1000
+            runAsGroup: 1000
+            runAsNonRoot: true
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: export
+              # Same image as the wrapper: one artefact, one schema version.
+              image: ghcr.io/smores56/nix-config/memory-mcp@sha256:0000000000000000000000000000000000000000000000000000000000000000
+              command:
+                - memory-export
+                - export
+              args:
+                - --root
+                - /data/db-dumps/memory
+                - --state-dir
+                - /data/memory
+                - --graph-dir
+                - /data/falkordb
+                - --graph-url
+                - redis://graphiti-falkordb:6379
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
+                limits:
+                  cpu: 500m
+                  memory: 256Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
+              volumeMounts:
+                - name: data
+                  mountPath: /data
+                - name: tmp
+                  mountPath: /tmp
+          volumes:
+            - name: data
+              persistentVolumeClaim:
+                claimName: graphiti-data
+            - name: tmp
+              emptyDir: {}

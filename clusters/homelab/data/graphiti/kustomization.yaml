@@ -5,15 +5,18 @@ namespace: graphiti
 # Graphiti's memory store on FalkorDB, with the same images, ports and config as
 # modules/features/ai/memory/service.nix on the host. Extraction calls the
 # Neuralwatt API directly: the key comes from the neuralwatt-api-key Secret,
-# which ESO projects from the SOPS contract (platform/secrets/eso). The MCP
-# wrapper that fronts it (auth, project groups, reconciler) is still the host's
-# memory-mcp; memory.sammohr.dev keeps pointing there until that cutover, so this
-# route must not be published before the wrapper moves.
+# which ESO projects from the SOPS contract (platform/secrets/eso).
+#
+# The MCP wrapper (auth, project groups, reconciler) also runs here since the
+# cutover: its clients reach it from the host only (tap NodePort), and
+# memory.sammohr.dev stays on the host tunnel, so this namespace publishes no
+# hostname.
 resources:
   - storage.yaml
   - configmap.yaml
   - falkordb.yaml
   - deployment.yaml
   - services.yaml
-  - ingress.yaml
+  - memory-mcp.yaml
+  - memory-export-cronjob.yaml
   - dump-cronjob.yaml

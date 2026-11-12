@@ -1,0 +1,186 @@
+# The MCP wrapper that fronts Graphiti: bearer auth, project groups, the typed
+# registry and the reconciler. It moved off smortress so the host can retire its
+# whole memory stack; the host's `memory-forward` unit is the only path in —
+# loopback 8182 -> this Service's NodePort — and `memory.sammohr.dev` stays on the
+# host tunnel, so nothing here is published to Cloudflare.
+#
+# The registry is a single-writer SQLite file on the graphiti share: one replica,
+# Recreate (a rolling update would run two reconcilers against it), and the
+# wrapper's own export CronJob is the consistent backup artefact.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: memory-mcp
+  namespace: graphiti
+  labels:
+    app.kubernetes.io/name: memory-mcp
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: data
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: memory-mcp
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: memory-mcp
+        app.kubernetes.io/part-of: homelabs
+        homelabs.dev/tier: data
+        homelabs.dev/managed-by: platform
+    spec:
+      serviceAccountName: data-workload
+      automountServiceAccountToken: false
+      securityContext:
+        # The share translates guest uid 1000 to the host's owner; anything else
+        # cannot create the registry directory.
+        runAsUser: 1000
+        runAsGroup: 1000
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        - name: prepare-data
+          image: busybox:1.37.0
+          command: ["sh", "-c", "mkdir -p /data/memory /data/db-dumps/memory"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      containers:
+        - name: memory-mcp
+          # Published by `just publish-memory-image <tag>` in smores56/nix-config;
+          # replace this digest with the one that command prints (manual-steps).
+          image: ghcr.io/smores56/nix-config/memory-mcp@sha256:0000000000000000000000000000000000000000000000000000000000000000
+          env:
+            # The wrapper serves the NodePort and the in-namespace graph; the
+            # bearer token, not the bind address, is the boundary.
+            - name: MEMORY_MCP_HOST
+              value: 0.0.0.0
+            - name: MEMORY_MCP_PORT
+              value: "8182"
+            - name: MEMORY_GRAPHITI_URL
+              value: http://graphiti:8184/mcp
+            - name: MEMORY_REDIS_URL
+              value: redis://graphiti-falkordb:6379
+            # In-cluster Graphiti owns the provider call, so this instance has no
+            # gateway to probe: empty disables the model gate (search still fails
+            # through Graphiti itself).
+            - name: MEMORY_LLM_URL
+              value: ""
+            - name: MEMORY_EMBED_MODEL
+              value: qwen3-embedding-8b
+            - name: MEMORY_STATE_DIR
+              value: /data/memory
+            - name: MEMORY_MCP_TOKEN_FILE
+              value: /secrets/memory-mcp-token
+            # Same reconciler contract as the host unit (service.nix on the host).
+            - name: MEMORY_RECONCILE_INTERVAL
+              value: "10"
+            - name: MEMORY_RECONCILE_GRACE
+              value: "10800"
+            - name: MEMORY_PENDING_STALE_SECONDS
+              value: "10800"
+            - name: MEMORY_RECONCILE_BACKOFF
+              value: "60"
+            # The personal/work store boundary, identical to the host's unit. A
+            # wrong value here silently changes which group a write lands in.
+            - name: MEMORY_WORK_EMAIL
+              value: smohr@blitzy.com
+            - name: MEMORY_WORK_OWNER_GLOB
+              value: blitzy-ai,blitzy-platform
+            - name: MEMORY_WORK_FLOW
+              value: pr
+            - name: MEMORY_WORK_POLICY
+              value: refuse
+          ports:
+            - name: mcp
+              containerPort: 8182
+          # /health is static: it says the process is up, not that the graph is.
+          startupProbe:
+            httpGet:
+              path: /health
+              port: mcp
+            periodSeconds: 5
+            failureThreshold: 60
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: mcp
+            periodSeconds: 30
+            failureThreshold: 5
+          # Readiness is the host unit's preStart: both peers reachable over TCP.
+          readinessProbe:
+            exec:
+              command:
+                - /bin/bash
+                - -c
+                - exec 3<>/dev/tcp/graphiti/8184 && exec 4<>/dev/tcp/graphiti-falkordb/6379
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: token
+              mountPath: /secrets
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: graphiti-data
+        - name: token
+          secret:
+            secretName: memory-mcp-token
+            defaultMode: 0440
+        - name: tmp
+          emptyDir: {}
+---
+# NodePort, not an Ingress: the only client is the host's loopback forwarder, and
+# the NetworkPolicy admits nothing but the host's tap addresses. The node port
+# literal must match `ports.memoryNodePort` in smores56/nix-config.
+apiVersion: v1
+kind: Service
+metadata:
+  name: memory-mcp
+  namespace: graphiti
+  labels:
+    app.kubernetes.io/name: memory-mcp
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: data
+spec:
+  type: NodePort
+  selector:
+    app.kubernetes.io/name: memory-mcp
+  ports:
+    - name: mcp
+      port: 8182
+      targetPort: mcp
+      nodePort: 30082

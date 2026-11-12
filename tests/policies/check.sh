@@ -322,7 +322,6 @@ done <<'APPS'
 immich:2283
 navidrome:4533
 calibre:8083
-graphiti:8184
 APPS
 
 # Exact policy sets: an added flow has to be added to this assertion too, which
@@ -337,12 +336,12 @@ eq "$(jq -s -r 'map(select(.metadata.namespace == "calibre") | .metadata.name) |
   "allow-dns-egress,allow-same-namespace,calibre-http-from-ingress,default-deny" \
   "calibre keeps only default-deny, DNS, same-namespace and ingress HTTP"
 eq "$(jq -s -r 'map(select(.metadata.namespace == "graphiti") | .metadata.name) | sort | join(",")' "$network_json")" \
-  "allow-dns-egress,allow-same-namespace,default-deny,graphiti-http-from-ingress,graphiti-public-https" \
-  "graphiti keeps only default-deny, DNS, same-namespace, ingress HTTP and Neuralwatt HTTPS"
+  "allow-dns-egress,allow-same-namespace,default-deny,graphiti-public-https,memory-mcp-nodeport-from-host" \
+  "graphiti keeps only default-deny, DNS, same-namespace, Neuralwatt HTTPS and the host tap"
 
 eq "$(jq -r 'select(.metadata.namespace == "ingress" and .metadata.name == "egress-data-apps-only") | [.spec.egress[] | .to[0] | "\(.namespaceSelector.matchLabels["kubernetes.io/metadata.name"]):\(.podSelector.matchLabels["app.kubernetes.io/name"])"] | sort | join(",")' "$network_json")" \
-  "calibre:calibre,graphiti:graphiti,immich:immich,navidrome:navidrome" \
-  "the ingress namespace reaches the four app Services and nothing else"
+  "calibre:calibre,immich:immich,navidrome:navidrome" \
+  "the ingress namespace reaches the three published app Services and nothing else"
 eq "$(jq -r 'select(.metadata.namespace == "ingress" and .metadata.name == "egress-tunnel-edge") | [.spec.podSelector.matchLabels["app.kubernetes.io/name"], (.spec.egress[0].ports | map("\(.protocol):\(.port)") | sort | join(","))] | join(":")' "$network_json")" \
   "cloudflared:TCP:443,TCP:7844,UDP:7844" "cloudflared reaches the Cloudflare edge on 443 and the tunnel's 7844"
 eq "$(jq -r 'select(.metadata.namespace == "ingress" and .metadata.name == "egress-agent") | [.spec.egress[0].to[0].namespaceSelector.matchLabels["kubernetes.io/metadata.name"], .spec.egress[0].to[0].podSelector.matchLabels["app.kubernetes.io/name"], .spec.egress[0].ports[0].port] | join(":")' "$network_json")" \
@@ -440,6 +439,21 @@ eq "$(jq -r "$jq_workloads | podspec.containers[] | select((.resources.limits //
 eq "$(jq -r '.[] | select(.kind == "Deployment" or .kind == "StatefulSet") | .spec.template.spec.containers[] | select((.readinessProbe // .livenessProbe // .startupProbe) == null) | .name' "$work/data-apps.json")" \
   "" "every long-running data container has at least one probe"
 
+# The memory wrapper is reachable only through the host's tap forwarder: a
+# NodePort whose literal must match ports.memoryNodePort in smores56/nix-config,
+# and no Ingress anywhere in the namespace (memory.sammohr.dev stays on the host
+# tunnel).
+eq "$(jq -r '.[] | select(.kind == "Service" and .metadata.name == "memory-mcp") | "\(.spec.type):\(.spec.ports[0].nodePort):\(.spec.ports[0].port)"' "$work/data-apps.json")" \
+  "NodePort:30082:8182" "the wrapper Service is the host tap's NodePort on 8182"
+eq "$(jq -r '[.[] | select(.kind == "Ingress" and .metadata.namespace == "graphiti")] | length' "$work/data-apps.json")" \
+  "0" "graphiti publishes no hostname; the wrapper's route stays on the host tunnel"
+eq "$(jq -r '.[] | select(.kind == "Deployment" and .metadata.name == "memory-mcp") | "\(.spec.replicas):\(.spec.strategy.type)"' "$work/data-apps.json")" \
+  "1:Recreate" "one wrapper replica, Recreate (single-writer SQLite on the share)"
+eq "$(jq -r '.[] | select(.kind == "Deployment" and .metadata.name == "memory-mcp") | .spec.template.spec.containers[0].env[] | select(.name == "MEMORY_MCP_TOKEN_FILE") | .value' "$work/data-apps.json")" \
+  "/secrets/memory-mcp-token" "the wrapper reads its bearer token from the contract Secret"
+eq "$(jq -r '.[] | select(.kind == "Deployment" and .metadata.name == "memory-mcp") | .spec.template.spec.containers[0].env[] | select(.name == "MEMORY_LLM_URL") | .value' "$work/data-apps.json")" \
+  "" "the wrapper has no model gateway to probe in-cluster"
+
 # --------------------------------------------------------- hostname contract
 while IFS=: read -r ns host svc port; do
   file="clusters/homelab/data/$ns/ingress.yaml"
@@ -452,7 +466,6 @@ done <<'INGRESS'
 immich:photos.sammohr.dev:immich-server:2283
 navidrome:music.sammohr.dev:navidrome:4533
 calibre:opds.sammohr.dev:calibre:8083
-graphiti:memory.sammohr.dev:graphiti:8184
 INGRESS
 
 # ---------------------------------------------------------- broker contract

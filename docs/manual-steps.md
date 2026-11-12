@@ -305,11 +305,11 @@ tenant through the gateway to confirm (docs/observability.md, "Verification").
 
 ## 12. Create the cluster's SOPS-contract Secrets
 
-Three cluster workloads read a credential that Cloudflare, Neuralwatt or the
+Four cluster workloads read a credential that Cloudflare, Neuralwatt or the
 operator issued, and none may exist in git. The operator creates each Secret
 with `sops`; same rule as the host's `/run/secrets`: ciphertext lives in the
 operator's secret store, plaintext only in the API server and the pod. The ESO
-`kubernetes` provider projects the two issued ones; OPDShelf reads its admin
+`kubernetes` provider projects the three issued ones; OPDShelf reads its admin
 password from the contract Secret directly, since it is a static value with no
 property mapping.
 
@@ -325,6 +325,9 @@ sops -e -i neuralwatt-api-key.yaml
 sops -e -i cloudflare-tunnel-token.yaml
 # calibre: OPDShelf's admin password (also the readers' Basic auth credential)
 sops -e -i opdshelf-admin-password.yaml
+# graphiti: the MCP wrapper's bearer token, the same value as the host secrets'
+# memory-mcp-token in smores56/nix-config
+sops -e -i memory-mcp-token.yaml
 ```
 
 Then materialise the Secrets (SOPS contract names: `*-sops`; the broker's
@@ -337,6 +340,8 @@ kubectl -n ingress create secret generic cloudflare-tunnel-token-sops \
   --from-file=tunnel-token=<(sops -d cloudflare-tunnel-token.yaml | yq -r .token)
 kubectl -n calibre create secret generic opdshelf-admin-password-sops \
   --from-file=password=<(sops -d opdshelf-admin-password.yaml | yq -r .password)
+kubectl -n graphiti create secret generic memory-mcp-token-sops \
+  --from-file=memory-mcp-token=<(sops -d memory-mcp-token.yaml | yq -r .token)
 ```
 
 Resume the ESO stage (step 8) and confirm the projections, which is what the
@@ -345,6 +350,7 @@ Deployments actually read:
 ```sh
 kubectl -n graphiti get secret neuralwatt-api-key -o jsonpath='{.data.api-key}' | base64 -d | wc -c
 kubectl -n ingress get secret cloudflare-tunnel-token -o jsonpath='{.data.tunnel-token}' | base64 -d | wc -c
+kubectl -n graphiti get secret memory-mcp-token -o jsonpath='{.data.token}' | base64 -d | wc -c
 kubectl -n ingress get deploy cloudflared
 ```
 
@@ -378,10 +384,51 @@ first cutover:
    catalog, so `fanficfare-download` drops the EPUB where the host can move it
    into the share and `calibredb` loses its content-server tail. That change
    lives in `nix-config`, not here.
-5. Leave `modules/nixos/{immich,navidrome,memory}.nix` in place until every app
+5. **Publish and pin the wrapper image.** In `smores56/nix-config`:
+   `just publish-memory-image <git-sha>` builds the layered image, pushes it to
+   `ghcr.io/smores56/nix-config/memory-mcp:<git-sha>` and prints the digest.
+   Replace both `@sha256:000…` placeholders in
+   `clusters/homelab/data/graphiti/{memory-mcp,memory-export-cronjob}.yaml` with
+   it, and make the GHCR package public (Packages -> memory-mcp -> Change
+   visibility); the cluster has no image pull secret.
+6. **Move the wrapper.** Create `memory-mcp-token-sops` (step 12), then in the
+   same window: stop the host units (`sudo systemctl stop memory-mcp
+   memory-graphiti-mcp memory-llm-proxy memory-falkordb memory-export.timer`),
+   `sudo memory export` (never `cp` the live WAL database), copy the export's
+   `registry.sqlite` to `/var/lib/data/graphiti/memory/`, start
+   `deploy/memory-mcp`, and flip `memoryForward.enable` in nix-config so
+   loopback 8182 forwards to the wrapper. Verify `memory status`, one write and
+   one search, then let the observation week run.
+7. Leave `modules/nixos/{immich,navidrome,memory}.nix` in place until every app
    has served from the cluster for a week; then enable
    `clusterDataApps.enable` in nix-config (`docs/kanbei-split.md` in that
    repository) and, after that has run, delete the modules.
+
+### Restoring the memory registry
+
+There is no systemd in the cluster, so the restore is a Job. The export the
+CronJob wrote is `/data/db-dumps/memory` on the `graphiti-data` share:
+
+```sh
+# 1. Every writer and the graph stop first: the registry is single-writer.
+cluster-kubectl -n graphiti scale deploy/memory-mcp --replicas=0
+cluster-kubectl -n graphiti scale deploy/graphiti-falkordb --replicas=0
+
+# 2. Verify, then write, from the same image the wrapper runs.
+cluster-kubectl -n graphiti create job memory-restore --image=<the pinned digest> \
+  --dry-run=client -o yaml \
+  | yq '.spec.template.spec = {"securityContext": {"runAsUser": 1000, "runAsGroup": 1000, "runAsNonRoot": true, "seccompProfile": {"type": "RuntimeDefault"}, "restartPolicy": "Never", "serviceAccountName": "data-workload", "automountServiceAccountToken": false}, "containers": [{"name": "restore", "image": "<the pinned digest>", "command": ["memory-export", "restore", "/data/db-dumps/memory", "--state-dir", "/data/memory", "--graph-dir", "/data/falkordb", "--owner", "", "--no-stop"], "securityContext": {"allowPrivilegeEscalation": false, "readOnlyRootFilesystem": true, "capabilities": {"drop": ["ALL"]}}, "resources": {"limits": {"cpu": "500m", "memory": "512Mi"}}, "volumeMounts": [{"name": "data", "mountPath": "/data"}, {"name": "tmp", "mountPath": "/tmp"}]}], "volumes": [{"name": "data", "persistentVolumeClaim": {"claimName": "graphiti-data"}}, {"name": "tmp", "emptyDir": {}}]}' \
+  | cluster-kubectl -n graphiti apply -f -
+cluster-kubectl -n graphiti logs -f job/memory-restore     # run once with --dry-run first
+
+# 3. Bring the graph and the wrapper back; the reconciler re-submits whatever
+#    the restored registry still marks pending.
+cluster-kubectl -n graphiti scale deploy/graphiti-falkordb --replicas=1
+cluster-kubectl -n graphiti scale deploy/memory-mcp --replicas=1
+```
+
+Rolling back to the host is this same job run against `/var/lib/memory` after
+copying the export out of the share, not a restart of the frozen host copy.
 
 ## 14. Move the Cloudflare OpenTofu state
 

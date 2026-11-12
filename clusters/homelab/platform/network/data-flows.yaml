@@ -4,7 +4,9 @@
 #   1. same-namespace traffic, because Immich talks to its own Postgres and
 #      Valkey and Graphiti to its own FalkorDB;
 #   2. the app's HTTP port from the `ingress` namespace only, which is the one
-#      path cloudflared may use into a data app;
+#      path cloudflared may use into a data app. The memory wrapper is the
+#      exception: its only client is the host's tap NodePort, so no ingress flow
+#      exists for it;
 #   3. HTTPS to the public internet for the two pods that fetch remote content
 #      (`immich-machine-learning` downloads model weights, Graphiti calls the
 #      Neuralwatt API). Port 443 is the only port the cluster guest can open
@@ -155,24 +157,28 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: graphiti-http-from-ingress
+  name: memory-mcp-nodeport-from-host
   namespace: graphiti
   labels:
     app.kubernetes.io/part-of: homelabs
     homelabs.dev/tier: data
 spec:
+  # The wrapper's only client: the host's loopback forwarder, over the tap
+  # NodePort. kube-proxy may SNAT node-local traffic to the node address, so
+  # both tap addresses are admitted and nothing else.
   podSelector:
     matchLabels:
-      app.kubernetes.io/name: graphiti
+      app.kubernetes.io/name: memory-mcp
   policyTypes: ["Ingress"]
   ingress:
     - from:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: ingress
+        - ipBlock:
+            cidr: 10.77.1.1/32
+        - ipBlock:
+            cidr: 10.77.1.2/32
       ports:
         - protocol: TCP
-          port: 8184
+          port: 8182
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -266,16 +272,6 @@ spec:
       ports:
         - protocol: TCP
           port: 8083
-    - to:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: graphiti
-          podSelector:
-            matchLabels:
-              app.kubernetes.io/name: graphiti
-      ports:
-        - protocol: TCP
-          port: 8184
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy

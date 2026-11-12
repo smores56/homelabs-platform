@@ -177,8 +177,19 @@ be applied at any time (a missing share just leaves the pod unstarted).
    start the cluster pods, and confirm `kubectl -n graphiti exec deploy/graphiti -- wget -qO- localhost:8184/health`.
    `memory.sammohr.dev` keeps pointing at the host's `memory-mcp` wrapper (that
    is what maki authenticates against), so the host's copy stays authoritative
-   until the wrapper itself moves. The cluster Ingress for that host records the
-   eventual target and must not be published before the wrapper is in-cluster.
+   until the wrapper itself moves.
+
+6. **Memory wrapper.** The registry moves, not just the graph. With the host
+   units stopped, run `memory export` (the online backup, never `cp` of a live
+   WAL database), copy its `registry.sqlite` to
+   `/var/lib/data/graphiti/memory/`, and start `deploy/memory-mcp`. The host's
+   `memory-forward` unit points loopback 8182 at the wrapper's tap NodePort, so
+   maki and the agent VM keep their loopback convention and
+   `memory.sammohr.dev` never leaves the host tunnel. Verify with
+   `memory status` and one write/search round trip, then keep the host units
+   stopped; rollback is a forward restore of the newest export onto the host,
+   not a restart of the frozen copy. The nightly `memory-export` CronJob on the
+   share is what restic snapshots.
 
 Rollback for any app: start the native service again. Its data is still at the
 host path until the copy step moved it, and a `mv` is reversed by moving it back.
