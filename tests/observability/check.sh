@@ -236,9 +236,9 @@ eq "$(jq -r '.[] | select(.metadata.name == "status-exporter-from-broker") | [.s
   "$network_json")" "broker:9101" "the broker path to the exporter is kept"
 eq "$(jq -r '.[] | select(.metadata.name == "loki-gateway-from-broker") | [.spec.ingress[0].from[0].namespaceSelector.matchLabels["kubernetes.io/metadata.name"], (.spec.ingress[0].ports[0].port | tostring)] | join(":")' \
   "$network_json")" "broker:3100" "the broker path to the gateway is kept"
-eq "$(jq -r '.[] | select(.metadata.name == "kubernetes-api-egress") | [(.spec.podSelector.matchExpressions[0].values | sort | join("+")), (.spec.egress | map("\(.to[0].ipBlock.cidr):\(.ports[0].port)") | sort | join(","))] | join(":")' \
-  "$network_json")" "prometheus+status-exporter+vector:10.43.0.0/16:443,10.77.1.0/30:6443" \
-  "API egress is the service range on 443 and the node address on 6443"
+eq "$(jq -r '.[] | select(.metadata.name == "kubernetes-api-egress") | [(.spec.podSelector.matchExpressions[0].values | sort | join("+")), ([(.spec.egress[] | .to[] as $t | .ports[] | "\($t.ipBlock.cidr):\(.port)")] | sort | join(","))] | join(":")' \
+  "$network_json")" "prometheus+status-exporter+vector:10.43.0.0/16:443,10.43.0.0/16:6443,10.77.1.0/30:443,10.77.1.0/30:6443" \
+  "API egress covers the service range and the node address on 443 and 6443"
 if jq -r '.[] | select(.metadata.name != "allow-dns-egress") | .spec.egress[]? | .to[]? | .ipBlock.cidr // empty' \
   "$network_json" | grep -qx '0.0.0.0/0'; then
   bad "an observability policy allows public egress"
