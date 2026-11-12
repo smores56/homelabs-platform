@@ -214,7 +214,8 @@ else
 fi
 for pair in 'agent=http://nanobot.tenant-apps.svc.cluster.local:80' \
             'photos=http://immich-server.immich.svc.cluster.local:2283' \
-            'music=http://navidrome.navidrome.svc.cluster.local:4533'; do
+            'music=http://navidrome.navidrome.svc.cluster.local:4533' \
+            'calibre=http://calibre.calibre.svc.cluster.local:8083'; do
   name=${pair%%=*}
   url=${pair#*=}
   # `tofu fmt` aligns the `=`, so match the mapping rather than one spacing.

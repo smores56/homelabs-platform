@@ -157,12 +157,21 @@ be applied at any time (a missing share just leaves the pod unstarted).
    (behind the email allow policy), so the cutover also adds `music` to
    `cluster_hosts` — until then the name falls through the wildcard to the host
    tunnel's 404 catch-all.
-4. **Calibre.** The library does not move. Stop the host's `calibre-server`
-   user unit (`systemctl --user stop calibre-server`), set the Calibre-Web admin
-   password on first login (`docs/manual-steps.md` step 13), and repoint the
-   agent-facing path (calibre-server's content server → Calibre-Web's `/opds`).
-   That repoint touches the broker's `calibre` logical host and the agent
-   `calibredb` wrapper, both outside this repository: live-gated.
+4. **Calibre.** The library does not move: the host's `calibre-server` and the
+   cluster's Calibre-Web read the same `/var/lib/data/books` tree. Set the
+   Calibre-Web admin password **before** the flip — port-forward to the pod and
+   log in as `admin`/`admin123` (the image default, on a public hostname), using
+   the value of `calibre-password` from the host's SOPS file — then add
+   `calibre` to `local.cluster_ingress` and apply. Stop the host's user unit
+   (`systemctl --user stop calibre-server`).
+   The agent write path does **not** survive this flip: `calibredb` and
+   `fanficfare-download` call the calibre Content server (`/cdb/cmd/add`,
+   `set_metadata`), which Calibre-Web does not implement, and its OPDS catalog
+   is read-only. The replacement is either CWA's ingest folder
+   (`/cwa-book-ingest`, imported by CWA as the only writer — needs an
+   authenticated way to deliver a file into the pod) or a second, unexposed
+   content server on the same claim. Both touch nix-config's broker logical
+   host, so they are live-gated.
 5. **Graphiti.** Copy, do not move, the graph while the host stack still runs:
    `sudo systemctl stop memory-graphiti-mcp memory-falkordb`,
    `sudo rsync -a /var/lib/memory/falkordb/ /var/lib/data/graphiti/falkordb/`,
