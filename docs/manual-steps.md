@@ -305,11 +305,13 @@ tenant through the gateway to confirm (docs/observability.md, "Verification").
 
 ## 12. Create the cluster's SOPS-contract Secrets
 
-Two cluster workloads read a credential that Cloudflare or Neuralwatt issued, and
-neither may exist in git: the ESO `kubernetes` provider projects them from a
-Secret that the operator creates with `sops`. Same rule as the host's
-`/run/secrets`: ciphertext lives in the operator's secret store, plaintext only
-in the API server and the pod.
+Three cluster workloads read a credential that Cloudflare, Neuralwatt or the
+operator issued, and none may exist in git. The operator creates each Secret
+with `sops`; same rule as the host's `/run/secrets`: ciphertext lives in the
+operator's secret store, plaintext only in the API server and the pod. The ESO
+`kubernetes` provider projects the two issued ones; OPDShelf reads its admin
+password from the contract Secret directly, since it is a static value with no
+property mapping.
 
 Create the cluster tunnel (step 15), or take its token from the T7 work
 (`smores56/sdlc#581`; `smores56/sdlc#580` depends on it), and write both files

@@ -6,8 +6,10 @@
 # preinit, and its ingest pipeline owned the library, which left the agent with
 # no simple write path. Here a file written to the share is simply a book.
 #
-# Credentials are environment variables, so the admin password comes from the
-# SOPS contract (`opdshelf-admin-password-sops` -> `opdshelf-admin`).
+# Credentials are environment variables, so the admin password comes straight
+# from the SOPS contract Secret (`opdshelf-admin-password-sops`). No ExternalSecret
+# sits in between: the value is a static operator credential with no property
+# mapping, and the projection only added a failure mode.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -51,7 +53,7 @@ spec:
             - name: ADMIN_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: opdshelf-admin
+                  name: opdshelf-admin-password-sops
                   key: password
           ports:
             - name: http
