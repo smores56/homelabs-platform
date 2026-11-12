@@ -33,6 +33,9 @@ resource "cloudflare_dns_record" "cluster" {
 # the edge certificate. Verify with:
 #   dig +short CAA sammohr.dev
 resource "cloudflare_dns_record" "caa_issue" {
+  # No account yet means no pin: an empty account id would encode a bogus
+  # accounturi and stop Let's Encrypt issuing for the zone at all.
+  count   = var.acme_account_id == "" ? 0 : 1
   zone_id = data.cloudflare_zone.this.zone_id
   name    = var.domain
   type    = "CAA"
@@ -47,6 +50,7 @@ resource "cloudflare_dns_record" "caa_issue" {
 }
 
 resource "cloudflare_dns_record" "caa_issuewild" {
+  count   = var.acme_account_id == "" ? 0 : 1
   zone_id = data.cloudflare_zone.this.zone_id
   name    = var.domain
   type    = "CAA"

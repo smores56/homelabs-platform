@@ -64,11 +64,12 @@ variable "cluster_hosts" {
 
 variable "acme_account_id" {
   type        = string
-  description = "Numeric Let's Encrypt ACME account id behind the in-VM CSR client. Pinned into the CAA accounturi so no other account of that CA can issue for the zone."
+  description = "Numeric Let's Encrypt ACME account id behind the in-VM CSR client. Pinned into the CAA accounturi so no other account of that CA can issue for the zone. Empty until that client has registered: the pin is applied later, and no CAA record is written meanwhile."
+  default     = ""
 
   validation {
-    condition     = can(regex("^[0-9]+$", var.acme_account_id))
-    error_message = "acme_account_id is the numeric account number from the ACME account URL (/acme/acct/<id>)."
+    condition     = var.acme_account_id == "" || can(regex("^[0-9]+$", var.acme_account_id))
+    error_message = "acme_account_id is the numeric account number from the ACME account URL (/acme/acct/<id>), or empty until that account exists."
   }
 }
 

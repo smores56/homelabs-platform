@@ -453,8 +453,12 @@ host tunnel and is the rollback.
 ## 16. Capture the ACME account id for the CAA pin
 
 `tofu/` pins `issue` and `issuewild` to the ACME account Kanbei's in-VM CSR
-client registers with. The account URL the client prints on first registration
-ends in `/acme/acct/<id>`:
+client registers with. Nothing blocks earlier applies: `acme_account_id`
+defaults to empty and the two CAA records are created only once it is set, so
+until this client has registered the zone simply has no CAA pin.
+
+The account URL the client prints on first registration ends in
+`/acme/acct/<id>`:
 
 ```
 Account URL: https://acme-v02.api.letsencrypt.org/acme/acct/<id>

@@ -186,6 +186,8 @@ accounturi=$(grep -c 'accounturi=\${local.acme_account_uri}' "$work/code.tf")
 eq "$accounturi" "2" "both CAA records pin the ACME account"
 has 'acme_account_uri derives from the account id variable' 'acme_account_uri = "\$\{trimsuffix\(var\.acme_directory, "/directory"\)\}/acme/acct/\$\{var\.acme_account_id\}"'
 has 'acme_account_id is a variable' 'variable "acme_account_id"'
+has 'the CAA pin is conditional on the account id' 'count[[:space:]]*=[[:space:]]*var\.acme_account_id == "" \? 0 : 1'
+has 'an empty acme_account_id is valid' 'var\.acme_account_id == "" || can\(regex'
 
 echo "== tunnels"
 has 'host tunnel CNAME comes from the host tunnel variable' 'host_tunnel_cname[[:space:]]*=[[:space:]]*"\$\{var\.host_tunnel_id\}\.cfargotunnel\.com"'
