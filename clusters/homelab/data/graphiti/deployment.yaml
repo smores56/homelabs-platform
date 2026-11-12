@@ -45,8 +45,12 @@ spec:
           args:
             - |
               set -eu
-              sed "s|__NEURALWATT_API_KEY__|$NEURALWATT_API_KEY|g" \
-                /tmpl/config.yaml.tmpl > /etc/graphiti/config.yaml
+              # The key is provider-minted and may contain any punctuation, so no
+              # sed delimiter is safe; shell pattern substitution treats the value
+              # as literal text.
+              while IFS= read -r line || [ -n "$line" ]; do
+                printf '%s\n' "${line//__NEURALWATT_API_KEY__/$NEURALWATT_API_KEY}"
+              done < /tmpl/config.yaml.tmpl > /etc/graphiti/config.yaml
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
