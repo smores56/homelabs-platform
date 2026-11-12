@@ -11,7 +11,8 @@
 # the catch-all. The precondition below refuses that partial cutover.
 locals {
   cluster_ingress = {
-    agent = "http://nanobot.tenant-apps.svc.cluster.local:80"
+    agent  = "http://nanobot.tenant-apps.svc.cluster.local:80"
+    immich = "http://immich-server.immich.svc.cluster.local:2283"
   }
 
   # Ordered rules; the catch-all is appended last and must stay last.

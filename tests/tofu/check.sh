@@ -209,11 +209,17 @@ else
   if grep -qF 'tunnel_id  = var.cluster_tunnel_id' <<<"$cluster_cfg"; then ok "cluster config targets the cluster tunnel"; else bad "cluster config targets the cluster tunnel"; fi
   if grep -qF 'count = var.cluster_tunnel_id == "" ? 0 : 1' <<<"$cluster_cfg"; then ok "cluster config tolerates a missing tunnel"; else bad "cluster config tolerates a missing tunnel"; fi
 fi
-if grep -qF 'agent = "http://nanobot.tenant-apps.svc.cluster.local:80"' "$work/code.tf"; then
-  ok "agent maps to the in-cluster nanobot Service"
-else
-  bad "agent maps to the in-cluster nanobot Service"
-fi
+for pair in 'agent=http://nanobot.tenant-apps.svc.cluster.local:80' \
+            'immich=http://immich-server.immich.svc.cluster.local:2283'; do
+  name=${pair%%=*}
+  url=${pair#*=}
+  # `tofu fmt` aligns the `=`, so match the mapping rather than one spacing.
+  if grep -qE "^[[:space:]]*${name}[[:space:]]*=[[:space:]]*\"${url//./\\.}\"" "$work/code.tf"; then
+    ok "$name maps to its in-cluster Service"
+  else
+    bad "$name maps to its in-cluster Service"
+  fi
+done
 if grep -qF 'http_status:404' "$work/code.tf"; then ok "cluster ingress ends with a 404 catch-all"; else bad "cluster ingress ends with a 404 catch-all"; fi
 if grep -qF 'contains(keys(local.cluster_ingress), host)' "$work/code.tf"; then
   ok "cluster DNS and ingress must agree"
