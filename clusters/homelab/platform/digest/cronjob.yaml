@@ -40,11 +40,20 @@ spec:
           restartPolicy: Never
           securityContext:
             runAsNonRoot: true
-            # Same uid the data apps write the shares as, so the virtiofs
-            # translation maps it to the host's `smores` owner of
-            # /var/lib/data/cluster-digest.
-            runAsUser: 1000
-            runAsGroup: 0
+            # The share is a 0770 directory owned on the host by the dedicated
+            # digest uid 983 (kanbei-digest), never by `smores`. virtiofsd
+            # translates guest 0 and guest 1000 -> host 983, but it maps only
+            # that direction: host -> guest is identity, so inside the guest the
+            # tree is presented as 983:983. virtiofs always sets
+            # default_permissions, so the guest kernel checks the presented
+            # owner and a pod at 1000:0 lands in "other" (EACCES on the temp
+            # file). Run as the presented uid/gid; guest 983 is unmapped, so it
+            # reaches the host as 983 and the writes still land as
+            # kanbei-digest. fsGroup keeps the mountpoint group-owned by the
+            # same id instead of root.
+            runAsUser: 983
+            runAsGroup: 983
+            fsGroup: 983
             seccompProfile:
               type: RuntimeDefault
           containers:

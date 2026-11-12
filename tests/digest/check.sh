@@ -104,9 +104,9 @@ eq "$(jq -r "${cj}spec.jobTemplate.spec.backoffLimit" "$work/digest.json")" "1" 
   "a failed run retries once"
 eq "$(jq -r "${podspec}.automountServiceAccountToken" "$work/digest.json")" "false" \
   "the pod has no service-account token"
-eq "$(jq -r "${podspec}.securityContext | [.runAsNonRoot, .runAsUser, .runAsGroup, .seccompProfile.type] | map(tostring) | join(\":\")" "$work/digest.json")" \
-  "true:1000:0:RuntimeDefault" \
-  "the pod runs as the uid the data shares are owned by, with the default seccomp profile"
+eq "$(jq -r "${podspec}.securityContext | [.runAsNonRoot, .runAsUser, .runAsGroup, .fsGroup, .seccompProfile.type] | map(tostring) | join(\":\")" "$work/digest.json")" \
+  "true:983:983:983:RuntimeDefault" \
+  "the pod runs as the digest share's in-guest uid (983, the host's kanbei-digest), with the default seccomp profile"
 eq "$(jq -r "${podspec}.containers[0].securityContext | [.allowPrivilegeEscalation, .readOnlyRootFilesystem, (.capabilities.drop | join(\",\"))] | map(tostring) | join(\":\")" "$work/digest.json")" \
   "false:true:ALL" "the container is unprivileged with a read-only root filesystem"
 eq "$(jq -r "${podspec}.containers[0].image" "$work/digest.json")" "python:3.13.12-slim" \

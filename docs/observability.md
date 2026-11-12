@@ -246,14 +246,20 @@ nix-config's, not this repository's). The generated share is:
 
 | | Value |
 | --- | --- |
-| Host path | `/var/lib/data/cluster-digest` |
+| Host path | `/var/lib/kanbei-ingest/shares/cluster-digest` (0770 `kanbei-digest`, root-only parents) |
 | Guest path | `/mnt/data/cluster-digest` (mount of the `data-cluster-digest` virtiofs tag) |
 | Static PV | `cluster-digest-share`, `data-local`, node affinity `cluster`, claimRef `observability/cluster-digest-data` |
-| Writer | the CronJob, uid 1000 (the share's host owner through the guest translation) |
+| Writer | the CronJob, guest uid/gid 983 (the id the share is presented with; host 983, `kanbei-digest`) |
 | Names it writes | `latest.json` plus `digest-<YYYYMMDDTHHMMSSZ>.json`, newest 96 retained |
 | Atomicity | temp file in the same directory, fsync, `rename(2)`; a reader never sees a partial document |
 | Max size | 65536 bytes; a larger mandatory document fails the run |
 | Age boundary | **host-side**: the host writer watches `latest.json`, age-encrypts to Kanbei's published recipient and drops the ciphertext into `/var/lib/data/inbox` (T14). The cluster holds no age key and never writes the inbox |
+
+The guest sees `983:983` because virtiofsd maps guest 0 and guest 1000 onto the
+host's `kanbei-digest` uid but maps host ids back by identity. virtiofs always
+sets `default_permissions`, so the guest kernel checks that presented owner
+before a request reaches virtiofsd; the CronJob therefore runs as 983, the only
+id that is both the owner inside the guest and the digest uid on the host.
 
 The host writer must read only `latest.json` (snapshots are local debugging
 history), keep `generated_at` as a cursor so a restart does not duplicate a

@@ -1,6 +1,6 @@
-# The digest share (`/var/lib/data/cluster-digest` on the host, mounted at
-# /mnt/data/cluster-digest in the guest) is a static `data-local` PV in
-# platform/storage/persistentvolumes.yaml. The claim name is what the PV's
+# The digest share (`/var/lib/kanbei-ingest/shares/cluster-digest` on the host,
+# mounted at /mnt/data/cluster-digest in the guest) is a static `data-local` PV
+# in platform/storage/persistentvolumes.yaml. The claim name is what the PV's
 # claimRef pins, so a mistyped name fails to bind instead of landing on an
 # app's data.
 apiVersion: v1
