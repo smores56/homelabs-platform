@@ -173,6 +173,10 @@ zone with no application of its own is reachable only by the owner's identity.
   `allow_authenticate_via_warp` so an enrolled device passes without a browser
   redirect). `nanobot` is retired (SDLC #583): the cluster serves the same app on
   `agent`, and the old application is gone rather than left email-only.
+  The API rejects `allow_authenticate_via_warp` until the account has a
+  Cloudflare One Client authentication session duration (Zero Trust → Access →
+  Settings); it is an account-wide prerequisite, not something this repository
+  can declare.
 - The `service auth` policy is account-wide: any service token minted in that
   account is accepted by those applications. Rotate a leaked token in
   Zero Trust → Access → Service Auth; the notification policy emails before one
