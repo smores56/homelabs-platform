@@ -93,6 +93,23 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /data
+            # The image's entrypoint copies its config template into this
+            # directory and seds PGDATA into the copy (`cp -n` +
+            # `sed -i .../postgresql.conf`), so it must be writable even on a
+            # read-only rootfs. The image ships no files here (its Dockerfile
+            # only `chmod 1777 /etc/postgresql`); the template is read from
+            # /var/postgresql-conf-tpl, so an emptyDir loses nothing.
+            - name: etc-postgresql
+              mountPath: /etc/postgresql
+            # The generated postgresql.conf carries
+            # `include_if_exists 'postgresql.override.conf'`, resolved next to
+            # the config file, so the data-tenant log settings land without
+            # rewriting the image's template: the second consumption shape in
+            # postgres-settings.yaml.
+            - name: settings
+              mountPath: /etc/postgresql/postgresql.override.conf
+              subPath: data-settings.conf
+              readOnly: true
             - name: run
               mountPath: /var/run/postgresql
             - name: tmp
@@ -101,6 +118,11 @@ spec:
         - name: data
           persistentVolumeClaim:
             claimName: immich-data
+        - name: etc-postgresql
+          emptyDir: {}
+        - name: settings
+          configMap:
+            name: postgres-data-settings
         - name: run
           emptyDir: {}
         - name: tmp
