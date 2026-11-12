@@ -178,19 +178,21 @@ flux -n tenant-apps get gitrepository homelabs-apps -o jsonpath='{.status.condit
 
 Expected: `True`.
 
-## 8. Install External Secrets and resume its stage
+## 8. Install External Secrets
 
-`platform-secrets-eso` is suspended because the operator is not shipped by this
-repository; the stage would otherwise fail on missing CRDs and block its
-dependents.
+The operator is not shipped by this repository, so installing it is a
+precondition for the two ESO stages, not something they can wait for: both
+`platform-secrets-eso` and `platform-observability-secrets` run unconditionally
+and fail loudly on missing CRDs. Do not try to gate them with
+`flux resume` — git owns those objects' spec, so a suspension set by hand
+returns on the next `flux-system` reconcile.
 
 ```sh
 helm repo add external-secrets https://charts.external-secrets.io
 helm repo update
 helm install external-secrets external-secrets/external-secrets \
   --namespace platform --create-namespace
-flux -n flux-system resume kustomization platform-secrets-eso
-flux -n flux-system resume kustomization platform-observability-secrets
+kubectl -n platform rollout status deploy/external-secrets-webhook --timeout=120s
 kubectl -n observability get externalsecret loki-gateway-token
 kubectl -n broker get secret broker-credentials
 ```

@@ -23,9 +23,10 @@ spec:
     name: flux-system
   serviceAccountName: kustomize-controller
 ---
-# External Secrets objects for the Loki gateway token. Suspended for the same
-# reason as platform-secrets-eso: the operator's CRDs are not installed by this
-# repository, and a stage that cannot apply would block the tenant chain.
+# External Secrets objects for the Loki gateway token. Same precondition as
+# platform-secrets-eso: install the operator first (docs/manual-steps.md step 8).
+# Do not express that as `suspend: true` here — git owns this spec, so the flag
+# would return on the next flux-system reconcile.
 apiVersion: kustomize.toolkit.fluxcd.io/v1
 kind: Kustomization
 metadata:
@@ -39,7 +40,6 @@ spec:
   retryInterval: 1m
   timeout: 5m
   prune: true
-  suspend: true
   path: ./clusters/homelab/observability/loki-gateway/eso
   dependsOn:
     - name: platform-observability

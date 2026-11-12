@@ -141,9 +141,10 @@ Two mechanisms, no third:
    and `broker`, and in `docs/runbook.md`.
 2. **External Secrets, two shapes.** `platform/secrets/eso/` holds a
    namespaced `SecretStore`, a `Password` generator and `ExternalSecret`s. No
-   credential is committed. Those objects are applied by the suspended
-   `platform-secrets-eso` Kustomization, because the operator (and its CRDs) is
-   not installed by this repository (`docs/runbook.md`).
+   credential is committed. Those objects are applied by the
+   `platform-secrets-eso` Kustomization, which requires the operator (and its
+   CRDs), and that operator is not installed by this repository
+   (`docs/runbook.md`).
    - *Generated*: `immich-db`, `loki-gateway-token` — a `Password` generator
      mints the value once. The agent has no broker token; caller identity is
      the namespace boundary (`docs/broker.md`).

@@ -135,7 +135,7 @@ platform-namespaces   namespaces + RuntimeClass gvisor
     └── platform-policies   ValidatingAdmissionPolicies + bindings
 platform-network      NetworkPolicies            (dependsOn namespaces)
 platform-secrets      sops contract ConfigMap    (dependsOn namespaces, policies)
-    └── platform-secrets-eso   ESO objects, suspended
+    └── platform-secrets-eso   ESO objects (needs the operator)
 platform-broker       broker Deployment/Service  (dependsOn namespaces, rbac,
                       policies, network, secrets)
 platform-storage      StorageClass + static PVs  (dependsOn namespaces)

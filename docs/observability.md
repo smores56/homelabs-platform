@@ -4,7 +4,7 @@ Prometheus, Loki, Vector and the data-plane helpers run in the `observability`
 namespace (tier `observability`, PSA `privileged`). The stage is
 `platform-observability` in the Flux chain, ordered after `platform-policies`,
 so no workload is created before the admission and network guards exist. The
-Externally generated secrets live in a second, suspended stage
+Externally generated secrets live in a second stage, which requires the operator
 (`platform-observability-secrets`) for the same reason as `platform-secrets-eso`:
 the operator's CRDs are not shipped by this repository.
 

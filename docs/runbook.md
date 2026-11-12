@@ -239,8 +239,9 @@ Expected: `flux-system` Kustomization Ready on the pinned
 re-renders `gotk-sync.yaml`), then the `platform-*` stages appear in order:
 namespaces, rbac, policies, network, secrets, data config, backup,
 observability, tenants. `platform-secrets-eso` and
-`platform-observability-secrets` stay suspended until step 4 installs the
-operator.
+`platform-observability-secrets` require the operator from step 4 to be
+installed first; they are not suspended, because git owns their spec and a
+hand-set suspension would return on the next reconcile.
 
 ### 2. Age key for SOPS
 
@@ -286,18 +287,18 @@ flux -n tenant-apps get gitrepository        # READY True
 flux -n tenant-apps get kustomization        # homelabs-apps reconciled as tenant-apps-reconciler
 ```
 
-### 4. External Secrets, then resume its stage
+### 4. External Secrets (a precondition, not a toggle)
 
-The ESO objects ship suspended because the operator's CRDs are not installed by
-this repository:
+The ESO objects run unconditionally because the operator's CRDs are not
+installed by this repository, so the operator has to be present before those
+stages reconcile:
 
 ```sh
 helm repo add external-secrets https://charts.external-secrets.io
 helm repo update
 helm install external-secrets external-secrets/external-secrets \
   --namespace platform --create-namespace
-flux -n flux-system resume kustomization platform-secrets-eso
-flux -n flux-system resume kustomization platform-observability-secrets
+kubectl -n platform rollout status deploy/external-secrets-webhook --timeout=120s
 kubectl -n tenant-apps get externalsecret
 kubectl -n observability get externalsecret
 ```
