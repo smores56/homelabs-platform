@@ -125,6 +125,11 @@ one place that fetches it: SOPS decrypts `secrets/smortress.yaml` from the
 nix-config checkout (override the path with `CLOUDFLARE_SECRETS_FILE`), and a
 preset `CLOUDFLARE_API_TOKEN` skips SOPS entirely. Nothing else needs exporting.
 
+The repository's state file is authoritative, and the script refuses to run
+while `/var/lib/cloudflare-tofu` exists: a second state directory there plans a
+whole-zone create that Cloudflare rejects object by object. Remove it, or set
+`CLOUDFLARE_IGNORE_LEGACY_TOFU_DIR=1` if you know it is empty.
+
 No variable carries a tunnel secret, and none is a credential.
 
 | Variable | Meaning |

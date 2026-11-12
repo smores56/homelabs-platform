@@ -250,6 +250,11 @@ if grep -qF "sops -d --extract" scripts/tofu-cloudflare.sh 2>/dev/null; then
 else
   bad "zone apply wrapper reads the credential from SOPS"
 fi
+if grep -qF '/var/lib/cloudflare-tofu' scripts/tofu-cloudflare.sh 2>/dev/null; then
+  ok "zone apply wrapper refuses the legacy state directory"
+else
+  bad "zone apply wrapper refuses the legacy state directory"
+fi
 # The identifiers live in tofu/terraform.tfvars, and the host set follows the
 # ingress map, so an apply needs no TF_VAR_ exports.
 if grep -qF 'TF_VAR_cluster_hosts' docs/manual-steps.md; then
