@@ -112,13 +112,24 @@ be applied at any time (a missing share just leaves the pod unstarted).
    `kubectl -n ingress get deploy cloudflared` is `Available` with two replicas.
 2. **Immich.** `sudo systemctl stop immich`. Create
    `/var/lib/data/immich/{library,postgres,valkey,db-dumps}` (the pods' init
-   containers do it too), copy `sudo rsync -a /var/lib/immich/ /var/lib/data/immich/library/`,
-   dump the host database into the share
-   (`sudo -u postgres pg_dump -Fc --no-owner immich > /var/lib/data/immich/db-dumps/immich.dump`),
-   then let the cluster Postgres come up and restore it once:
-   `cluster-kubectl -n immich exec -i deploy/immich-postgres -- pg_restore -U immich -d immich --no-owner --clean --if-exists < /var/lib/data/immich/db-dumps/immich.dump`.
-   The server migrates the schema at start. Verify `/api/server/ping`, then flip
-   the `photos.sammohr.dev` route Cloudflare-side (T7).
+   containers do it too). The host's media tree is **`/var/lib/data/photos`**
+   (`modules/nixos/immich.nix` `mediaLocation`), owned `immich:immich` mode
+   0700, so the copy runs as root and is then re-owned:
+   `sudo rsync -a /var/lib/data/photos/ /var/lib/data/immich/library/` then
+   `sudo chown -R smores:users /var/lib/data/immich/library` — the guest maps
+   its uid 1000 to `smores`, and anything owned otherwise is unreadable to the
+   pods. Dump the host database into the share
+   (`sudo -u postgres pg_dump -Fc --no-owner immich > /var/lib/data/immich/db-dumps/immich.dump`).
+   Then stop the cluster's server and machine-learning so nothing holds the
+   database while it is replaced, restore the dump once, and scale back:
+   `cluster-kubectl -n immich scale deploy/immich-server deploy/immich-machine-learning --replicas=0`,
+   `cluster-kubectl -n immich exec -i deploy/immich-postgres -- pg_restore -U immich -d immich --no-owner --clean --if-exists < /var/lib/data/immich/db-dumps/immich.dump`,
+   then the two Deployments back to `--replicas=1`. The server migrates the
+   schema at start. If the restore lands inside the 02:45 dump window, suspend
+   `cluster-kubectl -n immich patch cronjob immich-dump -p '{"spec":{"suspend":true}}'`
+   first so restic cannot capture the pre-restore database, and unsuspend after.
+   Verify `/api/server/ping`, then flip the
+   `photos.sammohr.dev` route Cloudflare-side (T7).
 3. **Navidrome.** `sudo systemctl stop navidrome`, then
    `sudo mv /var/lib/data/navidrome /var/lib/data/music/navidrome` (the music
    tree itself does not move — the `music` share already is the library).
