@@ -146,7 +146,11 @@ be applied at any time (a missing share just leaves the pod unstarted).
    `sudo chown -R smores:users /var/lib/data/music/navidrome`), then scale back
    to 1. Navidrome stores paths relative to the music folder, so the
    `/var/lib/data/music` → `/music` remount is safe; confirm the track count is
-   unchanged after the scan.
+   unchanged after the scan. `music.sammohr.dev` exists only on the cluster:
+   the host tunnel has always exposed this app as `navidrome.sammohr.dev`
+   (behind the email allow policy), so the cutover also adds `music` to
+   `cluster_hosts` — until then the name falls through the wildcard to the host
+   tunnel's 404 catch-all.
 4. **Calibre.** The library does not move. Stop the host's `calibre-server`
    user unit (`systemctl --user stop calibre-server`), set the Calibre-Web admin
    password on first login (`docs/manual-steps.md` step 13), and repoint the

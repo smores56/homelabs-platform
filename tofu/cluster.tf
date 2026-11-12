@@ -12,6 +12,7 @@
 locals {
   cluster_ingress = {
     agent  = "http://nanobot.tenant-apps.svc.cluster.local:80"
+    music  = "http://navidrome.navidrome.svc.cluster.local:4533"
     photos = "http://immich-server.immich.svc.cluster.local:2283"
   }
 

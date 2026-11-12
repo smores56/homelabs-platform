@@ -212,7 +212,8 @@ else
   if grep -qF 'count = var.cluster_tunnel_id == "" ? 0 : 1' <<<"$cluster_cfg"; then ok "cluster config tolerates a missing tunnel"; else bad "cluster config tolerates a missing tunnel"; fi
 fi
 for pair in 'agent=http://nanobot.tenant-apps.svc.cluster.local:80' \
-            'photos=http://immich-server.immich.svc.cluster.local:2283'; do
+            'photos=http://immich-server.immich.svc.cluster.local:2283' \
+            'music=http://navidrome.navidrome.svc.cluster.local:4533'; do
   name=${pair%%=*}
   url=${pair#*=}
   # `tofu fmt` aligns the `=`, so match the mapping rather than one spacing.
