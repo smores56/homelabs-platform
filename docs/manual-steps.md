@@ -321,6 +321,8 @@ age key the host secrets use:
 sops -e -i neuralwatt-api-key.yaml
 # ingress: the tunnel token from T7
 sops -e -i cloudflare-tunnel-token.yaml
+# calibre: OPDShelf's admin password (also the readers' Basic auth credential)
+sops -e -i opdshelf-admin-password.yaml
 ```
 
 Then materialise the Secrets (SOPS contract names: `*-sops`; the broker's
@@ -331,6 +333,8 @@ kubectl -n graphiti create secret generic neuralwatt-api-key-sops \
   --from-file=api-key=<(sops -d neuralwatt-api-key.yaml | yq -r .key)
 kubectl -n ingress create secret generic cloudflare-tunnel-token-sops \
   --from-file=tunnel-token=<(sops -d cloudflare-tunnel-token.yaml | yq -r .token)
+kubectl -n calibre create secret generic opdshelf-admin-password-sops \
+  --from-file=password=<(sops -d opdshelf-admin-password.yaml | yq -r .password)
 ```
 
 Resume the ESO stage (step 8) and confirm the projections, which is what the
@@ -365,13 +369,13 @@ first cutover:
    cluster-kubectl -n immich get pvc              # immich-data Bound
    ```
 
-3. After Immich serves from the cluster, set the Calibre-Web admin password on
-   first login (`admin` / `admin123` is the image default and the route is
-   public with app auth, so this step is required, not optional).
-4. Repoint agent access to Calibre: the broker's `calibre` logical host and the
-   agent `calibredb` wrapper expect calibre-server's content server; Calibre-Web
-   serves OPDS at `/opds`. That change lives in `nix-config` and
-   `homelabs-apps`, not here.
+3. Create the OPDShelf admin password contract before exposing the route
+   (`opdshelf-admin-password-sops`, step 12); the name is `smores56` and the
+   password is also the readers' Basic auth credential.
+4. The agent's write path is a file, not an API: OPDShelf's folder is the
+   catalog, so `fanficfare-download` drops the EPUB where the host can move it
+   into the share and `calibredb` loses its content-server tail. That change
+   lives in `nix-config`, not here.
 5. Leave `modules/nixos/{immich,navidrome,memory}.nix` in place until every app
    has served from the cluster for a week; then enable
    `clusterDataApps.enable` in nix-config (`docs/kanbei-split.md` in that

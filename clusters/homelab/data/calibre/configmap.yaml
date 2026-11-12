@@ -1,14 +1,27 @@
-# The library location is the only setting that must be right before the first
-# request: Calibre-Web writes `cwa-config/app.db` on first boot and reads the
-# library from /calibre-library.
+# OPDShelf settings. The library is the share itself: there is no database and
+# no ingest step, so the folder tree is the catalog and a file that appears in
+# it shows up on the next scan.
+#
+# WATCH=false deliberately: the share is virtiofs, and OPDShelf's inotify watch
+# is not guaranteed to see host-side writes there. Each request rescans instead,
+# which is cheap for a library this size and never misses a file.
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: calibre-web-env
+  name: opdshelf-env
   namespace: calibre
   labels:
     app.kubernetes.io/part-of: homelabs
     homelabs.dev/tier: data
 data:
-  CALIBRE_LIBRARY_LOCATION: /calibre-library
-  CWA_PORT: "8083"
+  PORT: "3000"
+  HOST: 0.0.0.0
+  BOOKS_DIR: /books
+  # Edits, custom covers and the thumbnail cache land in books/.opdshelf, which
+  # keeps them in the restic-walked tree.
+  DATA_DIR: /books/.opdshelf
+  BASE_URL: https://opds.sammohr.dev
+  ADMIN_USERNAME: smores56
+  WATCH: "false"
+  SCAN_INTERVAL: "600"
+  MAX_UPLOAD_MB: "512"

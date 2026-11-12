@@ -159,7 +159,7 @@ zone with no application of its own is reachable only by the owner's identity.
   | `recovery.sammohr.dev` | the data-recovery letter; its reader has no credentials by definition |
   | `photos.sammohr.dev` | mobile clients cannot complete an Access login |
   | `music.sammohr.dev` | same, for the Navidrome clients |
-  | `calibre.sammohr.dev` | OPDS readers and the web reader; app login and the per-IP rate limit are the gates |
+  | `opds.sammohr.dev` | OPDS readers and the web reader; app login and the per-IP rate limit are the gates |
 
   The set carries no `prevent_destroy`, deliberately. Removing a name deletes
   its bypass application and the name falls back to the wildcard deny on the

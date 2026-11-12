@@ -96,7 +96,7 @@ eq "$bypass_uses" "1" "the bypass policy is attached to exactly one resource (th
 
 public_app=$(extract cloudflare_zero_trust_access_application.public)
 if grep -q 'for_each = local.public_apps' <<<"$public_app"; then ok "public applications iterate local.public_apps"; else bad "public applications iterate local.public_apps"; fi
-for host in recovery photos music calibre; do
+for host in recovery photos music opds; do
   if grep -qE "^[[:space:]]*\"${host}\",$" "$work/code.tf"; then ok "public application: $host"; else bad "public application: $host"; fi
 done
 
@@ -215,7 +215,7 @@ fi
 for pair in 'agent=http://nanobot.tenant-apps.svc.cluster.local:80' \
             'photos=http://immich-server.immich.svc.cluster.local:2283' \
             'music=http://navidrome.navidrome.svc.cluster.local:4533' \
-            'calibre=http://calibre.calibre.svc.cluster.local:8083'; do
+            'opds=http://calibre.calibre.svc.cluster.local:8083'; do
   name=${pair%%=*}
   url=${pair#*=}
   # `tofu fmt` aligns the `=`, so match the mapping rather than one spacing.
@@ -267,7 +267,7 @@ for addr in cloudflare_pages_project.recovery cloudflare_pages_domain.recovery \
   if [[ -n $(extract "$addr") ]]; then ok "preserved: $addr"; else bad "preserved: $addr"; fi
 done
 has 'tunnel health covers both tunnels' 'tunnel_id = compact\(\[var\.host_tunnel_id, var\.cluster_tunnel_id\]\)'
-has 'rate limit still covers the three public apps' 'http\.host eq \\"music\.\$\{var\.domain\}\\".*photos.*calibre'
+has 'rate limit still covers the three public apps' 'http\.host eq \\"music\.\$\{var\.domain\}\\".*photos.*opds'
 
 echo "== state and secrets"
 if grep -qE '^[[:space:]]*backend[[:space:]]+"' "$work/code.tf"; then

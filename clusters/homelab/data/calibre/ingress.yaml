@@ -1,5 +1,5 @@
-# Calibre-Web has its own login, like the host's calibre-server did. See
-# clusters/homelab/data/immich/ingress.yaml for the Ingress-object rationale.
+# OPDShelf has its own login (Basic auth for readers, a form for the panel).
+# See clusters/homelab/data/immich/ingress.yaml for the Ingress-object rationale.
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
@@ -11,7 +11,7 @@ metadata:
     homelabs.dev/tier: data
 spec:
   rules:
-    - host: calibre.sammohr.dev
+    - host: opds.sammohr.dev
       http:
         paths:
           - path: /

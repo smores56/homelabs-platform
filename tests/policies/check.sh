@@ -451,7 +451,7 @@ while IFS=: read -r ns host svc port; do
 done <<'INGRESS'
 immich:photos.sammohr.dev:immich-server:2283
 navidrome:music.sammohr.dev:navidrome:4533
-calibre:calibre.sammohr.dev:calibre:8083
+calibre:opds.sammohr.dev:calibre:8083
 graphiti:memory.sammohr.dev:graphiti:8184
 INGRESS
 

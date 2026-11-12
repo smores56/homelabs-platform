@@ -184,13 +184,13 @@ locals {
   #              definition, and it is static on Pages, not behind a tunnel.
   #   photos   - mobile clients cannot complete an Access login.
   #   music    - ditto, for the Navidrome clients.
-  #   calibre  - OPDS readers and the web reader; the app's own login is the
+  #   opds     - OPDS readers and the web reader; the app's own login is the
   #              only gate, and it is rate limited (rate-limit.tf).
   public_apps = toset([
     "recovery",
     "photos",
     "music",
-    "calibre",
+    "opds",
   ])
 }
 

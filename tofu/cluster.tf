@@ -11,10 +11,10 @@
 # the catch-all. The precondition below refuses that partial cutover.
 locals {
   cluster_ingress = {
-    agent   = "http://nanobot.tenant-apps.svc.cluster.local:80"
-    calibre = "http://calibre.calibre.svc.cluster.local:8083"
-    music   = "http://navidrome.navidrome.svc.cluster.local:4533"
-    photos  = "http://immich-server.immich.svc.cluster.local:2283"
+    agent  = "http://nanobot.tenant-apps.svc.cluster.local:80"
+    music  = "http://navidrome.navidrome.svc.cluster.local:4533"
+    opds   = "http://calibre.calibre.svc.cluster.local:8083"
+    photos = "http://immich-server.immich.svc.cluster.local:2283"
   }
 
   # The DNS set follows the ingress map unless explicitly pinned, so a cutover

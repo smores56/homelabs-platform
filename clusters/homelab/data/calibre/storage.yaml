@@ -1,6 +1,6 @@
 # Bound to /mnt/data/books by the PV claimRef in platform/storage. The library is
-# the claim root; Calibre-Web's own configuration and user database live in
-# `cwa-config/` inside it so one claim carries both.
+# the claim root; OPDShelf's edits, covers and thumbnails live in `.opdshelf/`
+# inside it so one claim carries both.
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:

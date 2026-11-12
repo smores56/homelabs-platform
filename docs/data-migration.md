@@ -12,7 +12,7 @@ host's restic job already looks. This document is the contract between
 | --- | --- | --- | --- | --- | --- |
 | `immich` | `/var/lib/data/immich` | `/mnt/data/immich` | `immich-data` | Immich server, machine-learning, Postgres, Valkey | `ghcr.io/immich-app/immich-{server,machine-learning}:v3.0.3`, `ghcr.io/immich-app/postgres:17-vectorchord0.4.3-pgvector0.8.1`, `valkey:9` |
 | `navidrome` | `/var/lib/data/music` | `/mnt/data/music` | `navidrome-data` | Navidrome | `deluan/navidrome:0.63.2` |
-| `calibre` | `/var/lib/data/books` | `/mnt/data/books` | `calibre-data` | Calibre-Web (CWA image) | `crocodilestick/calibre-web-automated:v4.0.8` |
+| `calibre` | `/var/lib/data/books` | `/mnt/data/books` | `calibre-data` | OPDShelf | `koalilla/opds-server` |
 | `graphiti` | `/var/lib/data/graphiti` | `/mnt/data/graphiti` | `graphiti-data` | Graphiti + FalkorDB | `zepai/knowledge-graph-mcp:1.1.3-graphiti-0.31.2-standalone`, `falkordb/falkordb-server:v4.22.2` |
 
 The guest mounts the share at `/mnt/data/<share>` with a uid translation
@@ -31,7 +31,7 @@ Inside `/data` the components use subdirectories, so a namespace owns one claim:
 | `immich` | `valkey/` | Valkey AOF |
 | `immich`, `graphiti` | `db-dumps/` | the nightly dumps below |
 | `navidrome` | `navidrome/` | Navidrome database and cache index |
-| `calibre` | `cwa-config/` | Calibre-Web `app.db` and settings |
+| `calibre` | `.opdshelf/` | OPDShelf metadata edits, custom covers and the thumbnail cache |
 | `graphiti` | `falkordb/` | FalkorDB AOF and graph |
 
 ## Static volumes, no hostPath
@@ -157,21 +157,20 @@ be applied at any time (a missing share just leaves the pod unstarted).
    (behind the email allow policy), so the cutover also adds `music` to
    `cluster_hosts` — until then the name falls through the wildcard to the host
    tunnel's 404 catch-all.
-4. **Calibre.** The library does not move: the host's `calibre-server` and the
-   cluster's Calibre-Web read the same `/var/lib/data/books` tree. Set the
-   Calibre-Web admin password **before** the flip — port-forward to the pod and
-   log in as `admin`/`admin123` (the image default, on a public hostname), using
-   the value of `calibre-password` from the host's SOPS file — then add
-   `calibre` to `local.cluster_ingress` and apply. Stop the host's user unit
+4. **Books (OPDShelf).** The library does not move: OPDShelf serves the same
+   `/var/lib/data/books` tree, and the folder *is* the catalog — no database,
+   no ingest step, so a file that lands in the share is a book. Create the
+   admin password contract first (`opdshelf-admin-password-sops`, step 12),
+   then add `opds` to `local.cluster_ingress` and apply; `opds.sammohr.dev`
+   replaces `calibre.sammohr.dev`. Stop the host's content server
    (`systemctl --user stop calibre-server`).
-   The agent write path does **not** survive this flip: `calibredb` and
-   `fanficfare-download` call the calibre Content server (`/cdb/cmd/add`,
-   `set_metadata`), which Calibre-Web does not implement, and its OPDS catalog
-   is read-only. The replacement is either CWA's ingest folder
-   (`/cwa-book-ingest`, imported by CWA as the only writer — needs an
-   authenticated way to deliver a file into the pod) or a second, unexposed
-   content server on the same claim. Both touch nix-config's broker logical
-   host, so they are live-gated.
+   The agent write path is therefore a file, not an API: the wrapper drops the
+   EPUB into a host-writable folder and nothing else has to happen, so
+   `calibredb`/`fanficfare-download` lose their content-server tail in
+   nix-config. Reader delivery stays a copy to the device (the X3's stock
+   firmware has no OPDS): `https://opds.sammohr.dev/` serves KOReader, the
+   Android app and any firmware that speaks OPDS, and the same tree can be
+   copied to the microSD over USB.
 5. **Graphiti.** Copy, do not move, the graph while the host stack still runs:
    `sudo systemctl stop memory-graphiti-mcp memory-falkordb`,
    `sudo rsync -a /var/lib/memory/falkordb/ /var/lib/data/graphiti/falkordb/`,

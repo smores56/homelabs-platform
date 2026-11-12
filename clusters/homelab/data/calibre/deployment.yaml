@@ -1,23 +1,13 @@
-# Calibre-Web (Calibre-Web-Automated build, which bundles the Calibre tooling).
-# The host runs `calibre-server` with basic auth on 8181; Calibre-Web serves the
-# same library with its own user database at 8083, and OPDS at /opds. The
-# in-cluster user database starts empty, so the admin password is set on first
-# login (docs/manual-steps.md).
+# OPDShelf serves the Calibre library straight from the `books` share. The
+# folder tree is the catalog — no database, no ingest step, no second writer:
+# metadata edits, custom covers and thumbnails live in `books/.opdshelf`.
 #
-# This is the one data container that starts as root. The image is
-# linuxserver-style s6: preinit refuses a /run it does not own, init-adduser
-# maps `abc` onto PUID/PGID, and every service is exec'd through
-# `s6-setuidgid abc`. With runAsUser 1000 the preinit dies on
-# `/run belongs to uid 0 instead of 1000` (an emptyDir is kubelet-created as
-# root, and fsGroup only changes its gid, which preinit does not accept), and
-# without CAP_SETUID/SETGID the handoff to PUID 1000 would fail anyway. So the
-# calibre namespace enforces `baseline` (audit/warn stay `restricted`) and this
-# container alone omits runAsNonRoot and the capability drop; every application
-# process still runs as uid 1000, because setuid() to a non-root uid clears the
-# permitted/effective capability sets.
+# It replaces Calibre-Web-Automated (SDLC #509). That image needed an s6 root
+# preinit, and its ingest pipeline owned the library, which left the agent with
+# no simple write path. Here a file written to the share is simply a book.
 #
-# readOnlyRootFilesystem stays false: s6 writes /run and /var before the app
-# starts.
+# Credentials are environment variables, so the admin password comes from the
+# SOPS contract (`opdshelf-admin-password-sops` -> `opdshelf-admin`).
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -29,6 +19,7 @@ metadata:
     homelabs.dev/tier: data
 spec:
   replicas: 1
+  # One writer on the share: `.opdshelf` is rewritten in place.
   strategy:
     type: Recreate
   selector:
@@ -50,34 +41,21 @@ spec:
         runAsGroup: 1000
         seccompProfile:
           type: RuntimeDefault
-      initContainers:
-        - name: prepare-data
-          image: busybox:1.37.0
-          command: ["sh", "-c", "mkdir -p /calibre-library/cwa-config"]
-          securityContext:
-            allowPrivilegeEscalation: false
-            readOnlyRootFilesystem: true
-            capabilities:
-              drop: ["ALL"]
-          volumeMounts:
-            - name: data
-              mountPath: /calibre-library
       containers:
-        - name: calibre
-          image: docker.io/crocodilestick/calibre-web-automated:v4.0.8@sha256:5e00373854247750cc3e4479b492ae09293ff5e06ed10177f226634d97888679
+        - name: opdshelf
+          image: docker.io/koalilla/opds-server@sha256:b82f94f72b41686fd9169a2269d65550f411a97dfa341a330df88b0bfab0af35
           envFrom:
             - configMapRef:
-                name: calibre-web-env
+                name: opdshelf-env
           env:
-            - name: PUID
-              value: "1000"
-            - name: PGID
-              value: "1000"
-            - name: TZ
-              value: UTC
+            - name: ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: opdshelf-admin
+                  key: password
           ports:
             - name: http
-              containerPort: 8083
+              containerPort: 3000
           startupProbe:
             httpGet:
               path: /
@@ -99,30 +77,19 @@ spec:
             failureThreshold: 5
           resources:
             requests:
-              cpu: 100m
-              memory: 256Mi
+              cpu: 50m
+              memory: 128Mi
             limits:
-              cpu: "2"
-              memory: 2Gi
+              cpu: "1"
+              memory: 1Gi
           securityContext:
-            # The s6 preinit is the only root process, and only until it hands
-            # each service to `abc` (PUID 1000): runAsNonRoot false is what
-            # preinit needs, not what the app runs as.
-            runAsNonRoot: false
-            runAsUser: 0
-            runAsGroup: 0
             allowPrivilegeEscalation: false
-            # The default capability set carries the handoff (CHOWN, SETUID,
-            # SETGID, FOWNER) and init-adduser's usermod/chown. The
-            # no-host-access policy forbids `capabilities.add` on data pods, so
-            # the block is omitted rather than spelled out; nothing is gained
-            # beyond the runtime default.
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
           volumeMounts:
             - name: data
-              mountPath: /calibre-library
-            - name: data
-              mountPath: /config
-              subPath: cwa-config
+              mountPath: /books
             - name: tmp
               mountPath: /tmp
       volumes:
