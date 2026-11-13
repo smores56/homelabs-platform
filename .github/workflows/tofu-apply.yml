@@ -73,8 +73,11 @@ jobs:
           AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_STATE_SECRET_ACCESS_KEY }}
         # 0 = no changes, 1 = error, 2 = changes. Only 0 and 2 may continue.
         run: |
+          set -o pipefail
           export AWS_DEFAULT_REGION=auto
           status=0
+          # pipefail matters: without it `tee` would mask a failed plan as exit 0
+          # (no changes) and the apply step would be skipped instead of stopped.
           tofu -chdir=tofu plan -input=false -lock=false -no-color \
             -detailed-exitcode -out=tfplan | tee plan.txt || status=$?
           {

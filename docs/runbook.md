@@ -215,7 +215,9 @@ Runs triggered by the bootstrap pushes, state read from the Actions API:
 
 The `tofu-apply` failure is the intended loud signal until
 `docs/manual-steps.md` step 2 stores the token: with the environment secret
-absent, the workflow cannot apply and must not pretend it did. It also ran
+absent, the workflow cannot apply and must not pretend it did. (This snapshot
+predates SDLC #622, which removed the push trigger: `tofu-apply` no longer runs
+on a merge, only on dispatch.) It also ran
 without an approval prompt because the environment has no protection rules,
 which is why the missing `main` branch policy in the section above matters.
 
