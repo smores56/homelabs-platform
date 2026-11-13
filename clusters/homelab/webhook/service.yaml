@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: webhook
+  labels:
+    app.kubernetes.io/name: webhook
+    homelabs.dev/tier: webhook
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: webhook
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+      protocol: TCP

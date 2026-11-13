@@ -1,0 +1,131 @@
+# One listener on the cluster tunnel, one claim for the capability store. The
+# image runs the stdlib receiver from apps/webhook; gVisor is the sandbox
+# boundary and the rootfs is read-only because only /data is written.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: webhook
+  labels:
+    app.kubernetes.io/name: webhook
+    homelabs.dev/tier: webhook
+spec:
+  # One writer on the sources claim: a second replica would not see a source
+  # registered behind the other's back, so a capability URL would work on one
+  # pod and 404 on the next request.
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: webhook
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: webhook
+        app.kubernetes.io/component: inbound-webhook
+        homelabs.dev/tier: webhook
+        homelabs.dev/managed-by: platform
+    spec:
+      serviceAccountName: webhook
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      runtimeClassName: gvisor
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: webhook
+          # Published by .github/workflows/publish-webhook.yml on a change under
+          # apps/webhook (digest in the run summary). The all-zero digest is the
+          # documented pre-publish placeholder: replace it before the first
+          # deploy (docs/manual-steps.md, webhook image step).
+          image: ghcr.io/smores56/homelabs-platform/webhook@sha256:0000000000000000000000000000000000000000000000000000000000000000
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          env:
+            - name: WEBHOOK_DATA_DIR
+              value: /data
+            - name: WEBHOOK_LISTEN_ADDR
+              value: 0.0.0.0
+            - name: WEBHOOK_LISTEN_PORT
+              value: "8080"
+            # Enqueue only: the gateway's WebSocket listener, never its health
+            # port (8080 is pod-local) and never a provider API.
+            - name: WEBHOOK_GATEWAY_URL
+              value: http://nanobot.tenant-apps.svc.cluster.local:8765
+            - name: WEBHOOK_GATEWAY_TOKEN_FILE
+              value: /run/secrets/enqueue-token
+            - name: WEBHOOK_ADMIN_TOKEN_FILE
+              value: /run/secrets/admin-token
+            - name: WEBHOOK_PUBLIC_URL
+              value: https://agent-hooks.sammohr.dev
+            - name: PYTHONDONTWRITEBYTECODE
+              value: "1"
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: TMPDIR
+              value: /tmp
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            requests:
+              cpu: 25m
+              memory: 32Mi
+            limits:
+              cpu: 250m
+              memory: 128Mi
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 5
+            failureThreshold: 30
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 30
+            failureThreshold: 3
+          volumeMounts:
+            - name: sources
+              mountPath: /data
+            - name: tokens
+              mountPath: /run/secrets
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: sources
+          persistentVolumeClaim:
+            claimName: webhook-sources
+        # Fail closed: the pod stays pending until the operator-created Secret
+        # exists, so no pod ever serves a public hostname without its admin and
+        # enqueue tokens.
+        - name: tokens
+          secret:
+            secretName: webhook-tokens
+            # 0440, not 0400: the kubelet owns Secret files as root:fsGroup and
+            # the process reads them as uid 65532, so the group bit must be set.
+            defaultMode: 288
+            optional: false
+        - name: tmp
+          emptyDir: {}
+      terminationGracePeriodSeconds: 15

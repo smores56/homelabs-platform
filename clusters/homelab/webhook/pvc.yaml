@@ -1,0 +1,17 @@
+# A capability URL identified by a 256-bit id, and a per-source HMAC secret.
+# Local-path is the same class the backup CronJob uses; the claim is small and
+# survives pod restarts, so a registered source keeps working across a rollout.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: webhook-sources
+  labels:
+    app.kubernetes.io/name: webhook
+    homelabs.dev/tier: webhook
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 64Mi

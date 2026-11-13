@@ -1,0 +1,33 @@
+# The token contract, recorded as data rather than prose. No value is here: the
+# Secret is created by the operator (docs/manual-steps.md, "Publish the webhook
+# image and create its tokens").
+#
+# admin-token  - the bearer that POST /endpoints and DELETE /endpoints require,
+#                because an unauthenticated registration route on a public
+#                hostname would let anyone mint an enqueue capability.
+# enqueue-token - nanobot's `channels.websocket.tokenIssueSecret`; it is sent
+#                only to /webui/bootstrap inside the cluster and is the one
+#                credential the gateway checks.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: webhook-tokens-contract
+  labels:
+    app.kubernetes.io/name: webhook
+    homelabs.dev/tier: webhook
+data:
+  secretName: webhook-tokens
+  namespace: webhook
+  keys: >-
+    admin-token,enqueue-token
+  source: >-
+    created by hand: admin-token from `openssl rand -hex 32`, enqueue-token
+    read from the gateway's rendered config
+    (channels.websocket.tokenIssueSecret). Never commit either.
+  rotate: >-
+    replace a key with `kubectl -n webhook create secret generic webhook-tokens
+    --from-literal=... --dry-run=client -o yaml | kubectl apply -f -`, then
+    `kubectl -n webhook rollout restart deployment/webhook`; both tokens are read
+    once at start.
+  verify: >-
+    kubectl -n webhook get secret webhook-tokens -o jsonpath='{.data}' | jq 'keys'

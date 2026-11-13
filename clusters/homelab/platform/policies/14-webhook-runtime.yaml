@@ -1,0 +1,60 @@
+# The webhook receiver is the cluster's only public ingress to an agent-facing
+# service, so its runtime is pinned at admission as well as in the Deployment:
+# gVisor, non-root, read-only rootfs. A drifted Deployment is rejected rather
+# than reviewed after the fact.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: webhook-runtime
+  labels:
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: platform
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["pods"]
+  variables:
+    - name: receiver
+      expression: >-
+        has(object.metadata.labels)
+        && 'app.kubernetes.io/name' in object.metadata.labels
+        && object.metadata.labels['app.kubernetes.io/name'] == 'webhook'
+  validations:
+    - expression: >-
+        !variables.receiver
+        || (has(object.spec.runtimeClassName) && object.spec.runtimeClassName == 'gvisor')
+      message: "webhook pods must run on gvisor"
+    - expression: >-
+        !variables.receiver
+        || (has(object.spec.securityContext)
+          && has(object.spec.securityContext.runAsNonRoot)
+          && object.spec.securityContext.runAsNonRoot)
+      message: "webhook pods must set runAsNonRoot: true"
+    - expression: >-
+        !variables.receiver
+        || object.spec.containers.all(c,
+          has(c.securityContext)
+          && has(c.securityContext.readOnlyRootFilesystem)
+          && c.securityContext.readOnlyRootFilesystem)
+      message: "webhook containers must set readOnlyRootFilesystem: true"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: webhook-runtime
+  labels:
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: platform
+spec:
+  policyName: webhook-runtime
+  validationActions: [Deny]
+  matchResources:
+    namespaceSelector:
+      matchExpressions:
+        - key: homelabs.dev/tier
+          operator: In
+          values: ["webhook"]

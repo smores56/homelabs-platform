@@ -1,0 +1,49 @@
+# Mirrors publish-broker.yml for the inbound webhook receiver. GitHub Packages
+# accepts only a classic PAT or this workflow's GITHUB_TOKEN, never an app
+# installation token, so the package credential is `packages: write` on the job
+# token and no app holds one. The digest is printed in the run summary for a
+# human to pin (docs/manual-steps.md, webhook image step).
+name: publish-webhook
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "apps/webhook/**"
+      - ".github/workflows/publish-webhook.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: publish-webhook
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - name: Build, push, and print the digest
+        env:
+          IMAGE: ghcr.io/smores56/homelabs-platform/webhook
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="sha-${GITHUB_SHA::12}"
+          printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          docker build \
+            --label "org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}" \
+            -t "$IMAGE:$tag" apps/webhook
+          docker push "$IMAGE:$tag"
+          digest=$(docker inspect --format '{{index .RepoDigests 0}}' "$IMAGE:$tag" | cut -d@ -f2)
+          [[ $digest =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "no digest in RepoDigests"; exit 1; }
+          {
+            echo "### Webhook image"
+            echo
+            echo "- \`$IMAGE:$tag\`"
+            echo "- \`$IMAGE@$digest\`"
+          } >>"$GITHUB_STEP_SUMMARY"
+          echo "pin: $IMAGE@$digest"

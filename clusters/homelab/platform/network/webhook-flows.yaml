@@ -1,0 +1,58 @@
+# The webhook receiver's two cross-namespace halves. The receiver's own
+# namespace policies live in clusters/homelab/webhook/networkpolicy.yaml; these
+# are the other ends, because neither namespace may write its own isolation.
+#
+#   tunnel -> webhook:8080   the only ingress path (an Access bypass hostname)
+#   webhook -> nanobot:8765  the only egress path (one enqueue call)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: egress-webhook
+  namespace: ingress
+  labels:
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: ingress
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: cloudflared
+  policyTypes: ["Egress"]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: webhook
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: webhook
+      ports:
+        - protocol: TCP
+          port: 8080
+---
+# The tenant cannot widen its own isolation, so the inbound half of the
+# webhook-to-gateway pair is platform-owned. The copy in homelabs-apps'
+# networkpolicy contract must match this object.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-webhook-ingress
+  namespace: tenant-apps
+  labels:
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: tenant
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: nanobot
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: webhook
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: webhook
+      ports:
+        - protocol: TCP
+          port: 8765

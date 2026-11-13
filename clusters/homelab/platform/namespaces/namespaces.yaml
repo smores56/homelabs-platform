@@ -53,6 +53,23 @@ metadata:
     pod-security.kubernetes.io/audit: restricted
     pod-security.kubernetes.io/warn: restricted
 ---
+# Inbound webhook receiver (SDLC #627). It is the one workload whose ingress is
+# public by design (an Access bypass), so it carries its own tier: no policy
+# that selects `tenant`, `broker` or `data` widens to it, and its NetworkPolicy
+# admits only the tunnel and reaches only the gateway.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: webhook
+  labels:
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tenant: webhook
+    homelabs.dev/tier: webhook
+    homelabs.dev/managed-by: platform
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted
+---
 # data tier, one namespace per app. `immich` mounts /mnt/data/immich in the
 # cluster guest; the PV claimRef in platform/storage/ pins the mapping.
 apiVersion: v1

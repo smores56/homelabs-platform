@@ -1,0 +1,89 @@
+# The webhook namespace is default-deny in both directions. Four flows, all
+# explicit: DNS, the cluster tunnel's connector on 8080, and the gateway's
+# WebSocket listener on 8765. Nothing else can reach the receiver, and the
+# receiver can reach nothing else; in particular it has no public egress, so a
+# delivery can never be forwarded anywhere but the agent.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+  labels:
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: webhook
+spec:
+  podSelector: {}
+  policyTypes: ["Ingress", "Egress"]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns-egress
+  labels:
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: webhook
+spec:
+  podSelector: {}
+  policyTypes: ["Egress"]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+---
+# The tunnel is the only ingress path: GitHub cannot reach a cluster-internal
+# Service, and Cloudflare Access is a bypass for this hostname by construction.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-cloudflared
+  labels:
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: webhook
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: webhook
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: cloudflared
+      ports:
+        - protocol: TCP
+          port: 8080
+---
+# The only egress beside DNS: one enqueue call per delivery to the gateway's
+# WebSocket listener. The gateway's health port (8080) is pod-local and not
+# reachable from here.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-gateway-egress
+  labels:
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: webhook
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: webhook
+  policyTypes: ["Egress"]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: tenant-apps
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: nanobot
+      ports:
+        - protocol: TCP
+          port: 8765

@@ -71,4 +71,4 @@ spec:
       matchExpressions:
         - key: homelabs.dev/tier
           operator: In
-          values: ["tenant", "broker", "data"]
+          values: ["tenant", "broker", "data", "webhook"]

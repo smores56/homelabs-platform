@@ -15,6 +15,7 @@ resources:
   - kustomizations/network.yaml
   - kustomizations/secrets.yaml
   - kustomizations/broker.yaml
+  - kustomizations/webhook.yaml
   - kustomizations/storage.yaml
   - kustomizations/backup.yaml
   - kustomizations/digest.yaml
