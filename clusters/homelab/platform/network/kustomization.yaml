@@ -9,3 +9,4 @@ resources:
   - tenant-broker.yaml
   - data-flows.yaml
   - agent-ingress.yaml
+  - webhook-flows.yaml

@@ -56,6 +56,20 @@ jobs:
       - name: run agent-control unit tests
         run: tests/agent-control/check.sh
 
+  webhook:
+    name: webhook unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          persist-credentials: false
+      # Stdlib only: signature verification, dedupe, the size limit, the
+      # capability store and the gateway frames are asserted here, including a
+      # fake gateway that speaks the researched WebSocket protocol.
+      - name: run apps/webhook unit tests
+        run: python3 -m unittest discover -s apps/webhook/tests -t apps/webhook -v
+
   kubeconform:
     name: kubeconform
     runs-on: ubuntu-latest

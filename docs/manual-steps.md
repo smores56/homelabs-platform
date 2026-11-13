@@ -591,11 +591,12 @@ tofu -chdir=tofu init -input=false
 tofu -chdir=tofu plan -no-color
 ```
 
-Expected: no replacements. The diff is the new wildcard application, the four
-public bypass applications, the two CAA records, and an in-place update of the
-four older applications from `domain` to `destinations`. Anything else — in
-particular `-/+` on an Access application or the wildcard DNS record — means the
-state does not match; stop before applying and compare IDs.
+Expected: no replacements. The diff is the wildcard application, the public
+bypass applications (the four original hosts, minus any already adopted, plus
+`agent-hooks` when SDLC #627 lands), the two CAA records, and an in-place update
+of the four older applications from `domain` to `destinations`. Anything else —
+in particular `-/+` on an Access application or the wildcard DNS record — means
+the state does not match; stop before applying and compare IDs.
 
 ```sh
 tofu -chdir=tofu apply -no-color
@@ -1236,3 +1237,76 @@ pins, with no tag (a tag plus digest still counts as a tagged image, and
 
    The `self` logical host in `broker.json` is enrolled by its own change; until
    that lands, the port-forward above is the only way to reach the service.
+## 27. Publish the webhook image, create its tokens, and register a source
+
+The receiver in `clusters/homelab/webhook/` ships the same all-zero digest
+placeholder the broker started with, and its pods stay pending until
+`webhook-tokens` exists (`docs/webhook.md`). The hostname is public by
+construction: there is no Access login for GitHub.
+
+1. Publish and pin the image. `.github/workflows/publish-webhook.yml` does this
+   on a push to `main` under `apps/webhook/**` (or on manual dispatch) and prints
+   the digest in the run summary. By hand:
+
+   ```sh
+   docker build -t ghcr.io/smores56/homelabs-platform/webhook:<git-sha> apps/webhook
+   docker push ghcr.io/smores56/homelabs-platform/webhook:<git-sha>
+   nix run nixpkgs#crane -- digest ghcr.io/smores56/homelabs-platform/webhook:<git-sha>
+   ```
+
+   Replace the `image:` line in `deployment.yaml` with
+   `ghcr.io/smores56/homelabs-platform/webhook@sha256:<digest>`. Pin the
+   Dockerfile's base digest (`python:3.13-slim`) in the same change.
+
+2. Create the token Secret. `admin-token` is fresh randomness; `enqueue-token`
+   is the gateway's `channels.websocket.tokenIssueSecret`:
+
+   ```sh
+   kubectl -n tenant-apps exec deploy/nanobot -- \
+     sh -c 'jq -r .channels.websocket.tokenIssueSecret "$HOME/.nanobot/config.json"'
+   kubectl -n webhook create secret generic webhook-tokens \
+     --from-literal=admin-token="$(openssl rand -hex 32)" \
+     --from-literal=enqueue-token="<value printed by the previous command>"
+   ```
+
+   The gateway generates that secret on first start when `NANOBOT_WEB_TOKEN` is
+   unset. If the nanobot scratch PVC is ever recreated, the value changes: read
+   it again, replace `enqueue-token`, and restart the receiver. The durable fix
+   is a `NANOBOT_WEB_TOKEN` from a tenant secret in `homelabs-apps`.
+
+3. Register the source. Registration needs the admin token and is reachable from
+   the cluster only:
+
+   ```sh
+   kubectl -n webhook port-forward deploy/webhook 8080:8080 &
+   admin=$(kubectl -n webhook get secret webhook-tokens -o jsonpath='{.data.admin-token}' | base64 -d)
+   curl -sS -X POST http://127.0.0.1:8080/endpoints \
+     -H "Authorization: Bearer $admin" -H 'Content-Type: application/json' \
+     -d '{"name":"github-platform","secret":"<the GitHub webhook secret>"}'
+   ```
+
+   The answer carries `capability_id` and `capability_url`
+   (`https://agent-hooks.sammohr.dev/hooks/<id>`), plus `hmac: true`. Configure
+   the GitHub webhook with that URL, content type `application/json`, and the
+   same secret. The capability id is a URL credential: do not paste it into an
+   issue, a log or a commit.
+
+4. Rotate or revoke. Re-post the same `name` (with a fresh secret if the HMAC is
+   changing): the old id stops resolving in the same write and the answer carries
+   the new URL. `DELETE /endpoints/<id>` with the admin token revokes a source
+   without a replacement.
+
+5. Verify.
+
+   ```sh
+   curl -sS https://agent-hooks.sammohr.dev/healthz             # {"status":"ok"}
+   curl -sS -o /dev/null -w '%{http_code}\n' \
+     https://agent-hooks.sammohr.dev/hooks/does-not-exist        # 404
+   kubectl -n webhook logs deploy/webhook | tail -5              # route=hook status=202
+   ```
+
+   A `502 gateway unavailable` means `enqueue-token` does not match the gateway;
+   a `401 invalid signature` means the source secret differs from the provider's.
+   Both fail before the agent sees anything. The receiver has no rate limit of
+   its own; a body over 1 MiB is refused with `413` and repeats within 6 h are
+   acknowledged without a second enqueue.

@@ -273,6 +273,13 @@ for addr in cloudflare_pages_project.recovery cloudflare_pages_domain.recovery \
 done
 has 'tunnel health covers both tunnels' 'tunnel_id = compact\(\[var\.host_tunnel_id, var\.cluster_tunnel_id\]\)'
 has 'rate limit still covers the three public apps' 'http\.host eq \\"music\.\$\{var\.domain\}\\".*photos.*opds'
+# The receiver is excluded on purpose: a shared per-IP budget would drop a
+# legitimate delivery burst, and the capability URL plus HMAC is the gate.
+if grep -q 'agent-hooks' <<<"$(extract cloudflare_ruleset.dav_rate_limit)"; then
+  bad "the rate-limit rule does not cover the webhook receiver"
+else
+  ok "the rate-limit rule does not cover the webhook receiver"
+fi
 
 echo "== state and secrets"
 if grep -qE '^[[:space:]]*backend[[:space:]]+"' "$work/code.tf"; then

@@ -180,17 +180,22 @@ resource "cloudflare_zero_trust_access_application" "agent" {
 locals {
   # Public hostnames: each one gets an explicit bypass application so the
   # wildcard's default stays deny rather than being widened for an app.
-  #   recovery - the data-recovery letter; its reader has no credentials by
-  #              definition, and it is static on Pages, not behind a tunnel.
-  #   photos   - mobile clients cannot complete an Access login.
-  #   music    - ditto, for the Navidrome clients.
-  #   opds     - OPDS readers and the web reader; the app's own login is the
-  #              only gate, and it is rate limited (rate-limit.tf).
+  #   recovery    - the data-recovery letter; its reader has no credentials by
+  #                 definition, and it is static on Pages, not behind a tunnel.
+  #   photos      - mobile clients cannot complete an Access login.
+  #   music       - ditto, for the Navidrome clients.
+  #   opds        - OPDS readers and the web reader; the app's own login is the
+  #                 only gate, and it is rate limited (rate-limit.tf).
+  #   agent-hooks - GitHub delivers webhooks with no browser and no service
+  #                 token. The capability URL is the credential, and the
+  #                 receiver's own HMAC check authenticates a source that has
+  #                 one, so a bypass is the only workable decision here.
   public_apps = toset([
     "recovery",
     "photos",
     "music",
     "opds",
+    "agent-hooks",
   ])
 }
 

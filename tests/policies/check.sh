@@ -680,6 +680,81 @@ eq "$(jq -r '.[] | select(.kind == "NetworkPolicy" and .metadata.name == "egress
   "0.0.0.0/8,10.0.0.0/8,100.64.0.0/10,127.0.0.0/8,169.254.0.0/16,172.16.0.0/12,192.0.0.0/24,192.168.0.0/16,198.18.0.0/15,224.0.0.0/4,240.0.0.0/4" \
   "broker egress excludes every non-global IPv4 range"
 
+# ---------------------------------------------------------------- webhook contract
+# The receiver is the one public ingress to an agent-facing service: its
+# capability store, its tokens, its single egress and its runtime are asserted
+# here so a widened deployment never reaches review.
+webhook_dir=clusters/homelab/webhook
+kustomize build "$webhook_dir" >"$work/webhook.yaml"
+json_of "$work/webhook.yaml" >"$work/webhook.json"
+
+wpod='.[] | select(.kind == "Deployment" and .metadata.name == "webhook") | .spec.template.spec'
+eq "$(jq -r "$wpod | .runtimeClassName // \"none\"" "$work/webhook.json")" "gvisor" \
+  "the webhook runs on gvisor"
+eq "$(jq -r "$wpod | if has(\"automountServiceAccountToken\") then .automountServiceAccountToken else true end" "$work/webhook.json")" "false" \
+  "the webhook never mounts a service-account token"
+eq "$(jq -r "$wpod | .securityContext.runAsNonRoot" "$work/webhook.json")" "true" \
+  "the webhook pod declares runAsNonRoot"
+eq "$(jq -r "$wpod | .serviceAccountName" "$work/webhook.json")" "webhook" \
+  "the webhook runs as its own service account"
+eq "$(jq -r "$wpod | .containers[0].securityContext.readOnlyRootFilesystem" "$work/webhook.json")" "true" \
+  "the webhook rootfs is read-only"
+eq "$(jq -r "$wpod | .containers[0].securityContext.allowPrivilegeEscalation" "$work/webhook.json")" "false" \
+  "the webhook forbids privilege escalation"
+eq "$(jq -r "$wpod | .containers[0].securityContext.capabilities.drop | join(\",\")" "$work/webhook.json")" "ALL" \
+  "the webhook drops every capability"
+eq "$(jq -r '.[] | select(.kind == "Deployment" and .metadata.name == "webhook") | "\(.spec.replicas):\(.spec.strategy.type)"' "$work/webhook.json")" \
+  "1:Recreate" "one receiver replica, Recreate (single writer on the sources claim)"
+eq "$(jq -r "$wpod | [.volumes[] | select(.name == \"sources\") | .persistentVolumeClaim.claimName] | join(\",\")" "$work/webhook.json")" \
+  "webhook-sources" "the capability store is the sources claim"
+eq "$(jq -r "$wpod | [.volumes[] | select(.name == \"tokens\") | .secret] | .[0] | [.secretName, (.optional // false)] | join(\":\")" "$work/webhook.json")" \
+  "webhook-tokens:false" "the token volume is fail-closed"
+eq "$(jq -r '.[] | select(.kind == "Secret") | .metadata.name' "$work/webhook.json")" "" \
+  "the webhook build contains no Secret"
+eq "$(jq -r '.[] | select(.kind == "ServiceAccount" and .metadata.name == "webhook") | .automountServiceAccountToken' "$work/webhook.json")" \
+  "false" "the webhook ServiceAccount has no token automount"
+eq "$(jq -r '.[] | select(.kind == "Service" and .metadata.name == "webhook") | [.spec.ports[0].port, .spec.ports[0].targetPort] | join(":")' "$work/webhook.json")" \
+  "8080:http" "the webhook Service exposes 8080 to the http port"
+eq "$(jq -r '.[] | select(.kind == "PersistentVolumeClaim" and .metadata.name == "webhook-sources") | [.metadata.namespace, .spec.storageClassName, .spec.accessModes[0]] | join(":")' "$work/webhook.json")" \
+  "webhook:local-path:ReadWriteOnce" "the capability store uses the k3s local-path class"
+
+wimage=$(jq -r "$wpod | .containers[0].image" "$work/webhook.json")
+case $wimage in
+  ghcr.io/smores56/homelabs-platform/webhook@sha256:*) ok "webhook image is the platform repository" ;;
+  *) bad "webhook image is not the platform repository ($wimage)" ;;
+esac
+if [[ $wimage =~ @sha256:[0-9a-f]{64}$ ]]; then
+  ok "webhook image is digest-pinned"
+else
+  bad "webhook image is not digest-pinned ($wimage)"
+fi
+
+eq "$(jq -r '.[] | select(.kind == "NetworkPolicy" and .metadata.name == "default-deny") | (.spec.policyTypes // []) | sort | join(",")' "$work/webhook.json")" \
+  "Egress,Ingress" "default-deny covers both directions in webhook"
+eq "$(jq -r '.[] | select(.kind == "NetworkPolicy" and .metadata.name == "allow-dns-egress") | .spec.egress[0].to[0].namespaceSelector.matchLabels["kubernetes.io/metadata.name"]' "$work/webhook.json")" \
+  "kube-system" "DNS egress in webhook targets kube-system only"
+eq "$(jq -r '.[] | select(.kind == "NetworkPolicy" and .metadata.name == "allow-ingress-cloudflared") | [.spec.ingress[0].from[0].namespaceSelector.matchLabels["kubernetes.io/metadata.name"], .spec.ingress[0].from[0].podSelector.matchLabels["app.kubernetes.io/name"], .spec.ingress[0].ports[0].port] | join(":")' "$work/webhook.json")" \
+  "ingress:cloudflared:8080" "the receiver admits only the tunnel on 8080"
+eq "$(jq -r '.[] | select(.kind == "NetworkPolicy" and .metadata.name == "allow-gateway-egress") | [.spec.egress[0].to[0].namespaceSelector.matchLabels["kubernetes.io/metadata.name"], .spec.egress[0].to[0].podSelector.matchLabels["app.kubernetes.io/name"], .spec.egress[0].ports[0].port] | join(":")' "$work/webhook.json")" \
+  "tenant-apps:nanobot:8765" "the receiver reaches only the gateway's websocket listener"
+eq "$(jq -r '[.[] | select(.kind == "NetworkPolicy" and .metadata.namespace == "webhook") | .metadata.name] | sort | join(",")' "$work/webhook.json")" \
+  "allow-dns-egress,allow-gateway-egress,allow-ingress-cloudflared,default-deny" \
+  "webhook keeps only default-deny, DNS, tunnel ingress and gateway egress"
+if jq -r '.[] | select(.kind == "NetworkPolicy") | .spec.egress[]? | .to[]? | .ipBlock // empty' "$work/webhook.json" | grep -q .; then
+  bad "the webhook has no public egress"
+else
+  ok "the webhook has no public egress"
+fi
+eq "$(jq -r '.[] | select(.kind == "ConfigMap" and .metadata.name == "webhook-tokens-contract") | [.metadata.namespace, .data.secretName, (.data.keys | split(",") | sort | join(","))] | join(":")' "$work/webhook.json")" \
+  "webhook:webhook-tokens:admin-token,enqueue-token" \
+  "the token contract names the Secret and both keys"
+
+# The remote halves of the two flows live in the network stage.
+eq "$(jq -r 'select(.metadata.namespace == "ingress" and .metadata.name == "egress-webhook") | [.spec.egress[0].to[0].namespaceSelector.matchLabels["kubernetes.io/metadata.name"], .spec.egress[0].to[0].podSelector.matchLabels["app.kubernetes.io/name"], .spec.egress[0].ports[0].port] | join(":")' "$network_json")" \
+  "webhook:webhook:8080" "the tunnel reaches the webhook Service on 8080"
+eq "$(jq -r 'select(.metadata.namespace == "tenant-apps" and .metadata.name == "allow-webhook-ingress") | [.spec.ingress[0].from[0].namespaceSelector.matchLabels["kubernetes.io/metadata.name"], .spec.ingress[0].from[0].podSelector.matchLabels["app.kubernetes.io/name"], .spec.ingress[0].ports[0].port] | join(":")' "$network_json")" \
+  "webhook:webhook:8765" "the tenant admits only the receiver on the gateway port"
+
 # ------------------------------------------------ repository mirror (backup)
 # The mirror is platform-tier and holds one read-only credential. Its shape is
 # asserted here so a widened egress, a classic token or a writable rootfs never
@@ -782,6 +857,7 @@ declare -A stage_edges=(
   [platform-secrets]="platform-namespaces,platform-policies"
   [platform-broker]="platform-namespaces,platform-network,platform-policies,platform-rbac,platform-secrets"
   [platform-agent-control]="platform-namespaces,platform-network,platform-policies,platform-rbac"
+  [platform-webhook]="platform-namespaces,platform-network,platform-policies,platform-secrets"
   [platform-storage]="platform-namespaces"
   [platform-backup]="platform-namespaces,platform-policies"
   [platform-digest]="platform-namespaces,platform-observability,platform-policies,platform-storage"
@@ -813,7 +889,7 @@ done
 
 listed=$(yq -o=json -I=0 '.' clusters/homelab/platform/kustomization.yaml |
   jq -r '[.resources[] | sub("^kustomizations/"; "") | sub("\\.yaml$"; "")] | .[]')
-eq "$listed" "$(printf '%s\n' namespaces rbac policies network secrets broker agent-control storage backup digest data ingress observability tenants)" \
+eq "$listed" "$(printf '%s\n' namespaces rbac policies network secrets broker agent-control webhook storage backup digest data ingress observability tenants)" \
   "platform/kustomization.yaml lists every stage in apply order"
 missing=$(comm -23 <(find "$stages_dir" -maxdepth 1 -name '*.yaml' -printf '%f\n' | sed 's|\.yaml$||' | sort) \
   <(yq -o=json -I=0 '.' clusters/homelab/platform/kustomization.yaml |
