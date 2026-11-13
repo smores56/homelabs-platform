@@ -74,3 +74,32 @@ list	pods	tenant-apps	no	exporter
 get	secrets	immich	no	exporter
 delete	pods	immich	no	exporter
 create	pods	immich	no	exporter
+# Agent-control identity (system:serviceaccount:tenant-apps:agent-control) — the
+# one API client the agent gets. Both halves are asserted: the namespaced Role
+# (own pods, logs, events, one deployment patch) and the read-only ClusterRole,
+# plus the paths that must stay closed.
+get	pods	tenant-apps	yes	control
+list	pods/log	tenant-apps	yes	control
+get	events	tenant-apps	yes	control
+patch	deployments.apps/nanobot	tenant-apps	yes	control
+patch	deployments.apps/bench	tenant-apps	no	control
+patch	deployments.apps	tenant-apps	no	control
+delete	pods	tenant-apps	no	control
+create	pods	tenant-apps	no	control
+create	pods/exec	tenant-apps	no	control
+create	pods/portforward	tenant-apps	no	control
+get	secrets	tenant-apps	no	control
+list	configmaps	tenant-apps	no	control
+get	pods/log	immich	no	control
+list	nodes	-	yes	control
+list	pods	kube-system	yes	control
+list	pods	broker	yes	control
+list	deployments.apps	immich	yes	control
+list	statefulsets.apps	immich	yes	control
+list	daemonsets.apps	kube-system	yes	control
+list	kustomizations.kustomize.toolkit.fluxcd.io	flux-system	yes	control
+get	secrets	-	no	control
+list	configmaps	-	no	control
+delete	nodes	-	no	control
+create	pods	kube-system	no	control
+create	serviceaccounts	tenant-apps	no	control

@@ -199,8 +199,8 @@ for file in "$rbac_dir"/*.yaml; do
 done
 
 eq "$(jq -r 'select(.kind == "ServiceAccount") | .metadata.namespace + ":" + .metadata.name' "$rbac_json" | sort | paste -sd, -)" \
-  "calibre:data-workload,graphiti:data-workload,immich:data-workload,navidrome:data-workload,tenant-apps:nanobot,tenant-apps:tenant-apps-reconciler" \
-  "the RBAC stage holds the two tenant identities and one data-workload account per data namespace"
+  "calibre:data-workload,graphiti:data-workload,immich:data-workload,navidrome:data-workload,tenant-apps:agent-control,tenant-apps:nanobot,tenant-apps:tenant-apps-reconciler" \
+  "the RBAC stage holds the tenant identities, the agent-control SA and one data-workload account per data namespace"
 eq "$(jq -r 'select(.kind != "Role" and .kind != "RoleBinding" and .kind != "ServiceAccount") | .kind' "$rbac_json" | sort -u)" \
   "" "the RBAC stage holds only identities, Roles and RoleBindings"
 
@@ -252,6 +252,88 @@ eq "$(jq -r 'select(.kind == "Role" and .metadata.name == "agent-debug") | [.rul
   "events:get+list,pods:delete" "agent-debug grants exactly events get/list and pods delete"
 eq "$(jq -r 'select(.kind == "RoleBinding" and .metadata.name == "agent-debug") | .subjects | map("\(.kind):\(.namespace):\(.name)") | join(",")' "$rbac_json" | sort -u)" \
   "ServiceAccount:tenant-apps:nanobot" "agent-debug binds only the nanobot service account"
+
+# ------------------------------------------------ agent-control (cluster API)
+# The one identity that talks to the API on the agent's behalf. Every assertion
+# here is a ceiling: the deployment's sandbox, the two RBAC halves, the single
+# ingress path and the API egress are the whole capability (docs/tenancy.md).
+control_dir=clusters/homelab/agent-control
+kustomize build "$control_dir" >"$work/control.yaml"
+json_of "$work/control.yaml" >"$work/control.json"
+
+control_pod='.[] | select(.kind == "Deployment" and .metadata.name == "agent-control") | .spec.template.spec'
+eq "$(jq -r "$control_pod | .serviceAccountName" "$work/control.json")" \
+  "agent-control" "agent-control runs as its own service account"
+eq "$(jq -r "$control_pod | if has(\"automountServiceAccountToken\") then .automountServiceAccountToken else true end" "$work/control.json")" \
+  "true" "agent-control mounts the only tenant token in the cluster"
+eq "$(jq -r "$control_pod | .runtimeClassName // \"none\"" "$work/control.json")" \
+  "gvisor" "agent-control runs on gvisor"
+eq "$(jq -r "$control_pod | .securityContext.runAsNonRoot" "$work/control.json")" \
+  "true" "agent-control declares runAsNonRoot"
+eq "$(jq -r "$control_pod | .containers[0].securityContext.readOnlyRootFilesystem" "$work/control.json")" \
+  "true" "the agent-control rootfs is read-only"
+eq "$(jq -r "$control_pod | .containers[0].securityContext.allowPrivilegeEscalation" "$work/control.json")" \
+  "false" "agent-control forbids privilege escalation"
+eq "$(jq -r "$control_pod | .containers[0].securityContext.capabilities.drop | join(\",\")" "$work/control.json")" \
+  "ALL" "agent-control drops every capability"
+eq "$(jq -r "$control_pod | [.containers[0].env[] | select(has(\"valueFrom\"))] | length" "$work/control.json")" \
+  "0" "no agent-control env value comes from a Secret"
+control_image=$(jq -r "$control_pod | .containers[0].image" "$work/control.json")
+if [[ $control_image =~ @sha256:[0-9a-f]{64}$ ]]; then
+  ok "the agent-control image is digest-pinned"
+else
+  bad "the agent-control image is not digest-pinned ($control_image)"
+fi
+# The base digest is shared with the broker's Dockerfile, so a bump lands in one
+# review instead of two drifting pins. No tag: tag + digest is still a tag, and
+# tenant-images rejects one.
+base_digest=$(sed -n 's/^FROM [^ ]*\(@sha256:[0-9a-f]\{64\}\).*/\1/p' apps/broker/Dockerfile)
+eq "${control_image#python}" "$base_digest" \
+  "agent-control runs the broker's pinned python base"
+eq "$(jq -r '.[] | select(.kind == "Service" and .metadata.name == "agent-control") | [.metadata.namespace, .spec.type, .spec.ports[0].port, .spec.ports[0].targetPort] | join(":")' "$work/control.json")" \
+  "tenant-apps:ClusterIP:8081:http" "agent-control is a ClusterIP Service on 8081"
+# The HTTP surface is the nine routes in ROUTES. A TCP probe means no health
+# route can become a tenth, token-free endpoint.
+eq "$(jq -r "$control_pod | .containers[0] | [(.startupProbe.tcpSocket.port // \"none\"), (.readinessProbe.tcpSocket.port // \"none\"), (.livenessProbe.tcpSocket.port // \"none\")] | join(\",\")" "$work/control.json")" \
+  "http,http,http" "agent-control probes are TCP sockets, not HTTP routes"
+if grep -q '"/healthz"' "$control_dir/agent_control.py"; then
+  bad "the service exposes an HTTP health route outside the allowlist"
+else
+  ok "the service exposes no HTTP route outside the allowlist"
+fi
+
+eq "$(jq -r 'select(.kind == "Role" and .metadata.name == "agent-control") | [.metadata.namespace, ([.rules[] | (.resources | join("+")) + ":" + (.verbs | sort | join("+"))] | sort | join(","))] | join(":")' "$rbac_json")" \
+  "tenant-apps:deployments:patch,pods+pods/log+events:get+list+watch" \
+  "the agent-control Role grants pod/event reads and one deployment patch"
+eq "$(jq -r 'select(.kind == "Role" and .metadata.name == "agent-control") | [.rules[] | select(.resources | index("deployments")) | (.resourceNames // []) | join(",")] | join(",")' "$rbac_json")" \
+  "nanobot" "the patch rule is scoped to deployments/nanobot"
+eq "$(jq -r 'select(.kind == "RoleBinding" and .metadata.name == "agent-control") | .subjects | map("\(.kind):\(.namespace):\(.name)") | join(",")' "$rbac_json")" \
+  "ServiceAccount:tenant-apps:agent-control" "the agent-control RoleBinding binds only its own account"
+eq "$(jq -r '.[] | select(.kind == "ClusterRole" and .metadata.name == "agent-control-read") | [.rules[] | (.apiGroups | join("+")) + "/" + (.resources | join("+")) + ":" + (.verbs | sort | join("+"))] | sort | join(",")' "$work/control.json")" \
+  "/pods+events+nodes:get+list+watch,apps/deployments+statefulsets+daemonsets:get+list,kustomize.toolkit.fluxcd.io/kustomizations:get+list" \
+  "the agent-control ClusterRole is read-only"
+eq "$(jq -r '.[] | select(.kind == "ClusterRoleBinding" and .metadata.name == "agent-control-read") | .subjects | map("\(.kind):\(.namespace):\(.name)") | join(",")' "$work/control.json")" \
+  "ServiceAccount:tenant-apps:agent-control" "the ClusterRoleBinding binds only the agent-control account"
+if jq -r '.[] | select(.kind == "Role" or .kind == "ClusterRole") | .rules[] | .resources[]? | select(. == "secrets" or . == "configmaps")' \
+  "$work/control.json" | grep -q . ||
+  jq -r 'select(.kind == "Role" and .metadata.name == "agent-control") | .rules[] | .resources[]? | select(. == "secrets" or . == "configmaps")' \
+    "$rbac_json" | grep -q .; then
+  bad "agent-control RBAC reaches Secrets or ConfigMaps"
+else
+  ok "agent-control RBAC grants nothing on Secrets or ConfigMaps"
+fi
+
+eq "$(jq -r '.[] | select(.kind == "NetworkPolicy" and .metadata.name == "agent-control-from-broker") | [.metadata.namespace, .spec.ingress[0].from[0].namespaceSelector.matchLabels["kubernetes.io/metadata.name"], .spec.ingress[0].from[0].podSelector.matchLabels["app.kubernetes.io/name"], .spec.ingress[0].ports[0].port] | join(":")' "$work/control.json")" \
+  "tenant-apps:broker:broker:8081" "agent-control accepts ingress only from the broker on 8081"
+eq "$(jq -r '.[] | select(.kind == "NetworkPolicy" and .metadata.name == "egress-agent-control") | [.metadata.namespace, .spec.egress[0].to[0].namespaceSelector.matchLabels["kubernetes.io/metadata.name"], .spec.egress[0].to[0].podSelector.matchLabels["app.kubernetes.io/name"], .spec.egress[0].ports[0].port] | join(":")' "$work/control.json")" \
+  "broker:tenant-apps:agent-control:8081" "the broker's egress half is stated beside the ingress half"
+api_egress='.[] | select(.kind == "NetworkPolicy" and .metadata.name == "agent-control-kubernetes-api-egress")'
+eq "$(jq -r "$api_egress | [.spec.egress[0].to[] | .ipBlock.cidr] | sort | join(\",\")" "$work/control.json")" \
+  "10.43.0.0/16,10.77.1.0/30" "agent-control API egress names the service range and the node tap"
+eq "$(jq -r "$api_egress | [.spec.egress[0].ports[] | .port] | sort | unique | join(\",\")" "$work/control.json")" \
+  "443,6443" "agent-control API egress covers both the ClusterIP and post-DNAT ports"
+eq "$(jq -r "$api_egress | .spec.podSelector.matchLabels[\"app.kubernetes.io/name\"]" "$work/control.json")" \
+  "agent-control" "the API egress policy selects only the agent-control pod"
 
 # ------------------------------------------------------------ controller flags
 declare -A controller_flags=(
@@ -699,6 +781,7 @@ declare -A stage_edges=(
   [platform-network]="platform-namespaces"
   [platform-secrets]="platform-namespaces,platform-policies"
   [platform-broker]="platform-namespaces,platform-network,platform-policies,platform-rbac,platform-secrets"
+  [platform-agent-control]="platform-namespaces,platform-network,platform-policies,platform-rbac"
   [platform-storage]="platform-namespaces"
   [platform-backup]="platform-namespaces,platform-policies"
   [platform-digest]="platform-namespaces,platform-observability,platform-policies,platform-storage"
@@ -730,7 +813,7 @@ done
 
 listed=$(yq -o=json -I=0 '.' clusters/homelab/platform/kustomization.yaml |
   jq -r '[.resources[] | sub("^kustomizations/"; "") | sub("\\.yaml$"; "")] | .[]')
-eq "$listed" "$(printf '%s\n' namespaces rbac policies network secrets broker storage backup digest data ingress observability tenants)" \
+eq "$listed" "$(printf '%s\n' namespaces rbac policies network secrets broker agent-control storage backup digest data ingress observability tenants)" \
   "platform/kustomization.yaml lists every stage in apply order"
 missing=$(comm -23 <(find "$stages_dir" -maxdepth 1 -name '*.yaml' -printf '%f\n' | sed 's|\.yaml$||' | sort) \
   <(yq -o=json -I=0 '.' clusters/homelab/platform/kustomization.yaml |
@@ -854,6 +937,22 @@ rbac-data.yaml
 EXPORTER_RBAC
   eq "$exporter_rbac" "4" "runtime: status-exporter RBAC applied (both ClusterRoles, the ClusterRoleBinding, the RoleBindings)"
 
+  # The agent-control identity's namespaced half is in the RBAC stage above; its
+  # cluster-scoped half lives with the workload, so apply exactly those two
+  # objects before the can-i rows for subject `control`.
+  control_rbac=0
+  while IFS= read -r object; do
+    if kubectl apply -f "clusters/homelab/agent-control/$object" >/dev/null 2>"$work/control.err"; then
+      control_rbac=$((control_rbac + 1))
+    else
+      bad "runtime: apply agent-control/$object" "$(cat "$work/control.err")"
+    fi
+  done <<'CONTROL_RBAC'
+clusterrole.yaml
+clusterrolebinding.yaml
+CONTROL_RBAC
+  eq "$control_rbac" "2" "runtime: agent-control ClusterRole and ClusterRoleBinding applied"
+
   # PSA would otherwise answer first for host-access fixtures, which would make
   # the assertion pass for the wrong reason. The shipped labels stay restricted;
   # this throwaway cluster relaxes them so each denial is attributable to the
@@ -880,12 +979,14 @@ EXPORTER_RBAC
   tenant_sa="system:serviceaccount:tenant-apps:tenant-apps-reconciler"
   agent_sa="system:serviceaccount:tenant-apps:nanobot"
   exporter_sa="system:serviceaccount:observability:status-exporter"
+  control_sa="system:serviceaccount:tenant-apps:agent-control"
   while IFS=$'\t' read -r verb resource ns expect subject; do
     [[ -z $verb || $verb == \#* ]] && continue
     case ${subject:-tenant} in
       tenant) sa=$tenant_sa ;;
       agent) sa=$agent_sa ;;
       exporter) sa=$exporter_sa ;;
+      control) sa=$control_sa ;;
       *)
         bad "unknown rbac subject ${subject:-}"
         continue

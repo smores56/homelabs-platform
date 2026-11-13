@@ -1158,3 +1158,81 @@ A `502 dns_failure` means the Service name does not resolve (the agent-control
 Service is missing); a timeout is the CNI dropping the packet, i.e. the
 tenant-side ingress policy above is absent. No credential is involved: the
 `self` host has none, and the namespace policy is the caller boundary.
+## 26. Verify the `agent-control` service
+
+The agent's cluster API capability is applied by Flux (stage
+`platform-agent-control`, source `clusters/homelab/agent-control`); nothing here
+creates it. This step is the post-apply proof that what runs is the reviewed
+capability: nine routes, no Secrets, one write, and no second API client.
+
+The image is `python@sha256:…` — the same base digest the broker's Dockerfile
+pins, with no tag (a tag plus digest still counts as a tagged image, and
+`tenant-images` rejects it). Bump both pins in one change.
+
+1. Confirm the identity and both RBAC halves:
+
+   ```sh
+   kubectl -n tenant-apps get sa agent-control \
+     -o jsonpath='{.automountServiceAccountToken}{"\n"}'            # true
+   kubectl -n tenant-apps get role agent-control -o yaml | sed -n '/rules:/,$p'
+   kubectl get clusterrole agent-control-read -o yaml | sed -n '/rules:/,$p'
+   ```
+
+   Expect `pods`, `pods/log`, `events` get/list/watch and one `deployments`
+   patch scoped by `resourceNames: [nanobot]` in the Role; `pods`, `events`,
+   `nodes` reads, `apps` workload reads and Flux `kustomizations` in the
+   ClusterRole. No `secrets`, no `configmaps`, no create/update/delete.
+
+2. Probe the authorisation decisions rather than reading them:
+
+   ```sh
+   sa=system:serviceaccount:tenant-apps:agent-control
+   kubectl auth can-i list pods -A --as "$sa"                          # yes
+   kubectl auth can-i get pods/log -n tenant-apps --as "$sa"           # yes
+   kubectl auth can-i patch deployments/nanobot -n tenant-apps --as "$sa"  # yes
+   kubectl auth can-i patch deployments/bench -n tenant-apps --as "$sa"    # no
+   kubectl auth can-i get secrets -A --as "$sa"                        # no
+   kubectl auth can-i list configmaps -A --as "$sa"                    # no
+   kubectl auth can-i delete nodes --as "$sa"                          # no
+   ```
+
+3. Exercise the HTTP surface. A port-forward travels the kubelet, so it works
+   regardless of the NetworkPolicy and shows up in the audit line as
+   `caller=127.0.0.1`; the broker path is the only normal caller.
+
+   ```sh
+   kubectl -n tenant-apps port-forward svc/agent-control 18081:8081 &
+   curl -s localhost:18081/self/status | jq '{deployment: .deployment.name, pods: (.pods|length)}'
+   curl -s "localhost:18081/self/logs?tail=20" | jq '.tail'          # 20
+   curl -s localhost:18081/cluster/nodes | jq '[.nodes[] | {name, ready}]'
+   curl -s localhost:18081/cluster/workloads | jq '.workloads | length'
+   curl -s localhost:18081/cluster/flux | jq '[.kustomizations[] | {name, ready}]'
+   curl -s -o /dev/null -w '%{http_code}\n' localhost:18081/healthz          # 404
+   curl -s -o /dev/null -w '%{http_code}\n' localhost:18081/api/v1/secrets   # 404
+   curl -s -o /dev/null -w '%{http_code}\n' localhost:18081/self/restart     # 405
+   ```
+
+   A `502` on a route means the service's own API call failed: re-run the
+   `can-i` probes in step 2, then check the API egress policy
+   (`kubectl -n tenant-apps get networkpolicy agent-control-kubernetes-api-egress -o yaml`).
+
+4. The one write. It patches a pod-template annotation and nothing else, so the
+   restarted pod is a normal rollout:
+
+   ```sh
+   curl -s -X POST localhost:18081/self/restart | jq .
+   kubectl -n tenant-apps rollout status deploy/nanobot --timeout=180s
+   kubectl -n tenant-apps get deploy nanobot \
+     -o jsonpath='{.spec.template.metadata.annotations.homelabs\.dev/restart-requested-at}{"\n"}'
+   ```
+
+5. Confirm the audit trail and that nothing credential-shaped is in it:
+
+   ```sh
+   kubectl -n tenant-apps logs deploy/agent-control --tail=10
+   # every request line: level=audit method=… path=… status=… caller=… duration_ms=…
+   kubectl -n tenant-apps logs deploy/agent-control | grep -c 'Bearer ' || true   # no match
+   ```
+
+   The `self` logical host in `broker.json` is enrolled by its own change; until
+   that lands, the port-forward above is the only way to reach the service.

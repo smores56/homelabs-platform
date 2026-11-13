@@ -1,0 +1,23 @@
+# `pods`, `events` and `nodes` include cluster-scoped reads, so the binding has
+# to be cluster-wide; the role it names carries no write verb. The write and the
+# agent's own logs are bound by the namespaced RoleBinding in
+# platform/rbac/agent-control.yaml.
+#
+# Verified at runtime by tests/policies/check.sh --runtime (rbac.tsv subject
+# `control`): the identity may list pods anywhere and may not read Secrets or
+# ConfigMaps anywhere, nor delete or create anything.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: agent-control-read
+  labels:
+    app.kubernetes.io/name: agent-control
+    homelabs.dev/tier: tenant
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: agent-control-read
+subjects:
+  - kind: ServiceAccount
+    name: agent-control
+    namespace: tenant-apps

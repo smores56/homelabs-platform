@@ -42,6 +42,20 @@ jobs:
       - name: run apps/broker unit tests
         run: python3 -m unittest discover -s apps/broker/tests -t apps/broker -v
 
+  agent-control:
+    name: agent-control unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          persist-credentials: false
+      # Stdlib only, like the broker. The route allowlist, the log filter, the
+      # Secrets/ConfigMaps guard, the tail clamp and the audit line are asserted
+      # here; tests/policies/check.sh asserts the RBAC and network ceiling.
+      - name: run agent-control unit tests
+        run: tests/agent-control/check.sh
+
   kubeconform:
     name: kubeconform
     runs-on: ubuntu-latest
@@ -114,7 +128,7 @@ jobs:
           shellcheck --version
           shellcheck scripts/*.sh tests/policies/*.sh tests/tofu/*.sh \
             tests/access/*.sh tests/backup/*.sh tests/digest/*.sh \
-            tests/observability/*.sh \
+            tests/observability/*.sh tests/agent-control/*.sh \
             clusters/homelab/flux-system/bootstrap.sh \
             clusters/homelab/platform/backup/*.sh
 

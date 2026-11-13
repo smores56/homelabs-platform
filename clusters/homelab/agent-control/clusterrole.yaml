@@ -1,0 +1,27 @@
+# The read-only half of the agent's cluster view. It lives outside the platform
+# RBAC stage because that stage holds namespaced identities only, and because a
+# ClusterRoleBinding grants *every* rule of the role it names: the write
+# (`patch deployments/nanobot`) stays in the namespaced Role in
+# platform/rbac/agent-control.yaml and is never reachable cluster-wide.
+#
+# Absent on purpose: Secrets and ConfigMaps (no credentials, ever), pods/log
+# (the agent's own logs come from the tenant-apps Role, not cluster-wide),
+# nodes/metrics (the status exporter is the metrics path), create/update/delete
+# on anything, and every RBAC or CRD API group.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: agent-control-read
+  labels:
+    app.kubernetes.io/name: agent-control
+    homelabs.dev/tier: tenant
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "events", "nodes"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets", "daemonsets"]
+    verbs: ["get", "list"]
+  - apiGroups: ["kustomize.toolkit.fluxcd.io"]
+    resources: ["kustomizations"]
+    verbs: ["get", "list"]
