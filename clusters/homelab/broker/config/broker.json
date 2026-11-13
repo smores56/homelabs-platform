@@ -56,6 +56,40 @@
         "installation": "github-installation-id",
         "repositories": ["homelabs-platform"],
         "permissions": {
+          "contents": "write",
+          "pull_requests": "write"
+        }
+      },
+      "inject": {
+        "kind": "bearer"
+      }
+    },
+    "github-agent-push": {
+      "scheme": "https",
+      "host": "github.com",
+      "port": 443,
+      "allow_private": false,
+      "github_app": {
+        "installation": "github-installation-id",
+        "repositories": ["nix-config", "kanbei"],
+        "permissions": {
+          "contents": "write"
+        }
+      },
+      "inject": {
+        "kind": "basic",
+        "username": "x-access-token"
+      }
+    },
+    "github-agent": {
+      "scheme": "https",
+      "host": "api.github.com",
+      "port": 443,
+      "allow_private": false,
+      "github_app": {
+        "installation": "github-installation-id",
+        "repositories": ["nix-config", "kanbei"],
+        "permissions": {
           "contents": "read",
           "pull_requests": "write"
         }

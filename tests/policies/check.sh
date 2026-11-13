@@ -542,7 +542,7 @@ fi
 # agent's BROKER_URL paths depend on; the unit tests parse the same file.
 enrollment='.[] | select(.kind == "ConfigMap" and (.metadata.name | startswith("broker-config"))) | .data["broker.json"] | fromjson'
 eq "$(jq -r "$enrollment | .logical_hosts | keys | sort | join(\",\")" "$work/broker.json")" \
-  "github-apps,github-platform,github-platform-push,loki,neuralwatt,status,tinyfish" \
+  "github-agent,github-agent-push,github-apps,github-platform,github-platform-push,loki,neuralwatt,status,tinyfish" \
   "the broker enrolls exactly the agent's logical hosts"
 eq "$(jq -r "$enrollment | [.logical_hosts | to_entries[] | select(.value.allow_private) | .key] | sort | join(\",\")" "$work/broker.json")" \
   "loki,status" "only the two in-cluster hosts are private enrollments"
@@ -558,6 +558,17 @@ eq "$(jq -r "$enrollment | .logical_hosts[\"github-apps\"].github_app.permission
   "github-apps may write contents"
 eq "$(jq -r "$enrollment | .logical_hosts[\"github-platform\"].github_app.permissions | keys | sort | join(\",\")" "$work/broker.json")" \
   "contents,pull_requests" "github-platform asks only for contents and pull requests"
+eq "$(jq -r "$enrollment | .logical_hosts[\"github-agent-push\"].host" "$work/broker.json")" "github.com" \
+  "github-agent-push is the git transport host for the agent's repos"
+eq "$(jq -r "$enrollment | .logical_hosts[\"github-agent\"].host" "$work/broker.json")" "api.github.com" \
+  "github-agent is the REST API host for the agent's repos"
+eq "$(jq -r "$enrollment | [.logical_hosts[\"github-agent-push\"], .logical_hosts[\"github-agent\"]] | map(.github_app.repositories | sort | join(\",\")) | join(\";\")" "$work/broker.json")" \
+  "kanbei,nix-config;kanbei,nix-config" \
+  "both agent hosts cover the same two repositories"
+eq "$(jq -r "$enrollment | .logical_hosts[\"github-agent\"].github_app.permissions | keys | sort | join(\",\")" "$work/broker.json")" \
+  "contents,pull_requests" "github-agent asks only for contents and pull requests"
+eq "$(jq -r "$enrollment | .logical_hosts[\"github-agent-push\"].github_app.permissions | keys | sort | join(\",\")" "$work/broker.json")" \
+  "contents" "github-agent-push asks only for contents"
 eq "$(jq -r "$enrollment | [.logical_hosts[] | .secret // empty] | unique | sort | join(\",\")" "$work/broker.json")" \
   "$(jq -r '.[] | select(.kind == "ConfigMap" and .metadata.name == "broker-credentials-contract") | .data.keys | split(",") | sort | join(",")' "$work/broker.json")" \
   "the SOPS contract names exactly the enrolled secrets"
