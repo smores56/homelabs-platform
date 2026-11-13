@@ -1238,3 +1238,49 @@ Deployment as identifiers.
 4. Rotating the token is: replace `alertmanager-mail-sops`, wait for the 1h ESO
    refresh (or delete `mailrelay-token`), then revoke the old token. The relay
    reads the mounted file per delivery, so nothing restarts.
+
+## 26. Cut `memory.sammohr.dev` over to the cluster tunnel
+
+The wrapper runs in `graphiti`; its route is now platform config
+(`memory = "http://memory-mcp.graphiti.svc.cluster.local:8182"` in
+`tofu/cluster.tf`), and the platform admits the tunnel in
+`memory-mcp-from-ingress`. This step is the gate before the host side loses its
+copy; deleting `memory-forward` itself is the nix-config lane's change, only
+after this passes.
+
+1. Apply the zone: `./scripts/tofu-cloudflare.sh plan` must show exactly one new
+   DNS record for `memory` (pointing at the cluster tunnel) and the tunnel's
+   ingress list gaining the `memory.sammohr.dev -> http://memory-mcp.graphiti...`
+   rule. **Remove** the host tunnel's `memory` rule in the same apply, or the
+   name is still served by the host (two rules for one name is the ambiguity this
+   step removes).
+
+2. Apply the network half and confirm the flow exists:
+
+   ```sh
+   cluster-kubectl -n graphiti get networkpolicy memory-mcp-from-ingress
+   cluster-kubectl -n graphiti get networkpolicy memory-mcp-nodeport-from-host   # kept
+   ```
+
+3. Probe through Access with a service token (the same token maki uses):
+
+   ```sh
+   curl -sS -o /dev/null -w '%{http_code}\n' \
+     -H "CF-Access-Client-Id: $ACCESS_CLIENT_ID" \
+     -H "CF-Access-Client-Secret: $ACCESS_CLIENT_SECRET" \
+     https://memory.sammohr.dev/health          # expect 200
+   ```
+
+   A 403 with the Cloudflare error page means the Access application does not
+   admit the token; a 502 means the tunnel has no healthy origin (check
+   `cluster-kubectl -n graphiti get endpoints memory-mcp`); a 404 means the
+   ingress rule was not applied.
+
+4. Only after the 200: repoint the host clients (`maki`'s shim and the memory
+   CLI) at `https://memory.sammohr.dev/mcp` and delete `memory-forward.nix` in
+   nix-config. Until then both paths run, and `memory-forward` keeps loopback
+   working.
+
+5. Rollback before step 4 is removing `memory` from `local.cluster_ingress` (or
+   pinning `cluster_hosts` without it) and re-adding the host tunnel route; the
+   wrapper and its data are untouched by that.

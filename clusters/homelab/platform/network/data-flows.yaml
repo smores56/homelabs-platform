@@ -4,9 +4,9 @@
 #   1. same-namespace traffic, because Immich talks to its own Postgres and
 #      Valkey and Graphiti to its own FalkorDB;
 #   2. the app's HTTP port from the `ingress` namespace only, which is the one
-#      path cloudflared may use into a data app. The memory wrapper is the
-#      exception: its only client is the host's tap NodePort, so no ingress flow
-#      exists for it;
+#      path cloudflared may use into a data app. The memory wrapper has two
+#      clients: the host's tap NodePort (the loopback forwarder) and, since
+#      SDLC #617, `cloudflared` on 8182 for `memory.sammohr.dev`;
 #   3. HTTPS to the public internet for the two pods that fetch remote content
 #      (`immich-machine-learning` downloads model weights, Graphiti calls the
 #      Neuralwatt API). Port 443 is the only port the cluster guest can open
@@ -154,6 +154,35 @@ spec:
     - to:
         - podSelector: {}
 ---
+# The tunnel's half of the memory cutover (SDLC #617): cloudflared reaches the
+# wrapper Service on its own port, inside the namespace. It is separate from the
+# tap rule below on purpose — the two are independent paths, and the day the host
+# forwarder is deleted this one stays.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: memory-mcp-from-ingress
+  namespace: graphiti
+  labels:
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: data
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: memory-mcp
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: cloudflared
+      ports:
+        - protocol: TCP
+          port: 8182
+---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -272,6 +301,18 @@ spec:
       ports:
         - protocol: TCP
           port: 8083
+    # The memory wrapper, reached by hostname through the cluster tunnel. Its
+    # bearer token is the boundary; this is the network half (#617).
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: graphiti
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: memory-mcp
+      ports:
+        - protocol: TCP
+          port: 8182
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy

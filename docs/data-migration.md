@@ -237,11 +237,27 @@ be applied at any time (a missing share just leaves the pod unstarted).
    creates the wrapper against that state; set `memoryForward.enable = true`
    after it. The host's `memory-forward` unit points loopback 8182 at the
    wrapper's tap NodePort, so maki and the agent VM keep their loopback
-   convention and `memory.sammohr.dev` never leaves the host tunnel. Verify with
-   `memory status` and one write/search round trip, then keep the host units
-   stopped; rollback is a forward restore of the newest export onto the host,
-   not a restart of the frozen copy. The nightly `memory-export` CronJob on the
-   share is what restic snapshots.
+   convention. Verify with `memory status` and one write/search round trip, then
+   keep the host units stopped; rollback is a forward restore of the newest
+   export onto the host, not a restart of the frozen copy. The nightly
+   `memory-export` CronJob on the share is what restic snapshots.
+
+7. **`memory.sammohr.dev` onto the cluster tunnel.** The wrapper now serves two
+   paths: the host's tap NodePort (step 6) and the tunnel. `memory` is in
+   `local.cluster_ingress` (tofu/cluster.tf) and `cluster_hosts` follows it, so
+   one apply writes the DNS record and the tunnel's ingress rule; the platform
+   side is `memory-mcp-from-ingress` plus the `graphiti:memory-mcp` entry in the
+   ingress namespace's egress. Cut over only after a probe through Access:
+
+   ```sh
+   curl -sS -H "CF-Access-Client-Id: $ID" -H "CF-Access-Client-Secret: $SECRET" \
+     https://memory.sammohr.dev/health      # expect 200
+   ```
+
+   The host route and `memory-forward` stay until that returns 200; deleting them
+   is the host lane's change (`docs/manual-steps.md` step 26). Rolling back is
+   removing `memory` from the map (or pinning `cluster_hosts` without it), which
+   sends the name back to the host tunnel's route on the next apply.
 
 Rollback for any app: start the native service again. Its data is still at the
 host path until the copy step moved it, and a `mv` is reversed by moving it back.
@@ -251,8 +267,11 @@ host path until the copy step moved it, and a `mv` is reversed by moving it back
 Two tunnels, two tokens, no shared state:
 
 - **Host tunnel** (`modules/nixos/web-proxy.nix`, tunnel `smortress`): `ssh`,
-  `agent`, `memory`, the Kanbei private route and every Access policy stay
-  human-owned. `llm` and `chat` are retired (`docs/manual-steps.md` step 17).
+  `agent`, the Kanbei private route and every Access policy stay human-owned.
+  `memory` is duplicated during its cutover (host route plus the cluster route
+  added by SDLC #617) and the host copy is deleted only after the cluster route
+  answers 200 through Access. `llm` and `chat` are retired
+  (`docs/manual-steps.md` step 17).
 - **Cluster tunnel** (`clusters/homelab/ingress/`): `cloudflared` in the
   `ingress` namespace, token mode, two replicas, `--protocol http2` because the
   host's tap firewall only forwards 80/443/DNS/NTP out of the guest. Its token
@@ -273,7 +292,8 @@ Because the tunnel runs in token mode but its configuration is managed by
 what `tofu apply` writes, not a dashboard edit. The four `Ingress` objects in the
 app directories are the reviewed routing contract that those rules mirror, not
 something an in-cluster controller consumes (k3s's traefik is disabled in the
-guest). The policy check asserts host and backend service/port against each
+guest). `memory` is the exception: the wrapper has no Ingress object, because
+its route is the Service's cluster-local port rather than an in-cluster router. The policy check asserts host and backend service/port against each
 app's Service, so the two cannot drift silently.
 
 ## What is live-gated

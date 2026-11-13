@@ -40,7 +40,7 @@ applied by the first stage (`docs/flux.md`).
 | `tenant` | gVisor, digest-pinned images, scratch PVC only, no `sops-age`, no reconciler SA, `agent-identity` | DNS, TCP 8080 to `broker`, and direct TCP/UDP to global unicast (every non-global range excluded) | the cluster tunnel on 8080 (`nanobot` only) |
 | `broker` | `no-host-access`, `broker-runtime` | public TCP 443 (global unicast only), DNS, `loki-gateway` 3100 and `status-exporter` 9101 | `tenant` tier on 8080 |
 | `data` (each of `immich`, `navidrome`, `calibre`, `graphiti`) | `no-host-access`, `data-workload-source`, `data-pvc-scope`, `data-pvc-storage` | same namespace, DNS; HTTPS for `immich-machine-learning` and `graphiti` | same namespace, `ingress` on the app's port |
-| `ingress` | none beyond PSA | the four data apps on their ports, `tenant-apps/nanobot` 8080, Cloudflare edge 443, DNS | none |
+| `ingress` | none beyond PSA | the four data apps and `graphiti/memory-mcp` on their ports, `tenant-apps/nanobot` 8080, Cloudflare edge 443, DNS | none |
 | `observability` | exempt from `no-host-access` | DNS, the k3s API range on 443 (Vector, Prometheus, exporter), Loki and the annotated scrape targets, Prometheus → Alertmanager, Alertmanager → mail relay; the mail relay alone reaches 443 on global unicast | default-deny; Vector/Loki/gateway wiring, Prometheus scrapes, the broker paths, and the alerting chain |
 
 ## Admission policy
@@ -110,7 +110,7 @@ the pod has no token or API route; the grant is a break-glass ceiling
 | `immich` | both directions | DNS; same-namespace any port; TCP 2283 from `ingress`; HTTPS from the machine-learning pod for model weights |
 | `navidrome` | both directions | DNS; same-namespace any port; TCP 4533 from `ingress` |
 | `calibre` | both directions | DNS; same-namespace any port; TCP 8083 from `ingress` |
-| `graphiti` | both directions | DNS; same-namespace any port; TCP 8182 from the host tap addresses only (the memory wrapper's NodePort, never the tunnel); HTTPS from the graphiti pod to the Neuralwatt API |
+| `graphiti` | both directions | DNS; same-namespace any port; TCP 8182 from the host tap addresses (the memory wrapper's NodePort) and from `ingress/cloudflared` (the cluster tunnel, SDLC #617); HTTPS from the graphiti pod to the Neuralwatt API; TCP 443 to R2 for the restic job |
 | `ingress` | both directions | DNS; the three published app Services on their ports; `tenant-apps/nanobot` on 8080; TCP 443 to the Cloudflare edge (`cloudflared` only) |
 
 Adding an app flow means adding a policy with its exact port and namespace

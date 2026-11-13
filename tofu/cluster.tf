@@ -11,7 +11,11 @@
 # the catch-all. The precondition below refuses that partial cutover.
 locals {
   cluster_ingress = {
+    # `memory` is the wrapper's Service in the cluster (SDLC #617). The host's
+    # `memory-forward` socat hop and its own route stay until this one answers
+    # 200 through Access; nothing here removes either.
     agent  = "http://nanobot.tenant-apps.svc.cluster.local:80"
+    memory = "http://memory-mcp.graphiti.svc.cluster.local:8182"
     music  = "http://navidrome.navidrome.svc.cluster.local:4533"
     opds   = "http://calibre.calibre.svc.cluster.local:8083"
     photos = "http://immich-server.immich.svc.cluster.local:2283"

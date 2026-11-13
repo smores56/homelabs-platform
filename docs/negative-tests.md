@@ -93,22 +93,26 @@ namespace on one port.
 ### What runs automatically (static, CI job `policy checks`)
 
 `tests/policies/check.sh` runs with no cluster and no credentials on every push
-and pull request. 277 assertions (recorded run, 2026-11-11):
+and pull request. 430 assertions (recorded run, 2026-11-13):
 
 | Family | Assertions |
 | --- | --- |
 | `kustomize build clusters/homelab` renders, every `clusters/` and `tests/` YAML file parses (`yq`) | 2 |
-| Policy/binding pairing, names, `failurePolicy: Fail` | 55 |
-| Each binding selects exactly the namespaces in `tests/policies/bindings.tsv`, resolved against the real namespace labels | 11 |
-| Each fixture's expected policy really contains the CEL field the fixture violates | 25 |
-| RBAC: one `data-workload` per data namespace, tenant identity, deny list, wildcard-free rules, no cluster-scoped objects | 10 |
-| Rendered controller `args` match the reviewed flag table (`docs/flux.md`), gotk patch JSON, no insecure kubeconfig flags | 14 |
-| NetworkPolicy shape: default-deny and DNS in every tier namespace, broker-only tenant egress, per-app ingress HTTP, exact per-namespace flow sets, ingress egress to the four Services and the edge | 26 |
-| Storage: `data-local` class, PV paths/claimRefs/node affinity, one PVC per namespace, no `hostPath`, dump schedule/timezone/deadline/path, hostname-to-Service contract | 39 |
-| Data workload shape: `data-workload` identity, `managed-by=platform`, uid 1000, limits, probes | 5 |
-| Stage DAG (`dependsOn`), stage service accounts, apply order | 42 |
-| `gotk-sync.yaml` equals `bootstrap.sh --print-sync`, bootstrap flags, tenant Kustomization pins | 13 |
-| Fixture/expectation table completeness and `# expect:` headers | 35 |
+| Policy/binding pairing, names, `failurePolicy: Fail` | 65 |
+| Each binding selects exactly the namespaces in `tests/policies/bindings.tsv`, resolved against the real namespace labels | 13 |
+| Each fixture's expected policy really contains the CEL field the fixture violates | 29 |
+| RBAC: one `data-workload` per data namespace, tenant identity, deny list, wildcard-free rules, no cluster-scoped objects | 14 |
+| Rendered controller `args` match the reviewed flag table (`docs/flux.md`), gotk patch JSON, no insecure kubeconfig flags | 18 |
+| NetworkPolicy shape: default-deny and DNS in every tier namespace, the tenant's broker and public egress, the memory tunnel and host-tap paths, per-app ingress HTTP, exact per-namespace flow sets, ingress egress to the Services and the edge | 34 |
+| Storage: `data-local` class, PV paths/claimRefs/node affinity, one PVC per namespace, no `hostPath`, hostname-to-Service contract, dump and per-tree restic contracts (claim, uid, read-only mount, repository prefix, preflight) | 64 |
+| Data workload shape: `data-workload` identity, `managed-by=platform`, uid 1000, limits, probes, memory wrapper shape | 16 |
+| Stage DAG (`dependsOn`), stage service accounts, apply order | 54 |
+| `gotk-sync.yaml` equals `bootstrap.sh --print-sync`, bootstrap flags, tenant Kustomization pins | 14 |
+| Fixture/expectation table completeness and `# expect:` headers | 39 |
+| Broker contract: identity, read-only rootfs, enrollment file, credential contract, public-443 egress shape | 32 |
+| Hostname contract: each Ingress host, Service and port | 9 |
+| Repository mirror: schedule, identity, PAT contract, GitHub-only egress | 24 |
+| CI wiring: the runtime half, the required context, the always-stop step | 3 |
 
 The static half cannot evaluate CEL: it proves the expression *mentions* the
 field and that the binding reaches the intended namespaces. Enforcement is the

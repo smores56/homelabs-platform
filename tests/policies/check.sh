@@ -355,18 +355,25 @@ eq "$(jq -s -r 'map(select(.metadata.namespace == "calibre") | .metadata.name) |
   "allow-dns-egress,allow-same-namespace,calibre-http-from-ingress,default-deny,restic-egress" \
   "calibre keeps only default-deny, DNS, same-namespace, ingress HTTP and restic egress"
 eq "$(jq -s -r 'map(select(.metadata.namespace == "graphiti") | .metadata.name) | sort | join(",")' "$network_json")" \
-  "allow-dns-egress,allow-same-namespace,default-deny,graphiti-public-https,memory-mcp-nodeport-from-host,restic-egress" \
-  "graphiti keeps only default-deny, DNS, same-namespace, Neuralwatt HTTPS, the host tap and restic egress"
+  "allow-dns-egress,allow-same-namespace,default-deny,graphiti-public-https,memory-mcp-from-ingress,memory-mcp-nodeport-from-host,restic-egress" \
+  "graphiti keeps only default-deny, DNS, same-namespace, Neuralwatt HTTPS, the tunnel and host-tap paths to the wrapper, and restic egress"
 
 eq "$(jq -r 'select(.metadata.namespace == "ingress" and .metadata.name == "egress-data-apps-only") | [.spec.egress[] | .to[0] | "\(.namespaceSelector.matchLabels["kubernetes.io/metadata.name"]):\(.podSelector.matchLabels["app.kubernetes.io/name"])"] | sort | join(",")' "$network_json")" \
-  "calibre:calibre,immich:immich,navidrome:navidrome" \
-  "the ingress namespace reaches the three published app Services and nothing else"
+  "calibre:calibre,graphiti:memory-mcp,immich:immich,navidrome:navidrome" \
+  "the ingress namespace reaches the four published app Services and nothing else"
 eq "$(jq -r 'select(.metadata.namespace == "ingress" and .metadata.name == "egress-tunnel-edge") | [.spec.podSelector.matchLabels["app.kubernetes.io/name"], (.spec.egress[0].ports | map("\(.protocol):\(.port)") | sort | join(","))] | join(":")' "$network_json")" \
   "cloudflared:TCP:443,TCP:7844,UDP:7844" "cloudflared reaches the Cloudflare edge on 443 and the tunnel's 7844"
 eq "$(jq -r 'select(.metadata.namespace == "ingress" and .metadata.name == "egress-agent") | [.spec.egress[0].to[0].namespaceSelector.matchLabels["kubernetes.io/metadata.name"], .spec.egress[0].to[0].podSelector.matchLabels["app.kubernetes.io/name"], .spec.egress[0].ports[0].port] | join(":")' "$network_json")" \
   "tenant-apps:nanobot:8765" "the tunnel reaches only the nanobot pod on the WebUI port"
 eq "$(jq -r 'select(.metadata.namespace == "tenant-apps" and .metadata.name == "allow-tunnel-ingress") | [.spec.ingress[0].from[0].namespaceSelector.matchLabels["kubernetes.io/metadata.name"], .spec.ingress[0].from[0].podSelector.matchLabels["app.kubernetes.io/name"], .spec.ingress[0].ports[0].port] | join(":")' "$network_json")" \
   "ingress:cloudflared:8765" "the tenant admits only the tunnel on the WebUI port"
+
+# The memory cutover (SDLC #617): the cluster tunnel is the new path in, and the
+# host tap's NodePort path stays until the host route is retired elsewhere.
+eq "$(jq -r 'select(.metadata.namespace == "graphiti" and .metadata.name == "memory-mcp-from-ingress") | [.spec.ingress[0].from[0].namespaceSelector.matchLabels["kubernetes.io/metadata.name"], .spec.ingress[0].from[0].podSelector.matchLabels["app.kubernetes.io/name"], .spec.ingress[0].ports[0].port] | join(":")' "$network_json")" \
+  "ingress:cloudflared:8182" "the tunnel reaches the memory wrapper on its MCP port"
+eq "$(jq -r 'select(.metadata.namespace == "graphiti" and .metadata.name == "memory-mcp-nodeport-from-host") | [(.spec.ingress[0].from | map(.ipBlock.cidr) | sort | join(",")), (.spec.ingress[0].ports[0].port | tostring)] | join(":")' "$network_json")" \
+  "10.77.1.1/32,10.77.1.2/32:8182" "the host tap path to the wrapper is untouched"
 
 # ------------------------------------------------------- data storage contract
 storage_dir=clusters/homelab/platform/storage
