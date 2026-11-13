@@ -6,3 +6,4 @@ resources:
   - tenant-apps.yaml
   - data.yaml
   - agent-nanobot.yaml
+  - agent-control.yaml
