@@ -313,15 +313,20 @@ credential. Verify the three credential classes:
 
 ```sh
 sudo cluster-kubectl -n broker exec deploy/broker -- python -c '
-import urllib.error, urllib.request
+import http.client
 for path in ("healthz", "loki/loki/api/v1/labels", "github-platform/rate_limit"):
-    try:
-        r = urllib.request.urlopen(f"http://127.0.0.1:8080/{path}")
-        print(path, r.status, r.read(120))
-    except urllib.error.HTTPError as exc:
-        print(path, exc.code, exc.read(120))
+    c = http.client.HTTPConnection("127.0.0.1", 8080, timeout=20)
+    c.putrequest("GET", "/" + path, skip_host=True)
+    c.putheader("Host", "broker.broker.svc.cluster.local")
+    c.endheaders()
+    r = c.getresponse()
+    print(path, r.status, r.read(140))
+    c.close()
 '
 ```
+
+The explicit `Host` matters: a plain `urllib` call to `127.0.0.1` sends an
+IP-literal Host, which the broker refuses with `400 ip_literal_host`.
 
 Expected: `200`; `200` with the Loki gateway's `{"status":"success"...}`; and
 `200` with the installation's rate limit. A `503` (`credential_unavailable`) on
