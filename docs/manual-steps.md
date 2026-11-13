@@ -456,14 +456,29 @@ first cutover:
    `clusters/homelab/data/graphiti/{memory-mcp,memory-export-cronjob}.yaml` with
    it, and make the GHCR package public (Packages -> memory-mcp -> Change
    visibility); the cluster has no image pull secret.
-6. **Move the wrapper.** Create `memory-mcp-token-sops` (step 12), then in the
-   same window: stop the host stack (`sudo systemctl stop memory-mcp
-   memory-graphiti-mcp memory-llm-proxy memory-falkordb memory-export.timer`),
-   `sudo memory export` (never `cp` the live WAL database), copy the export's
-   `registry.sqlite` to `/var/lib/data/graphiti/memory/` **and restore the same
-   export's `graph.rdb` into `/var/lib/data/graphiti/falkordb/`** — the graph
-   rsynced in `docs/data-migration.md` step 5 stops matching the registry the
-   moment the host writes again. Start `deploy/memory-mcp`, set
+6. **Move the wrapper.** Create `memory-mcp-token-sops` (step 12). Export
+   **while the host stack still runs**: the graph snapshot is a `BGSAVE`
+   through the live FalkorDB, so an export taken after the stop has no
+   `graph.rdb` and exits non-zero. Write it into the share the cluster already
+   mounts:
+
+   ```sh
+   sudo memory-export export \
+     --root /var/lib/data/graphiti/db-dumps/memory/cutover \
+     --state-dir /var/lib/memory \
+     --graph-url redis://127.0.0.1:6379 \
+     --graph-dir /var/lib/memory/falkordb \
+     --graph-timeout 120
+   sudo chmod -R a+rX /var/lib/data/graphiti/db-dumps/memory/cutover
+   ```
+
+   Then stop the host stack
+   (`sudo systemctl stop memory-export.timer; sudo systemctl stop memory-mcp
+   memory-graphiti-mcp memory-llm-proxy memory-falkordb`) and scale
+   `deploy/graphiti-falkordb` to 0. Install that export with the restore Job
+   (*Restoring the memory registry*, directory
+   `/data/db-dumps/memory/cutover`), then merge the platform branch so Flux
+   creates the wrapper against the restored state. Set
    `memoryForward.enable = true` in nix-config (which also disables the host
    units declaratively, so a reboot cannot resurrect them), rebuild, and verify
    `memory status`, one write and one search. If the graph and registry still
@@ -476,11 +491,14 @@ first cutover:
 
 ### Restoring the memory registry
 
-There is no systemd in the cluster, so the restore is a Job. The export the
-CronJob wrote is `/data/db-dumps/memory` on the `graphiti-data` share:
+There is no systemd in the cluster, so the restore is a Job. The directory
+argument is the export being installed on the `graphiti-data` share: the
+CronJob writes `/data/db-dumps/memory`, and the cutover export is
+`/data/db-dumps/memory/cutover`:
 
 ```sh
 # 1. Every writer and the graph stop first: the registry is single-writer.
+#    On the first cutover `memory-mcp` does not exist yet; skip that line.
 cluster-kubectl -n graphiti scale deploy/memory-mcp --replicas=0
 cluster-kubectl -n graphiti scale deploy/graphiti-falkordb --replicas=0
 
@@ -498,8 +516,9 @@ cluster-kubectl -n graphiti logs -f job/memory-restore
 #    restore, reconcile state, then delete it with the same Job shape and the
 #    command `rm /data/memory/.restore-in-progress`.
 
-# 4. Bring the graph and the wrapper back; the reconciler re-submits whatever
-#    the restored registry still marks pending.
+# 4. Bring the graph and the wrapper back (on the first cutover, merging the
+#    platform branch sets the replicas); the reconciler re-submits whatever the
+#    restored registry still marks pending.
 cluster-kubectl -n graphiti scale deploy/graphiti-falkordb --replicas=1
 cluster-kubectl -n graphiti scale deploy/memory-mcp --replicas=1
 ```

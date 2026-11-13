@@ -180,15 +180,19 @@ be applied at any time (a missing share just leaves the pod unstarted).
    is what maki authenticates against), so the host's copy stays authoritative
    until the wrapper itself moves.
 
-6. **Memory wrapper.** The registry moves, not just the graph. With the host
-   units stopped, run `memory export` (the online backup, never `cp` of a live
-   WAL database), copy its `registry.sqlite` to
-   `/var/lib/data/graphiti/memory/`, and restore that same export's `graph.rdb`
-   into `/var/lib/data/graphiti/falkordb/` so the graph matches the registry at
-   the cutover instant. Then start `deploy/memory-mcp`. The host's
-   `memory-forward` unit points loopback 8182 at the wrapper's tap NodePort, so
-   maki and the agent VM keep their loopback convention and
-   `memory.sammohr.dev` never leaves the host tunnel. Verify with
+6. **Memory wrapper.** The registry moves, not just the graph. Export from the
+   host **while its stack still runs** (`memory-export export`, the online
+   backup — never `cp` a live WAL database) into
+   `/var/lib/data/graphiti/db-dumps/memory/cutover` on the share; the graph
+   snapshot is a `BGSAVE` through the live FalkorDB, so an export taken after
+   the stop has no `graph.rdb`. Then stop the host units, scale
+   `deploy/graphiti-falkordb` to 0, and install that export with the restore Job
+   (`docs/manual-steps.md`, *Restoring the memory registry*) so the graph
+   matches the registry at the cutover instant. Merging the platform branch
+   creates the wrapper against that state; set `memoryForward.enable = true`
+   after it. The host's `memory-forward` unit points loopback 8182 at the
+   wrapper's tap NodePort, so maki and the agent VM keep their loopback
+   convention and `memory.sammohr.dev` never leaves the host tunnel. Verify with
    `memory status` and one write/search round trip, then keep the host units
    stopped; rollback is a forward restore of the newest export onto the host,
    not a restart of the frozen copy. The nightly `memory-export` CronJob on the
