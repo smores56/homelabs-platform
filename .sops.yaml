@@ -1,0 +1,22 @@
+# How this repository holds secrets
+#
+# Two stores, two audiences, no overlap:
+#
+#   secrets/*.yaml            operator tooling (tofu runs, scripted applies)
+#                             encrypted to the admin identity only; no host and
+#                             no cluster identity can decrypt it
+#   clusters/**/*.sops.yaml   manifests Flux decrypts in-cluster
+#                             encrypted to the flux-system `sops-age` identity,
+#                             so the controller can read what it deploys
+#
+# The admin identity is the operator's passphrase-wrapped age key. It is added to
+# both rules on purpose: a cluster manifest has to stay editable by the person who
+# maintains it.
+keys:
+  - &admin age1skuwunreduvw8gtkzyf9atsyjnku388ly8c252h3qger84fg5d7q4kf6xs
+
+creation_rules:
+  - path_regex: ^secrets/.*\.yaml$
+    key_groups:
+      - age:
+          - *admin

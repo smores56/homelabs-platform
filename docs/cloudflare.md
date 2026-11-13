@@ -91,12 +91,13 @@ Two credentials reach it, both from the environment and neither in git:
 | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | the R2 key pair, scoped to `homelabs-tofu-state` | `cloudflare` environment secrets `R2_STATE_ACCESS_KEY_ID` / `R2_STATE_SECRET_ACCESS_KEY` |
 | `CLOUDFLARE_API_TOKEN` | the zone token | `cloudflare` environment secret |
 
-Locally, `scripts/tofu-cloudflare.sh` decrypts both from nix-config's
-`secrets/smortress.yaml` (`cloudflare-api-token`, `r2-state-access-key-id`,
-`r2-state-secret-access-key`) unless they are already exported. The state pair
-is a separate token scoped to `homelabs-tofu-state`; the host's restic pair
-(`r2-access-key-id` / `r2-secret-access-key`) is deliberately not accepted here.
-`AWS_DEFAULT_REGION` is set to `auto`, because R2 has no regions.
+Locally, `scripts/tofu-cloudflare.sh` decrypts both from this repository's
+operator store (`secrets/cloudflare.yaml`: `cloudflare-api-token`,
+`r2-state-access-key-id`, `r2-state-secret-access-key`) unless they are already
+exported. The state pair is a separate token scoped to `homelabs-tofu-state`;
+the host's restic pair (`r2-access-key-id` / `r2-secret-access-key`, in
+nix-config) is deliberately not accepted here. `AWS_DEFAULT_REGION` is set to
+`auto`, because R2 has no regions.
 
 State contents are object ids and attribute values — no token, no secret. R2
 encrypts objects at rest, and there is no client-side state encryption because

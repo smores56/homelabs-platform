@@ -8,12 +8,17 @@
 # Every zone identifier comes from tofu/terraform.tfvars. Two credentials are
 # environment-provided and this script is the only place that fetches them:
 # the provider token (CLOUDFLARE_API_TOKEN) and the R2 pair for the state
-# backend (AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY). Override the encrypted
-# file with CLOUDFLARE_SECRETS_FILE, or export them yourself to skip SOPS.
+# backend (AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY).
+#
+# They come from this repository's operator store (`secrets/cloudflare.yaml`,
+# docs/secrets.md), never from the host's nix-config store: the tofu concern
+# belongs here, and a host identity has no business decrypting the zone token.
+# Override the file with CLOUDFLARE_SECRETS_FILE, or export the values yourself
+# to skip SOPS.
 set -euo pipefail
 
 root=$(git rev-parse --show-toplevel)
-secrets_file=${CLOUDFLARE_SECRETS_FILE:-$HOME/repos/github.com/smores56/nix-config/secrets/smortress.yaml}
+secrets_file=${CLOUDFLARE_SECRETS_FILE:-$root/secrets/cloudflare.yaml}
 
 # The repo state is authoritative. A state directory left over from the old
 # `just cloudflare-apply` flow leaves tofu with no state, which plans a
@@ -48,7 +53,7 @@ if [[ -z ${AWS_ACCESS_KEY_ID:-} || -z ${AWS_SECRET_ACCESS_KEY:-} ]]; then
   AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-$(sops -d --extract '["r2-state-secret-access-key"]' "$secrets_file" 2>/dev/null || true)}
   if [[ -z ${AWS_ACCESS_KEY_ID:-} || -z ${AWS_SECRET_ACCESS_KEY:-} ]]; then
     printf 'tofu-cloudflare: r2-state-access-key-id / r2-state-secret-access-key are missing from %s.\n' "$secrets_file" >&2
-    printf 'Add the state-scoped R2 pair (docs/manual-steps.md step 14); the restic pair is not used here.\n' >&2
+    printf 'Add the state-scoped R2 pair (docs/secrets.md); the restic pair is not used here.\n' >&2
     exit 1
   fi
   export AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY
