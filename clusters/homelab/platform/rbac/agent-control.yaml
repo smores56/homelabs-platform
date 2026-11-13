@@ -34,6 +34,11 @@ rules:
   - apiGroups: [""]
     resources: ["pods", "pods/log", "events"]
     verbs: ["get", "list", "watch"]
+  # Self-ownership is resolved through the Deployment's ReplicaSet UIDs, so the
+  # service must be able to read them; without this /self/* answers 502.
+  - apiGroups: ["apps"]
+    resources: ["replicasets"]
+    verbs: ["get", "list", "watch"]
   # One write, one object: the pod-template annotation that rolls the agent.
   # `resourceNames` makes `patch deployments` a no-op for anything else in the
   # namespace, and a deployment's other fields are still patchable — the
@@ -41,7 +46,7 @@ rules:
   - apiGroups: ["apps"]
     resources: ["deployments"]
     resourceNames: ["nanobot"]
-    verbs: ["patch"]
+    verbs: ["get", "patch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

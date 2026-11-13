@@ -303,7 +303,7 @@ else
 fi
 
 eq "$(jq -r 'select(.kind == "Role" and .metadata.name == "agent-control") | [.metadata.namespace, ([.rules[] | (.resources | join("+")) + ":" + (.verbs | sort | join("+"))] | sort | join(","))] | join(":")' "$rbac_json")" \
-  "tenant-apps:deployments:patch,pods+pods/log+events:get+list+watch" \
+  "tenant-apps:deployments:get+patch,pods+pods/log+events:get+list+watch,replicasets:get+list+watch" \
   "the agent-control Role grants pod/event reads and one deployment patch"
 eq "$(jq -r 'select(.kind == "Role" and .metadata.name == "agent-control") | [.rules[] | select(.resources | index("deployments")) | (.resourceNames // []) | join(",")] | join(",")' "$rbac_json")" \
   "nanobot" "the patch rule is scoped to deployments/nanobot"

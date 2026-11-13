@@ -119,7 +119,7 @@ the agent gets** — there is no kubeconfig, no proxy and no generic forwarding.
 | Piece | Where | Ceiling |
 | --- | --- | --- |
 | Service | `tenant-apps/agent-control`, ClusterIP **8081** | ingress only from the `broker` namespace on 8081; egress only DNS and the k3s API range (443/6443) |
-| Role | `tenant-apps/agent-control` (platform RBAC stage) | `pods`, `pods/log`, `events` get/list/watch; `patch` on `deployments/nanobot` only (`resourceNames`) |
+| Role | `tenant-apps/agent-control` (platform RBAC stage) | `pods`, `pods/log`, `events`, `replicasets` get/list/watch; `get`/`patch` on `deployments/nanobot` only (`resourceNames`) |
 | ClusterRole | `agent-control-read`, bound in the agent-control stage | `pods`, `events`, `nodes` get/list/watch; `deployments`, `statefulsets`, `daemonsets` get/list; Flux `kustomizations` get/list |
 
 The HTTP surface is exactly nine routes; any other path is `404` and a wrong
