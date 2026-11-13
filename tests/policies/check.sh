@@ -450,7 +450,14 @@ eq "$(jq -r '[.[] | select(.kind == "Ingress" and .metadata.namespace == "graphi
 eq "$(jq -r '.[] | select(.kind == "Deployment" and .metadata.name == "memory-mcp") | "\(.spec.replicas):\(.spec.strategy.type)"' "$work/data-apps.json")" \
   "1:Recreate" "one wrapper replica, Recreate (single-writer SQLite on the share)"
 eq "$(jq -r '.[] | select(.kind == "Deployment" and .metadata.name == "memory-mcp") | .spec.template.spec.containers[0].env[] | select(.name == "MEMORY_MCP_TOKEN_FILE") | .value' "$work/data-apps.json")" \
-  "/secrets/memory-mcp-token" "the wrapper reads its bearer token from the contract Secret"
+  "/secrets/token" "the wrapper reads its bearer token from the projected Secret key"
+# A Secret volume mounts keys, not the Secret's name. If the ExternalSecret's
+# target key and the filename the wrapper opens drift apart, every request 503s
+# while the pod stays Ready (the /health probe is token-exempt).
+token_file=$(jq -r '.[] | select(.kind == "Deployment" and .metadata.name == "memory-mcp") | .spec.template.spec.containers[0].env[] | select(.name == "MEMORY_MCP_TOKEN_FILE") | .value' "$work/data-apps.json")
+eq "${token_file##*/}" \
+  "$(yq -r '.spec.data[0].secretKey' clusters/homelab/platform/secrets/eso/graphiti-memory-token.yaml)" \
+  "the wrapper opens the key the ExternalSecret projects"
 eq "$(jq -r '.[] | select(.kind == "Deployment" and .metadata.name == "memory-mcp") | .spec.template.spec.containers[0].env[] | select(.name == "MEMORY_LLM_URL") | .value' "$work/data-apps.json")" \
   "" "the wrapper has no model gateway to probe in-cluster"
 # An absent variable would silently restore the 127.0.0.1:8082 default and re-arm

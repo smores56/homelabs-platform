@@ -83,8 +83,11 @@ spec:
               value: qwen3-embedding-8b
             - name: MEMORY_STATE_DIR
               value: /data/memory
+            # A Secret volume mounts each key as a file named after the key, not
+            # after the Secret: the ExternalSecret projects `token`, so the file
+            # is /secrets/token.
             - name: MEMORY_MCP_TOKEN_FILE
-              value: /secrets/memory-mcp-token
+              value: /secrets/token
             # Same reconciler contract as the host unit (service.nix on the host).
             - name: MEMORY_RECONCILE_INTERVAL
               value: "10"
