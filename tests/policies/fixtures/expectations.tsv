@@ -40,3 +40,6 @@ agent-pod-automount.yaml	tenant-apps	deny	agent-identity	automountServiceAccount
 broker-pod-good.yaml	broker	allow	-	-
 broker-pod-no-gvisor.yaml	broker	deny	broker-runtime	broker pods must run on gvisor
 broker-pod-writable-root.yaml	broker	deny	broker-runtime	readOnlyRootFilesystem: true
+webhook-pod-good.yaml	webhook	allow	-	-
+webhook-pod-no-gvisor.yaml	webhook	deny	webhook-runtime	webhook pods must run on gvisor
+webhook-pod-writable-root.yaml	webhook	deny	webhook-runtime	readOnlyRootFilesystem: true

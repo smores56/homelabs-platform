@@ -1,0 +1,25 @@
+# expect: deny webhook-runtime
+apiVersion: v1
+kind: Pod
+metadata:
+  name: webhook-writable-root
+  namespace: webhook
+  labels:
+    app.kubernetes.io/name: webhook
+    homelabs.dev/tier: webhook
+spec:
+  runtimeClassName: gvisor
+  automountServiceAccountToken: false
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 65532
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: webhook
+      image: ghcr.io/smores56/homelabs-platform/webhook@sha256:0000000000000000000000000000000000000000000000000000000000000000
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: false
+        capabilities:
+          drop: ["ALL"]
