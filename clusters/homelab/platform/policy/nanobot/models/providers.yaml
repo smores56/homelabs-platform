@@ -26,7 +26,9 @@ models:
       # Neuralwatt maps reasoning_effort per model for this one.
       reasoning: effort
       efforts:
-        off: none
+        # Quoted: bare `off` is a YAML 1.1 boolean, so the key would parse as
+        # false before render.py ever sees it.
+        "off": none
         minimal: low
         low: low
         medium: medium
