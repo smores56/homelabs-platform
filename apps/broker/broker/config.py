@@ -22,6 +22,9 @@ LOGICAL_HOST = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$")
 HEADER_NAME = re.compile(r"^[A-Za-z0-9!#$%&'*+.^_`|~-]+$")
 HEADER_VALUE_FORBIDDEN = ("\r", "\n", "\0")
 SECRET_NAME = re.compile(r"^[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?$")
+GITHUB_PERMISSION = re.compile(r"^[a-z][a-z_]*$")
+PERMISSION_LEVELS = frozenset({"read", "write", "admin"})
+REPOSITORY_NAME = re.compile(r"^[A-Za-z0-9._-]{1,100}$")
 INJECTION_KINDS = frozenset({"bearer", "header", "basic", "none"})
 # Enrollment headers may not smuggle a credential of their own; the only
 # credential on the wire is the one named by `inject`.
@@ -51,6 +54,27 @@ class Injection:
 
 
 @dataclass(frozen=True)
+class AppScope:
+    """One logical host's slice of the app: an installation plus what it may do.
+
+    `installation` is the *secret file name* that holds the numeric id, so a
+    reinstall does not need a commit.
+    """
+
+    installation: str
+    repositories: tuple[str, ...]
+    permissions: tuple[tuple[str, str], ...]
+
+
+@dataclass(frozen=True)
+class GithubAppConfig:
+    """Non-secret names of the two files the operator supplies."""
+
+    key_secret: str = "github-app-private-key"
+    id_secret: str = "github-app-id"
+
+
+@dataclass(frozen=True)
 class Enrollment:
     name: str
     scheme: str
@@ -60,6 +84,7 @@ class Enrollment:
     secret_name: str
     injection: Injection
     headers: tuple[tuple[str, str], ...] = ()
+    app: AppScope | None = None
 
     @property
     def default_port(self) -> bool:
@@ -76,6 +101,52 @@ class Config:
     listen_port: int
     deny_addresses: tuple[ipaddress.IPv4Address | ipaddress.IPv6Address, ...]
     hosts: dict[str, Enrollment]
+    github_app: GithubAppConfig | None = None
+
+
+def _parse_app_scope(logical: str, raw: object) -> AppScope:
+    if not isinstance(raw, dict):
+        raise ConfigError(f"{logical}: github_app must be an object")
+    unknown = set(raw) - {"installation", "repositories", "permissions"}
+    if unknown:
+        raise ConfigError(f"{logical}: unknown github_app keys {sorted(unknown)}")
+    installation = raw.get("installation")
+    if not isinstance(installation, str) or not SECRET_NAME.match(installation):
+        raise ConfigError(f"{logical}: github_app.installation must be a secret file name")
+    repositories = raw.get("repositories")
+    if not isinstance(repositories, list) or not repositories:
+        raise ConfigError(f"{logical}: github_app.repositories must be a non-empty list")
+    if not all(isinstance(repo, str) and REPOSITORY_NAME.match(repo) for repo in repositories):
+        raise ConfigError(f"{logical}: github_app.repositories must be repository names")
+    permissions = raw.get("permissions")
+    if not isinstance(permissions, dict) or not permissions:
+        raise ConfigError(f"{logical}: github_app.permissions must be a non-empty object")
+    for key, level in permissions.items():
+        if not isinstance(key, str) or not GITHUB_PERMISSION.match(key):
+            raise ConfigError(f"{logical}: bad github_app permission {key!r}")
+        if level not in PERMISSION_LEVELS:
+            raise ConfigError(f"{logical}: github_app permission {key} must be read, write or admin")
+    return AppScope(
+        installation=installation,
+        repositories=tuple(repositories),
+        permissions=tuple(sorted(permissions.items())),
+    )
+
+
+def _parse_app_config(raw: object) -> GithubAppConfig:
+    if not isinstance(raw, dict):
+        raise ConfigError("github_app must be an object")
+    unknown = set(raw) - {"key_secret", "id_secret"}
+    if unknown:
+        raise ConfigError(f"github_app: unknown keys {sorted(unknown)}")
+    key_secret = raw.get("key_secret", "github-app-private-key")
+    id_secret = raw.get("id_secret", "github-app-id")
+    for name in (key_secret, id_secret):
+        if not isinstance(name, str) or not SECRET_NAME.match(name):
+            raise ConfigError("github_app file names must be secret file names")
+    if key_secret == id_secret:
+        raise ConfigError("github_app key_secret and id_secret must differ")
+    return GithubAppConfig(key_secret=key_secret, id_secret=id_secret)
 
 
 def _parse_injection(logical: str, raw: object) -> Injection:
@@ -127,10 +198,18 @@ def _parse_enrollment(logical: str, raw: object) -> Enrollment:
 
     injection = _parse_injection(logical, raw.get("inject"))
     secret_name = raw.get("secret", "")
+    app = _parse_app_scope(logical, raw["github_app"]) if "github_app" in raw else None
+    if app is not None and secret_name:
+        raise ConfigError(f"{logical}: github_app and secret are mutually exclusive")
+    if app is not None:
+        if injection.kind not in {"bearer", "basic"}:
+            raise ConfigError(f"{logical}: github_app requires bearer or basic injection")
+        if scheme != "https":
+            raise ConfigError(f"{logical}: github_app requires https")
     if injection.kind == "none":
         if secret_name:
             raise ConfigError(f"{logical}: no-injection enrollment must not name a secret")
-    else:
+    elif app is None:
         if not isinstance(secret_name, str) or not SECRET_NAME.match(secret_name):
             raise ConfigError(f"{logical}: credentialed enrollment needs a secret file name")
         if injection.kind != "none" and scheme != "https" and not allow_private:
@@ -163,6 +242,7 @@ def _parse_enrollment(logical: str, raw: object) -> Enrollment:
         secret_name=secret_name,
         injection=injection,
         headers=tuple(headers),
+        app=app,
     )
 
 
@@ -200,13 +280,27 @@ def load_config(path: str | Path, env: dict[str, str] | None = None) -> Config:
         raise ConfigError("logical_hosts must be a non-empty object")
     hosts = {name: _parse_enrollment(name, value) for name, value in raw_hosts.items()}
 
+    raw_app = raw.get("github_app")
+    github_app = _parse_app_config(raw_app) if raw_app is not None else None
+    consumers = [name for name, enrollment in hosts.items() if enrollment.app]
+    if consumers and github_app is None:
+        raise ConfigError(f"enrollments need a top-level github_app: {sorted(consumers)}")
+    if github_app is not None and not consumers:
+        raise ConfigError("github_app is configured but no enrollment uses it")
+
     deny = [_parse_address(item) for item in raw.get("deny_addresses", [])]
     # A node IP outside the private ranges (a public-cloud node) has to be
     # refused explicitly; env keeps it a per-deployment fact, not a repo edit.
     for item in env.get("BROKER_DENY_ADDRESSES", "").replace(",", " ").split():
         deny.append(_parse_address(item))
 
-    return Config(listen_host=listen_host, listen_port=port, deny_addresses=tuple(deny), hosts=hosts)
+    return Config(
+        listen_host=listen_host,
+        listen_port=port,
+        deny_addresses=tuple(deny),
+        hosts=hosts,
+        github_app=github_app,
+    )
 
 
 def load_secrets(hosts: dict[str, Enrollment], directory: str | Path) -> dict[str, str]:
@@ -225,3 +319,42 @@ def load_secrets(hosts: dict[str, Enrollment], directory: str | Path) -> dict[st
             raise ConfigError(f"{enrollment.name}: secret {name} is empty")
         secrets[name] = value
     return secrets
+
+
+@dataclass(frozen=True)
+class AppSigning:
+    app_id: int
+    private_key: bytes
+    # secret file name -> numeric installation id
+    installations: dict[str, int]
+
+
+def _read_integer(base: Path, name: str, label: str) -> int:
+    try:
+        text = Path(base, name).read_text().strip()
+    except OSError as exc:
+        raise ConfigError(f"github-app: cannot read {label} {name}: {exc}") from None
+    if not text.isdigit() or int(text) <= 0:
+        raise ConfigError(f"github-app: {name} must be a positive integer")
+    return int(text)
+
+
+def load_app_signing(config: Config, directory: str | Path) -> AppSigning | None:
+    """Read the app id, private key and installation ids once; any gap is fatal."""
+    if config.github_app is None:
+        return None
+    base = Path(directory)
+    app_id = _read_integer(base, config.github_app.id_secret, "app id")
+    key_name = config.github_app.key_secret
+    try:
+        key = Path(base, key_name).read_bytes()
+    except OSError as exc:
+        raise ConfigError(f"github-app: cannot read private key {key_name}: {exc}") from None
+    if b"PRIVATE KEY-----" not in key or b"-----BEGIN" not in key:
+        raise ConfigError(f"github-app: {key_name} is not a PEM private key")
+    installations: dict[str, int] = {}
+    for enrollment in config.hosts.values():
+        if enrollment.app is not None:
+            name = enrollment.app.installation
+            installations[name] = _read_integer(base, name, "installation id")
+    return AppSigning(app_id=app_id, private_key=key, installations=installations)

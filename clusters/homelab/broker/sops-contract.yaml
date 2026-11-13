@@ -2,8 +2,9 @@
 # No value is here: the Secret is assembled from SOPS-decrypted files by the
 # operator (docs/manual-steps.md, "Create the broker credential Secret").
 #
-# One key per logical host; a key is a file the broker reads at startup. The
-# enrollment file names the key, never the value.
+# Static enrollments name one key each in `keys`; GitHub App enrollments name
+# files in `app_keys` (the app id, the private key, and one installation id per
+# installation). The enrollment file names the files, never a value.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -15,7 +16,9 @@ data:
   secretName: broker-credentials
   namespace: broker
   keys: >-
-    neuralwatt-api-key,github-apps-token,github-platform-token,github-fork-token,tinyfish-api-key,loki-gateway-token
+    neuralwatt-api-key,tinyfish-api-key,loki-gateway-token
+  app_keys: >-
+    github-app-id,github-app-private-key,github-apps-installation-id,github-platform-installation-id
   source: >-
     broker-credentials.yaml, SOPS-encrypted with the flux-system age recipient;
     decrypt with `sops -d` and pipe each key into the Secret. Never commit the

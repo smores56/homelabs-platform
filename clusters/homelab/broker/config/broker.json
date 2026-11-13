@@ -1,6 +1,7 @@
 {
   "listen": "0.0.0.0:8080",
   "deny_addresses": [],
+  "github_app": {"key_secret": "github-app-private-key", "id_secret": "github-app-id"},
   "logical_hosts": {
     "neuralwatt": {
       "scheme": "https",
@@ -17,7 +18,30 @@
       "host": "github.com",
       "port": 443,
       "allow_private": false,
-      "secret": "github-apps-token",
+      "github_app": {
+        "installation": "github-apps-installation-id",
+        "repositories": ["homelabs-apps"],
+        "permissions": {
+          "contents": "write"
+        }
+      },
+      "inject": {
+        "kind": "basic",
+        "username": "x-access-token"
+      }
+    },
+    "github-platform-push": {
+      "scheme": "https",
+      "host": "github.com",
+      "port": 443,
+      "allow_private": false,
+      "github_app": {
+        "installation": "github-platform-installation-id",
+        "repositories": ["homelabs-platform"],
+        "permissions": {
+          "contents": "write"
+        }
+      },
       "inject": {
         "kind": "basic",
         "username": "x-access-token"
@@ -28,20 +52,16 @@
       "host": "api.github.com",
       "port": 443,
       "allow_private": false,
-      "secret": "github-platform-token",
+      "github_app": {
+        "installation": "github-platform-installation-id",
+        "repositories": ["homelabs-platform"],
+        "permissions": {
+          "contents": "read",
+          "pull_requests": "write"
+        }
+      },
       "inject": {
         "kind": "bearer"
-      }
-    },
-    "github-fork": {
-      "scheme": "https",
-      "host": "github.com",
-      "port": 443,
-      "allow_private": false,
-      "secret": "github-fork-token",
-      "inject": {
-        "kind": "basic",
-        "username": "x-access-token"
       }
     },
     "tinyfish": {

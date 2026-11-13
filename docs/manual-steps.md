@@ -4,52 +4,43 @@ Everything here needs a human: account creation, 2FA, token issuance, and the
 one-time GitHub settings that `gh api` is allowed to change but an agent must
 not. Record the date and who ran it when it is done.
 
-## 1. Create the nanobot machine user
+## 1. Create the `smores56-homelabs-agent` GitHub App
 
-nanobot forked from `homelabs-platform` cannot be the owner's own account
-(GitHub refuses a fork of your own repository), so it needs a second identity.
+The agent's GitHub identity is an app, not a user: installation tokens are
+short-lived, scoped per request by the broker, and revocable from the app's
+settings page. There are no PATs for the agent anywhere.
 
-1. Create a dedicated GitHub account, e.g. `smores56-nanobot`, with an email
-   address the owner controls. Enable 2FA with a separate TOTP secret stored in
-   the owner's password manager; do not reuse the owner's credentials.
-2. Add the account as an outside collaborator:
-   - `smores56/homelabs-platform`: **read** (Metadata read + Contents read).
-   - `smores56/homelabs-apps`: **write** (contents read/write, pull requests
-     read/write).
-3. Fork and PR contract on the platform repo. Create the fork **as the machine
-   user** (`gh repo fork` while authenticated as it, or the web UI):
-   - If GitHub accepts `POST /repos/smores56/homelabs-platform/forks` for a
-     read-only collaborator, keep read access: the fork is the only place the
-     account can push, and `docs/negative-tests.md` tests that boundary.
-   - If GitHub rejects the fork for read-only access, grant **write** instead.
-     Branch protection still keeps the account off `main` (PR required, no
-     force-push, required checks), but the fork no longer isolates the account,
-     so the `fork-pr-secret-boundary` job stays the load-bearing control and the
-     environment restriction below is what protects the token.
-4. Credentials for the broker (logical host contracts, not GitHub logins):
-   - `github-apps-token`: fine-grained PAT minted by the machine user, resource
-     owner `smores56`, repository access `homelabs-apps` only, permission
-     **Contents: read and write**, expiry 90 days. Logical host `github-apps`
-     injects it as git basic auth (`x-access-token:<token>`) on `github.com`.
-   - `github-platform-token`: fine-grained PAT, repository access
-     `smores56/homelabs-platform`, permission **Contents: read**, **Pull
-     requests: read and write**, expiry 90 days. Logical host
-     `github-platform` (REST on `api.github.com`, bearer) uses it for fork and
-     PR calls.
-   - `github-fork-token`: fine-grained PAT, repository access
-     `smores56-nanobot/homelabs-platform` (the fork; create it before this
-     token), permission **Contents: read and write**, expiry 90 days. Logical
-     host `github-fork` (git push to the fork, basic) uses it. A fine-grained
-     PAT covers one repository owner, so the fork and the upstream cannot share
-     one.
-   - `github-backup-read-pat` (not a broker host): fine-grained PAT owned by
-     the operator, resource owner `smores56`, repository access exactly
-     `homelabs-platform` and `homelabs-apps`, permission **Contents: read**
-     only, expiry 90 days. It is the platform mirror's credential (step 22),
-     and a classic `repo`-scoped PAT is refused by the job at start.
-   Record these PATs in the broker's `broker-credentials` Secret (step 10) or
-   the mirror's Secret (step 22), never in this repository and never in
-   `homelabs-apps`.
+A GitHub App cannot fork a repository, and GitHub refuses a fork of your own
+private repository. The agent therefore pushes `agent/*` branches to
+`homelabs-platform` and opens same-repo pull requests. Same-repo PRs run
+`pull_request` workflows inside the base repository, so the fork boundary is
+gone; the remaining controls are that no repository-level secrets exist (only
+main-gated environment secrets), and the ruleset in item 3.
+
+1. Create the app at https://github.com/settings/apps/new:
+   - Name: `smores56-homelabs-agent` (its actor becomes
+     `smores56-homelabs-agent[bot]`).
+   - Homepage: `https://github.com/smores56/homelabs-platform`.
+   - Webhook: inactive (the broker polls; nothing is delivered to it).
+   - Repository permissions: **Contents: read and write**, **Pull requests:
+     read and write**, **Metadata: read** (mandatory); **Actions: read** if you
+     want CI status in agent context.
+   - Where can this app be installed: **Only on this account**.
+2. Record the **App ID** from the app's settings page, generate a **private
+   key** (downloads a `.pem`; keep it in the password manager), then install the
+   app on `smores56/homelabs-apps` and `smores56/homelabs-platform`. Record each
+   **installation ID** from the install URL (`/installations/<id>`). The app id,
+   key and installation ids reach the broker only as files (step 10); nothing is
+   committed.
+3. Contain the identity to `agent/*`: Settings -> Rules -> Rulesets -> New
+   branch ruleset:
+   - Target: include by pattern `~ALL`, exclude by pattern `agent/*`.
+   - Rules: Restrict creations, Restrict updates, Restrict deletions.
+   - Bypass list: Repository admins (the human); leave the app out.
+   Branch protection on `main` (step 5) still requires a PR and passing checks,
+   so the app can neither merge nor force-push.
+4. The mirror's `github-backup-read-pat` (step 22) is not the agent's identity;
+   it stays an operator-owned fine-grained PAT.
 
 ## 2. Create the `cloudflare` environment secret
 
@@ -127,12 +118,13 @@ to an environment that exists.
 
 Run the commands from `docs/runbook.md` section "Branch protection on main".
 They require the same admin token; `enforce_admins` is false so the owner can
-still push a bootstrap commit, while the machine user and every other account
-are bound by PR review and the required checks.
+still push a bootstrap commit, while `smores56-homelabs-agent[bot]` and every
+other identity are bound by PR review and the required checks.
 
-After applying, confirm the machine user cannot push to `main` (expected:
-`protected branch hook declined`) and cannot force-push (expected: `Cannot
-force-push to a protected branch`). Record both outputs beside the runbook.
+After applying, confirm the app cannot push to `main` (expected: `protected
+branch hook declined`) and cannot force-push (expected: `Cannot force-push to a
+protected branch`); the ruleset from step 1 covers every branch outside
+`agent/*`. Record both outputs beside the runbook.
 
 ## 6. Create the SOPS age identity
 
@@ -245,74 +237,61 @@ until that image is published and pinned (its `docs/manual-steps.md`, step 3).
 ## 10. Create the broker credential Secret
 
 The broker is platform-owned (`clusters/homelab/broker/`); this step supplies
-its six credential files. They never enter git or either repository. The
-enrollment (`clusters/homelab/broker/config/broker.json`) names them:
-`neuralwatt-api-key`, `github-apps-token`, `github-platform-token`,
-`github-fork-token`, `tinyfish-api-key` and `loki-gateway-token`. **Step 1 must
-be finished first**: two of the six are minted by the machine user, and the
-fork token cannot exist before the fork.
+seven files, none of which enters git. Static enrollments name three of them
+(`keys` in `clusters/homelab/broker/sops-contract.yaml`); the GitHub App
+enrollments add the app id, the private key and one installation id per
+installation (`app_keys`). **Step 1 must be finished first.**
 
 Run this on smortress as `smores`. `cluster-kubectl` reads a root-only
 kubeconfig, hence `sudo`.
 
 ```sh
-# 1. The two host-resident provider keys (the same values the host's agents
-#    already use) and the cluster-generated gateway token.
 NW=$(cat /run/secrets/neuralwatt-api-key)
 TF=$(cat /run/secrets/tinyfish-api-key)
 LOKI=$(sudo cluster-kubectl -n observability get secret loki-gateway-token \
   -o jsonpath='{.data.password}' | base64 -d)
+read -rp 'App ID (digits): ' APP_ID
+read -rp 'homelabs-apps installation ID: ' APPS_INST
+read -rp 'homelabs-platform installation ID: ' PLATFORM_INST
+read -rsp 'private key path: ' KEY_PATH; echo
 
-# 2. The three PATs from step 1, pasted at a prompt that does not echo.
-read -rsp 'github-apps-token: ' APPS; echo
-read -rsp 'github-platform-token: ' PLATFORM; echo
-read -rsp 'github-fork-token: ' FORK; echo
-
-# 3. One SOPS file, 0600, encrypted to the flux-system age recipient.
+# No value reaches the command line or a transcript.
 umask 077
-jq -n --arg nw "$NW" --arg apps "$APPS" --arg platform "$PLATFORM" \
-      --arg fork "$FORK" --arg tinyfish "$TF" --arg loki "$LOKI" \
-  '{ "neuralwatt-api-key": $nw, "github-apps-token": $apps,
-     "github-platform-token": $platform, "github-fork-token": $fork,
-     "tinyfish-api-key": $tinyfish, "loki-gateway-token": $loki }' \
-  > broker-credentials.yaml
-sops -e -i broker-credentials.yaml
-unset NW TF LOKI APPS PLATFORM FORK
-
-# 4. Materialise the Secret: one file per enrolled key, no value on the
-#    command line and none in shell history.
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
-sops -d broker-credentials.yaml > "$tmp/creds.json"
-for key in neuralwatt-api-key github-apps-token github-platform-token \
-           github-fork-token tinyfish-api-key loki-gateway-token; do
-  jq -r --arg k "$key" '.[$k]' "$tmp/creds.json" > "$tmp/$key"
-done
-rm -f "$tmp/creds.json"   # --from-file turns every entry into a key
+printf '%s\n' "$NW" > "$tmp/neuralwatt-api-key"
+printf '%s\n' "$TF" > "$tmp/tinyfish-api-key"
+printf '%s\n' "$LOKI" > "$tmp/loki-gateway-token"
+printf '%s\n' "$APP_ID" > "$tmp/github-app-id"
+printf '%s\n' "$APPS_INST" > "$tmp/github-apps-installation-id"
+printf '%s\n' "$PLATFORM_INST" > "$tmp/github-platform-installation-id"
+install -m 0600 "$KEY_PATH" "$tmp/github-app-private-key"
+unset NW TF LOKI APP_ID APPS_INST PLATFORM_INST
+
 sudo cluster-kubectl -n broker create secret generic broker-credentials \
   --from-file="$tmp"
 sudo cluster-kubectl -n broker rollout restart deployment/broker
 ```
 
-The broker strips whitespace from each file and aborts at start if one is
-missing, so a failed Secret leaves the pod pending rather than forwarding
-unauthenticated requests. To rotate: `sudo cluster-kubectl -n broker delete
-secret broker-credentials`, then repeat steps 3-4 with the new value.
-
-Verify from inside the broker pod (the image has no `curl`; the two in-cluster
-hosts are the only ones that need neither DNS nor TLS):
+The broker aborts at start if a static file is missing, and answers 503 for a
+GitHub host whose token cannot be minted; it never forwards without a
+credential. Verify the three credential classes:
 
 ```sh
 sudo cluster-kubectl -n broker exec deploy/broker -- python -c '
-import json, urllib.request
-print(urllib.request.urlopen("http://127.0.0.1:8080/healthz").status)
-r = urllib.request.urlopen("http://127.0.0.1:8080/loki/loki/api/v1/labels")
-print(r.status, json.load(r)["status"])
+import urllib.request
+for path in ("healthz", "loki/loki/api/v1/labels", "github-platform/rate_limit"):
+    r = urllib.request.urlopen(f"http://127.0.0.1:8080/{path}")
+    print(path, r.status, r.read(200))
 '
 ```
 
-Expected: `200` for health, and `200` for the Loki labels call with the gateway
-returning `{"status":"success",...}`. A tenant pod must reach only port 8080
-(NetworkPolicy) and the gateway must answer 401 without the token.
+Expected: `200`; `200` with the Loki gateway's `{"status":"success"...}`; and
+`200` with the installation's rate limit. A `401` on `rate_limit` means the app
+id, private key or installation id is wrong.
+
+Rotation: generate a new key in the app settings, delete the Secret, repeat this
+step (credentials are read once at start). `github-platform-installation-id` is
+shared by the git-transport and REST enrollments.
 
 ## 11. Rotate the Loki gateway token
 
@@ -577,8 +556,9 @@ Replace the `image:` line with
 `ghcr.io/smores56/homelabs-platform/broker@sha256:<digest>`, delete the
 `PLACEHOLDER DIGEST` comment, and run `scripts/kustomize-build-all.sh` and
 `tests/policies/check.sh` before pushing. The Dockerfile's base tag
-(`python:3.13-slim`) should be replaced with its digest in the same change; the
-broker has no third-party dependencies, so there is nothing else to pin.
+(`python:3.13-slim`) should be replaced with its digest in the same change. The
+image installs one pinned dependency, `cryptography==44.0.0` (RS256 JWT
+signing); bump it deliberately with the image digest.
 
 Verify: `kubectl -n broker get pods` shows two `Running` replicas on
 `runsc`, and `kubectl -n broker get pod -o

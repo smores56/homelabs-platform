@@ -54,25 +54,28 @@ TINYFISH_BASE_URL=http://broker.broker.svc.cluster.local:8080/tinyfish
 ## Logical-host enrollment
 
 `clusters/homelab/broker/config/broker.json` is the reviewed, non-secret
-enrollment. Credentials are files in the `broker-credentials` Secret, named by
-the enrollment, read once at start.
+enrollment. Static credentials are files in the `broker-credentials` Secret;
+GitHub App enrollments name the app id, private key and installation id files
+instead, and the broker mints a short-lived, scoped installation token for
+each request's logical host (see "GitHub App identity" below).
 
 | Logical host | Real endpoint | Injection | Secret key | Private allowed |
 | --- | --- | --- | --- | --- |
 | `neuralwatt` | `https://api.neuralwatt.com:443` | `Authorization: Bearer` | `neuralwatt-api-key` | no |
-| `github-apps` | `https://github.com:443` | `Authorization: Basic x-access-token:<token>` | `github-apps-token` | no |
-| `github-platform` | `https://api.github.com:443` | `Authorization: Bearer` | `github-platform-token` | no |
-| `github-fork` | `https://github.com:443` | `Authorization: Basic x-access-token:<token>` | `github-fork-token` | no |
+| `github-apps` | `https://github.com:443` | `Authorization: Basic x-access-token:<token>` | app: `homelabs-apps`, `contents: write` | no |
+| `github-platform-push` | `https://github.com:443` | `Authorization: Basic x-access-token:<token>` | app: `homelabs-platform`, `contents: write` | no |
+| `github-platform` | `https://api.github.com:443` | `Authorization: Bearer` | app: `homelabs-platform`, `contents: read`, `pull_requests: write` | no |
 | `tinyfish` | `https://api.search.tinyfish.ai:443` | `X-Api-Key: <token>` | `tinyfish-api-key` | no |
 | `loki` | `http://loki-gateway.observability.svc.cluster.local:3100` | `Authorization: Bearer`, fixed `X-Scope-OrgID: data` | `loki-gateway-token` | yes |
 | `status` | `http://status-exporter.observability.svc.cluster.local:9101` | none (metrics text) | — | yes |
 
-`github-fork` is the git transport half of the `github-platform` capability:
-GitHub serves git smart HTTP only on `github.com`, while fork and PR calls are
-REST on `api.github.com`. A fine-grained PAT is scoped to one repository owner,
-so the upstream (`smores56/homelabs-platform`) and the fork
-(`smores56-nanobot/homelabs-platform`) need separate tokens; each is still the
-narrow half of "fork and open a PR on homelabs-platform".
+`github-platform-push` is the git transport half of the `github-platform`
+capability: GitHub serves git smart HTTP only on `github.com`, while PR calls
+are REST on `api.github.com`. The agent pushes `agent/*` branches to
+`homelabs-platform` and opens same-repo pull requests; there is no fork (a
+GitHub App cannot fork, and GitHub refuses a fork of your own private
+repository), so branch rulesets, not the fork boundary, keep the identity off
+every other branch (docs/manual-steps.md step 1).
 
 The two private enrollments are the only exception to the TLS rule: they never
 leave the cluster network and their credentials are already cluster-local. A
@@ -242,10 +245,26 @@ curl -sS -o /dev/null -D - https://agent.sammohr.dev/ | head -3
 ### Repository mirror cross-reference
 
 The platform's `github-backup` CronJob (`clusters/homelab/platform/backup/`,
-`docs/runbook.md` "Repository mirror") uses a separate fine-grained read-only
-PAT, not a broker logical host. It never shares the `github-*-token` values:
-the broker's tokens are scoped to the machine user's fork/PR capability, and
-the mirror's token is scoped to `Contents: read` on the two repositories.
+`docs/runbook.md` "Repository mirror") uses a separate operator-owned
+fine-grained read-only PAT, not a broker logical host. The broker mints its own
+installation tokens from the app; the mirror's PAT is scoped to `Contents:
+read` on the two repositories and is not the agent's identity.
+
+### GitHub App identity
+
+The broker holds `smores56-homelabs-agent`'s private key and mints installation
+tokens on demand (`apps/broker/broker/github_app.py`): an RS256 JWT
+(`iat` −60 s, `exp` +540 s, `iss` = app id) is exchanged at
+`POST /app/installations/{id}/access_tokens` with the enrollment's
+`repositories` and `permissions` subset. Tokens live one hour; the broker
+reuses one until 5 minutes before expiry, keyed by installation, repositories
+and permissions, and includes the live tokens in its redaction set. A minting
+failure is a `503` for that request — never a forward without a credential.
+
+The app's permissions are app-wide, so the per-host split above is enforced by
+these minted scopes plus the reviewed `broker.json`. The trust boundary is
+unchanged: the broker was already the only credential holder; now the credential
+is short-lived and revocable from the app's settings page.
 
 ## Verification
 

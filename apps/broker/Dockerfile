@@ -14,3 +14,6 @@ USER 65532:65532
 EXPOSE 8080
 
 ENTRYPOINT ["python", "-m", "broker"]
+# The only third-party dependency: RS256 signing for GitHub App JWTs. Imported
+# lazily, so the unit suite still runs on the stdlib.
+RUN pip install --no-cache-dir 'cryptography==44.0.0'

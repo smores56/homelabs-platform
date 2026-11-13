@@ -19,6 +19,7 @@ import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from broker.config import Config, Enrollment, Injection
+from broker.credentials import StaticCredentials
 from broker.server import Broker, make_server
 
 SECRET = "s3cr3t-broker-token"
@@ -140,7 +141,7 @@ class BrokerTest(unittest.TestCase):
     def start(self, resolver) -> None:
         broker = Broker(
             config=self.config,
-            secrets={"test-token": SECRET, "loki-token": "loki-secret"},
+            credentials=StaticCredentials({"test-token": SECRET, "loki-token": "loki-secret"}),
             resolver=resolver,
             connector=lambda enrollment, pinned, timeout: http.client.HTTPConnection(
                 "127.0.0.1", self.upstream_port, timeout=timeout

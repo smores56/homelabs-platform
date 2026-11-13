@@ -500,7 +500,7 @@ fi
 # agent's BROKER_URL paths depend on; the unit tests parse the same file.
 enrollment='.[] | select(.kind == "ConfigMap" and (.metadata.name | startswith("broker-config"))) | .data["broker.json"] | fromjson'
 eq "$(jq -r "$enrollment | .logical_hosts | keys | sort | join(\",\")" "$work/broker.json")" \
-  "github-apps,github-fork,github-platform,loki,neuralwatt,status,tinyfish" \
+  "github-apps,github-platform,github-platform-push,loki,neuralwatt,status,tinyfish" \
   "the broker enrolls exactly the agent's logical hosts"
 eq "$(jq -r "$enrollment | [.logical_hosts | to_entries[] | select(.value.allow_private) | .key] | sort | join(\",\")" "$work/broker.json")" \
   "loki,status" "only the two in-cluster hosts are private enrollments"
@@ -510,9 +510,18 @@ eq "$(jq -r "$enrollment | .logical_hosts[\"github-apps\"].inject.kind" "$work/b
   "github-apps injects git basic auth"
 eq "$(jq -r "$enrollment | .logical_hosts[\"github-platform\"].host" "$work/broker.json")" "api.github.com" \
   "github-platform is the REST API host"
+eq "$(jq -r "$enrollment | .logical_hosts[\"github-platform-push\"].host" "$work/broker.json")" "github.com" \
+  "github-platform-push is the git transport host"
+eq "$(jq -r "$enrollment | .logical_hosts[\"github-apps\"].github_app.permissions.contents" "$work/broker.json")" "write" \
+  "github-apps may write contents"
+eq "$(jq -r "$enrollment | .logical_hosts[\"github-platform\"].github_app.permissions | keys | sort | join(\",\")" "$work/broker.json")" \
+  "contents,pull_requests" "github-platform asks only for contents and pull requests"
 eq "$(jq -r "$enrollment | [.logical_hosts[] | .secret // empty] | unique | sort | join(\",\")" "$work/broker.json")" \
   "$(jq -r '.[] | select(.kind == "ConfigMap" and .metadata.name == "broker-credentials-contract") | .data.keys | split(",") | sort | join(",")' "$work/broker.json")" \
   "the SOPS contract names exactly the enrolled secrets"
+eq "$(jq -r "$enrollment | [.github_app.key_secret, .github_app.id_secret] + [.logical_hosts[] | .github_app.installation // empty] | unique | sort | join(\",\")" "$work/broker.json")" \
+  "$(jq -r '.[] | select(.kind == "ConfigMap" and .metadata.name == "broker-credentials-contract") | .data.app_keys | split(",") | sort | join(",")' "$work/broker.json")" \
+  "the SOPS contract names exactly the app credential files"
 broker_config=$(jq -r "$enrollment | tostring" "$work/broker.json")
 if grep -Eq 'ghp_[A-Za-z0-9]{20,}|github_pat_|sk-[A-Za-z0-9]{20,}|xox[baprs]-' <<<"$broker_config"; then
   bad "the broker enrollment file contains a token-shaped value"
