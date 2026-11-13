@@ -542,10 +542,18 @@ fi
 # agent's BROKER_URL paths depend on; the unit tests parse the same file.
 enrollment='.[] | select(.kind == "ConfigMap" and (.metadata.name | startswith("broker-config"))) | .data["broker.json"] | fromjson'
 eq "$(jq -r "$enrollment | .logical_hosts | keys | sort | join(\",\")" "$work/broker.json")" \
-  "github-agent,github-agent-push,github-apps,github-platform,github-platform-push,loki,neuralwatt,status,tinyfish" \
+  "github-agent,github-agent-push,github-apps,github-platform,github-platform-push,loki,neuralwatt,notify,self,status,tinyfish" \
   "the broker enrolls exactly the agent's logical hosts"
 eq "$(jq -r "$enrollment | [.logical_hosts | to_entries[] | select(.value.allow_private) | .key] | sort | join(\",\")" "$work/broker.json")" \
-  "loki,status" "only the two in-cluster hosts are private enrollments"
+  "loki,self,status" "only the in-cluster hosts are private enrollments"
+eq "$(jq -r "$enrollment | .logical_hosts.notify | [.host, .allow_private, .inject.kind, .secret, (.allow_methods | join(\",\")), (.allow_paths | join(\";\")), (.max_body_bytes | tostring)] | join(\":\")" "$work/broker.json")" \
+  "notify.invalid:false:bearer:notify-token:POST:^/v1/notify$:4096" \
+  "notify is a public placeholder, POST-only, bearer, body-capped"
+eq "$(jq -r "$enrollment | .logical_hosts.self | [.host, .port, .allow_private, (.secret // \"-\"), (.inject.kind // \"none\")] | join(\":\")" "$work/broker.json")" \
+  "agent-control.tenant-apps.svc.cluster.local:8081:true:-:none" \
+  "self is a credential-free private enrollment"
+eq "$(jq -r '.[] | select(.kind == "NetworkPolicy" and .metadata.name == "egress-agent-control") | [.spec.egress[0].to[0].namespaceSelector.matchLabels["kubernetes.io/metadata.name"], .spec.egress[0].ports[0].port] | join(":")' "$work/broker.json")" \
+  "tenant-apps:8081" "broker egress admits agent-control on 8081 only"
 eq "$(jq -r "$enrollment | .logical_hosts.loki.headers[\"X-Scope-OrgID\"]" "$work/broker.json")" "data" \
   "the loki logical host pins the data tenant header"
 eq "$(jq -r "$enrollment | .logical_hosts[\"github-apps\"].inject.kind" "$work/broker.json")" "basic" \

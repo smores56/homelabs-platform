@@ -16,7 +16,7 @@ data:
   secretName: broker-credentials
   namespace: broker
   keys: >-
-    neuralwatt-api-key,tinyfish-api-key,loki-gateway-token
+    neuralwatt-api-key,tinyfish-api-key,loki-gateway-token,notify-token
   app_keys: >-
     github-app-id,github-app-private-key,github-installation-id
   source: >-

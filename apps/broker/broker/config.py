@@ -26,6 +26,12 @@ GITHUB_PERMISSION = re.compile(r"^[a-z][a-z_]*$")
 PERMISSION_LEVELS = frozenset({"read", "write", "admin"})
 REPOSITORY_NAME = re.compile(r"^[A-Za-z0-9._-]{1,100}$")
 INJECTION_KINDS = frozenset({"bearer", "header", "basic", "none"})
+# The request contract: the methods the front end dispatches and the hard body
+# cap. The broker's own enrollment may lower the cap per logical host.
+METHODS = ("GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS")
+MAX_REQUEST_BYTES = 64 * 1024 * 1024
+# A body guard names one JSON field by dot-separated keys.
+BODY_FIELD = re.compile(r"^[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)*$")
 # Enrollment headers may not smuggle a credential of their own; the only
 # credential on the wire is the one named by `inject`.
 CREDENTIAL_HEADERS = frozenset(
@@ -75,6 +81,20 @@ class GithubAppConfig:
 
 
 @dataclass(frozen=True)
+class BodyGuard:
+    """A conditional body predicate.
+
+    When a request matches `methods` (empty means any) and any `paths` regex,
+    the body must be JSON whose `field` is a string matching `allow`.
+    """
+
+    methods: tuple[str, ...]
+    paths: tuple[re.Pattern[str], ...]
+    field: str
+    allow: re.Pattern[str]
+
+
+@dataclass(frozen=True)
 class Enrollment:
     name: str
     scheme: str
@@ -85,6 +105,15 @@ class Enrollment:
     injection: Injection
     headers: tuple[tuple[str, str], ...] = ()
     app: AppScope | None = None
+    # Request predicates (#624). Empty tuples and None preserve the original
+    # behavior: every method and path was forwarded to every enrollment.
+    allow_methods: tuple[str, ...] = ()
+    deny_methods: tuple[str, ...] = ()
+    allow_paths: tuple[re.Pattern[str], ...] = ()
+    deny_paths: tuple[re.Pattern[str], ...] = ()
+    deny_body_patterns: tuple[re.Pattern[str], ...] = ()
+    body_guards: tuple[BodyGuard, ...] = ()
+    max_body_bytes: int | None = None
 
     @property
     def default_port(self) -> bool:
@@ -168,6 +197,82 @@ def _parse_injection(logical: str, raw: object) -> Injection:
     return Injection(kind=kind, header=header, username=username)
 
 
+def _parse_methods(logical: str, key: str, raw: object) -> tuple[str, ...]:
+    if raw is None:
+        return ()
+    if not isinstance(raw, list):
+        raise ConfigError(f"{logical}: {key} must be a list of methods")
+    methods: list[str] = []
+    for item in raw:
+        if not isinstance(item, str):
+            raise ConfigError(f"{logical}: {key} must be a list of methods")
+        method = item.upper()
+        if method not in METHODS:
+            raise ConfigError(f"{logical}: {key} names an unsupported method {item!r}")
+        if method not in methods:
+            methods.append(method)
+    return tuple(methods)
+
+
+def _parse_patterns(logical: str, key: str, raw: object) -> tuple[re.Pattern[str], ...]:
+    if raw is None:
+        return ()
+    if not isinstance(raw, list):
+        raise ConfigError(f"{logical}: {key} must be a list of regex strings")
+    patterns: list[re.Pattern[str]] = []
+    for item in raw:
+        if not isinstance(item, str) or not item:
+            raise ConfigError(f"{logical}: {key} must be a list of non-empty regex strings")
+        try:
+            patterns.append(re.compile(item))
+        except re.error:
+            raise ConfigError(f"{logical}: {key} regex {item!r} does not compile") from None
+    return tuple(patterns)
+
+
+def _parse_body_guard(logical: str, raw: object) -> BodyGuard:
+    if not isinstance(raw, dict):
+        raise ConfigError(f"{logical}: body_guards entries must be objects")
+    unknown = set(raw) - {"methods", "paths", "field", "allow"}
+    if unknown:
+        raise ConfigError(f"{logical}: unknown body guard keys {sorted(unknown)}")
+    paths = _parse_patterns(logical, "body_guards.paths", raw.get("paths"))
+    if not paths:
+        raise ConfigError(f"{logical}: a body guard needs at least one path regex")
+    field = raw.get("field")
+    if not isinstance(field, str) or not BODY_FIELD.match(field):
+        raise ConfigError(f"{logical}: a body guard field must be a dot-separated JSON path")
+    allow_raw = raw.get("allow")
+    if not isinstance(allow_raw, str) or not allow_raw:
+        raise ConfigError(f"{logical}: a body guard needs an allow regex")
+    try:
+        allow = re.compile(allow_raw)
+    except re.error:
+        raise ConfigError(f"{logical}: body guard allow regex {allow_raw!r} does not compile") from None
+    return BodyGuard(
+        methods=_parse_methods(logical, "body_guards.methods", raw.get("methods")),
+        paths=paths,
+        field=field,
+        allow=allow,
+    )
+
+
+def _parse_body_guards(logical: str, raw: object) -> tuple[BodyGuard, ...]:
+    if raw is None:
+        return ()
+    if not isinstance(raw, list):
+        raise ConfigError(f"{logical}: body_guards must be a list")
+    return tuple(_parse_body_guard(logical, item) for item in raw)
+
+
+def _parse_max_body_bytes(logical: str, raw: object) -> int | None:
+    if raw is None:
+        return None
+    if not isinstance(raw, int) or isinstance(raw, bool) or not 1 <= raw <= MAX_REQUEST_BYTES:
+        raise ConfigError(f"{logical}: max_body_bytes must be 1..{MAX_REQUEST_BYTES}")
+    return raw
+
+
 def _parse_enrollment(logical: str, raw: object) -> Enrollment:
     if not LOGICAL_HOST.match(logical):
         raise ConfigError(f"invalid logical host {logical!r}")
@@ -233,6 +338,12 @@ def _parse_enrollment(logical: str, raw: object) -> Enrollment:
             raise ConfigError(f"{logical}: invalid value for header {name}")
         headers.append((name, value))
 
+    allow_methods = _parse_methods(logical, "allow_methods", raw.get("allow_methods"))
+    deny_methods = _parse_methods(logical, "deny_methods", raw.get("deny_methods"))
+    overlap = sorted(set(allow_methods) & set(deny_methods))
+    if overlap:
+        raise ConfigError(f"{logical}: methods both allowed and denied: {','.join(overlap)}")
+
     return Enrollment(
         name=logical,
         scheme=scheme,
@@ -243,6 +354,13 @@ def _parse_enrollment(logical: str, raw: object) -> Enrollment:
         injection=injection,
         headers=tuple(headers),
         app=app,
+        allow_methods=allow_methods,
+        deny_methods=deny_methods,
+        allow_paths=_parse_patterns(logical, "allow_paths", raw.get("allow_paths")),
+        deny_paths=_parse_patterns(logical, "deny_paths", raw.get("deny_paths")),
+        deny_body_patterns=_parse_patterns(logical, "deny_body_patterns", raw.get("deny_body_patterns")),
+        body_guards=_parse_body_guards(logical, raw.get("body_guards")),
+        max_body_bytes=_parse_max_body_bytes(logical, raw.get("max_body_bytes")),
     )
 
 
