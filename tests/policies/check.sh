@@ -568,7 +568,7 @@ eq "$(jq -r "$enrollment | [.logical_hosts[\"github-agent-push\"], .logical_host
 eq "$(jq -r "$enrollment | .logical_hosts[\"github-agent\"].github_app.permissions | keys | sort | join(\",\")" "$work/broker.json")" \
   "contents,pull_requests" "github-agent asks only for contents and pull requests"
 eq "$(jq -r "$enrollment | .logical_hosts[\"github-agent-push\"].github_app.permissions | keys | sort | join(\",\")" "$work/broker.json")" \
-  "contents" "github-agent-push asks only for contents"
+  "contents,workflows" "github-agent-push asks only for contents and workflows"
 eq "$(jq -r "$enrollment | [.logical_hosts[] | .secret // empty] | unique | sort | join(\",\")" "$work/broker.json")" \
   "$(jq -r '.[] | select(.kind == "ConfigMap" and .metadata.name == "broker-credentials-contract") | .data.keys | split(",") | sort | join(",")' "$work/broker.json")" \
   "the SOPS contract names exactly the enrolled secrets"
