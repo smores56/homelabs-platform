@@ -124,7 +124,10 @@ reserved name (RFC 2606) that never resolves, so every call fails closed as
 at most 4 KiB and injects `Authorization: Bearer <notify-token>`; it never
 reaches a private address. The provider is undecided (ntfy, an email relay or a
 Slack webhook), so the host, port, path and header kind are configuration, not
-code — the placeholder is where that decision lands.
+code — the placeholder is where that decision lands. The enrollment sets
+`optional_secret`, so an absent `notify-token` denies that host with
+`credential_unavailable` (503) instead of aborting the broker at startup; a
+request is never forwarded without the credential.
 
 `self` (SDLC #637) is the platform's `agent-control` service in `tenant-apps`:
 plain HTTP inside the cluster, `allow_private: true` and no credential. The

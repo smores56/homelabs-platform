@@ -102,6 +102,7 @@ class ShippedConfigTest(unittest.TestCase):
         self.assertEqual(notify.scheme, "https")
         self.assertFalse(notify.allow_private)
         self.assertEqual(notify.secret_name, "notify-token")
+        self.assertTrue(notify.optional_secret, "the provider is undecided; a missing token must not crashloop the broker")
         self.assertEqual(notify.injection.kind, "bearer")
         self.assertEqual(notify.allow_methods, ("POST",))
         self.assertEqual(len(notify.allow_paths), 1)
@@ -194,14 +195,19 @@ class ConfigValidationTest(unittest.TestCase):
     def test_no_injection_must_not_name_a_secret(self) -> None:
         with self.assertRaises(ConfigError):
             load_config(self.write(self.base(inject={"kind": "none"})), env={})
-
     def test_unknown_kind_and_bad_port(self) -> None:
         with self.assertRaises(ConfigError):
             load_config(self.write(self.base(inject={"kind": "oauth"})), env={})
         with self.assertRaises(ConfigError):
             load_config(self.write(self.base(port=70000)), env={})
 
+    def test_optional_secret_needs_a_static_secret(self) -> None:
+        with self.assertRaises(ConfigError):
+            load_config(self.write(self.base(secret="", inject={"kind": "none"}, optional_secret=True)), env={})
+
     def test_credential_header_cannot_be_a_fixed_header(self) -> None:
+        with self.assertRaises(ConfigError):
+            load_config(self.write(self.base(headers={"Authorization": "Bearer x"})), env={})
         with self.assertRaises(ConfigError):
             load_config(self.write(self.base(headers={"Authorization": "Bearer x"})), env={})
 
@@ -400,6 +406,20 @@ class SecretsTest(unittest.TestCase):
         pathlib.Path(directory, "neuralwatt-api-key").write_text("\n")
         with self.assertRaises(ConfigError):
             load_secrets(config.hosts, directory)
+
+    def test_optional_secret_is_skipped_when_absent_or_empty(self) -> None:
+        config = load_config(SHIPPED, env={})
+        directory = tempfile.mkdtemp()
+        for name in {enrollment.secret_name for enrollment in config.hosts.values() if enrollment.secret_name}:
+            if name == "notify-token":
+                continue
+            pathlib.Path(directory, name).write_text("value\n")
+        secrets = load_secrets(config.hosts, directory)
+        self.assertNotIn("notify-token", secrets)
+        pathlib.Path(directory, "notify-token").write_text("\n")
+        self.assertNotIn("notify-token", load_secrets(config.hosts, directory))
+        pathlib.Path(directory, "notify-token").write_text("token\n")
+        self.assertEqual(load_secrets(config.hosts, directory)["notify-token"], "token")
 
     def test_the_app_key_is_required_when_an_app_is_enrolled(self) -> None:
         config = load_config(SHIPPED, env={})

@@ -137,7 +137,11 @@ class Broker:
     connector: Connector = connect_pinned
 
     def credential(self, enrollment: Enrollment) -> str:
-        return self.credentials.value(enrollment)
+        value = self.credentials.value(enrollment)
+        if enrollment.secret_name and not value:
+            # optional_secret hosts are enrolled before their credential exists.
+            raise CredentialUnavailable(f"{enrollment.name}: credential is not provisioned")
+        return value
 
     def handle(self, handler: BaseHTTPRequestHandler) -> None:
         method = handler.command.upper()

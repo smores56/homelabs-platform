@@ -116,6 +116,7 @@
       "port": 443,
       "allow_private": false,
       "secret": "notify-token",
+      "optional_secret": true,
       "inject": {
         "kind": "bearer"
       },

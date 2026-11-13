@@ -303,10 +303,10 @@ seven files, none of which enters git. Static enrollments name four of them
 enrollments add the app id, the private key and one installation id per
 installation (`app_keys`). **Step 1 must be finished first.**
 
-`notify-token` must exist even though the notify endpoint is still a placeholder
-(step 24): the broker reads every named file at start and fails closed, so a
-missing file keeps the Deployment in CrashLoopBackOff. Generate a random value
-now and replace it in step 24 when the provider is chosen.
+`notify-token` is optional: the enrollment declares `optional_secret`, so a
+missing file is a 503 for that host instead of a startup abort. Create it when
+the provider is chosen in step 24; until then the placeholder host answers
+`dns_failure` and the rest of the broker is unaffected.
 
 Run this on smortress as `smores`. `cluster-kubectl` reads a root-only
 kubeconfig, hence `sudo`.
@@ -319,7 +319,7 @@ LOKI=$(sudo cluster-kubectl -n observability get secret loki-gateway-token \
 read -rp 'App ID (digits): ' APP_ID
 read -rp 'installation ID: ' INSTALL
 read -rsp 'private key path: ' KEY_PATH; echo
-NOTIFY=$(openssl rand -hex 32)
+NOTIFY=$(openssl rand -hex 32)  # optional until step 24
 
 # No value reaches the command line or a transcript.
 umask 077

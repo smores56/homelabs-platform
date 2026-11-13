@@ -114,6 +114,9 @@ class Enrollment:
     deny_body_patterns: tuple[re.Pattern[str], ...] = ()
     body_guards: tuple[BodyGuard, ...] = ()
     max_body_bytes: int | None = None
+    # A host whose provider is not provisioned yet: a missing secret file is a
+    # 503 for that host instead of a startup abort. Never a request without it.
+    optional_secret: bool = False
 
     @property
     def default_port(self) -> bool:
@@ -311,6 +314,11 @@ def _parse_enrollment(logical: str, raw: object) -> Enrollment:
             raise ConfigError(f"{logical}: github_app requires bearer or basic injection")
         if scheme != "https":
             raise ConfigError(f"{logical}: github_app requires https")
+    optional_secret = raw.get("optional_secret", False)
+    if not isinstance(optional_secret, bool):
+        raise ConfigError(f"{logical}: optional_secret must be a boolean")
+    if optional_secret and (not secret_name or app is not None):
+        raise ConfigError(f"{logical}: optional_secret needs a static secret, not a github_app")
     if injection.kind == "none":
         if secret_name:
             raise ConfigError(f"{logical}: no-injection enrollment must not name a secret")
@@ -361,6 +369,7 @@ def _parse_enrollment(logical: str, raw: object) -> Enrollment:
         deny_body_patterns=_parse_patterns(logical, "deny_body_patterns", raw.get("deny_body_patterns")),
         body_guards=_parse_body_guards(logical, raw.get("body_guards")),
         max_body_bytes=_parse_max_body_bytes(logical, raw.get("max_body_bytes")),
+        optional_secret=optional_secret,
     )
 
 
@@ -422,7 +431,9 @@ def load_config(path: str | Path, env: dict[str, str] | None = None) -> Config:
 
 
 def load_secrets(hosts: dict[str, Enrollment], directory: str | Path) -> dict[str, str]:
-    """Read every named credential once. A missing or empty one is fatal."""
+    """Read every named credential once. A missing or empty one is fatal,
+    except for a host that declares optional_secret: it serves 503 until the
+    file appears instead of taking the whole broker down."""
     base = Path(directory)
     secrets: dict[str, str] = {}
     for enrollment in hosts.values():
@@ -432,8 +443,12 @@ def load_secrets(hosts: dict[str, Enrollment], directory: str | Path) -> dict[st
         try:
             value = Path(base, name).read_text().strip()
         except OSError as exc:
+            if enrollment.optional_secret:
+                continue
             raise ConfigError(f"{enrollment.name}: cannot read secret {name}: {exc}") from None
         if not value:
+            if enrollment.optional_secret:
+                continue
             raise ConfigError(f"{enrollment.name}: secret {name} is empty")
         secrets[name] = value
     return secrets
