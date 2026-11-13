@@ -164,6 +164,40 @@ POST /repos/smores56/homelabs-platform/actions/workflows/publish-nanobot.yml/dis
 - retry: a second dispatch is a new run number, which the `numerical` policy
   orders above the previous one; duplicate builds are harmless
 
+### Memory MCP from `BROKER_URL`
+
+`images/nanobot/render.py` attaches nanobot's `memory` MCP server whenever the
+pod's `BROKER_URL` is a non-empty http(s) URL:
+
+```json
+"mcp_servers": {
+  "memory": {
+    "type": "streamableHttp",
+    "url": "http://broker.broker.svc.cluster.local:8080/memory/mcp",
+    "enabled_tools": ["*"]
+  }
+}
+```
+
+The broker drops the caller's headers and injects the graphiti bearer for its
+`memory` logical host (`docs/broker.md`), so the token never enters the pod and
+no credential is written into `$HOME/.nanobot/config.json`. A malformed
+`BROKER_URL` fails the render and therefore the pod restart, instead of starting
+with a broken client; a `memory` entry the operator already configured is left
+untouched. The change ships with the image: nothing in the tenant or Flux
+manifests changes it.
+
+The design's fallback stands (SDLC #616, *Memory through the broker*): if
+streamable HTTP cannot traverse the broker's path prefix, memory stays out and
+every other tool is unaffected — there is no retry and no half-config. The
+startup line names the state:
+
+```sh
+cluster-kubectl -n tenant-apps logs deploy/nanobot | grep nanobot-render
+cluster-kubectl -n tenant-apps exec deploy/nanobot -- \
+  python -c 'import json;print(json.load(open("/data/home/.nanobot/config.json"))["tools"]["mcp_servers"])'
+```
+
 ## Root namespace labels
 
 The bootstrap manifests create `flux-system` without tenancy labels. The
