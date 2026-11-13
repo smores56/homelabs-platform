@@ -545,7 +545,7 @@ eq "$(yq -r '.volumeBindingMode' "$sc")" "WaitForFirstConsumer" "data-local bind
 eq "$(yq -r '.allowVolumeExpansion' "$sc")" "false" "data-local is not expandable"
 
 eq "$(yq -r '.spec.local.path' "$pvs" | grep -v '^---$' | sort | paste -sd, -)" \
-  "/mnt/data/books,/mnt/data/cluster-digest,/mnt/data/graphiti,/mnt/data/immich,/mnt/data/music" \
+  "/mnt/data/books,/mnt/data/books,/mnt/data/cluster-digest,/mnt/data/graphiti,/mnt/data/immich,/mnt/data/music" \
   "every PV path is one of the guest's virtiofs shares"
 eq "$(yq -r '.spec.storageClassName' "$pvs" | grep -v '^---$' | sort -u)" "data-local" "every PV claims data-local"
 eq "$(yq -r '.spec.persistentVolumeReclaimPolicy' "$pvs" | grep -v '^---$' | sort -u)" "Retain" "every PV retains its data"
@@ -554,7 +554,7 @@ eq "$(yq -r '.spec.nodeAffinity.required.nodeSelectorTerms[0].matchExpressions[0
 eq "$(yq -r '.spec.nodeAffinity.required.nodeSelectorTerms[0].matchExpressions[0].values[0]' "$pvs" | grep -v '^---$' | sort -u)" \
   "cluster" "every PV is bound to the cluster node"
 eq "$(yq -r '.spec.claimRef | [.namespace, .name] | join(":")' "$pvs" | grep -v '^---$' | sort | paste -sd, -)" \
-  "calibre:calibre-data,graphiti:graphiti-data,immich:immich-data,navidrome:navidrome-data,observability:cluster-digest-data" \
+  "calibre:calibre-data,graphiti:graphiti-data,immich:immich-data,navidrome:navidrome-data,observability:cluster-digest-data,tenant-apps:nanobot-books" \
   "each PV is pre-bound to exactly one claim"
 if grep -rq 'hostPath' clusters/homelab/data clusters/homelab/ingress; then
   bad "a data or ingress manifest uses hostPath"

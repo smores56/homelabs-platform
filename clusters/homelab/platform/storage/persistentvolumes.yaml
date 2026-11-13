@@ -172,3 +172,37 @@ spec:
             - key: kubernetes.io/hostname
               operator: In
               values: ["cluster"]
+---
+# The books library is also the agent's write target (SDLC #635): the same
+# /mnt/data/books tree Calibre catalogs, bound twice on purpose. Calibre's claim
+# is its own; this one belongs to tenant-apps so nanobot can write directly, as
+# uid 1000 (host `smores`), with no staging queue. Two claims on one node-local
+# path are fine because the single node is the only reader and the guest
+# translation already carries the ownership.
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: nanobot-books-data
+  labels:
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: tenant
+    homelabs.dev/share: books
+spec:
+  capacity:
+    storage: 5Ti
+  accessModes: ["ReadWriteOnce"]
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: data-local
+  volumeMode: Filesystem
+  claimRef:
+    namespace: tenant-apps
+    name: nanobot-books
+  local:
+    path: /mnt/data/books
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: In
+              values: ["cluster"]
