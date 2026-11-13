@@ -62,9 +62,7 @@ spec:
               mountPath: /data
       containers:
         - name: memory-mcp
-          # Published by `just publish-memory-image <tag>` in smores56/nix-config;
-          # replace this digest with the one that command prints (manual-steps).
-          image: ghcr.io/smores56/nix-config/memory-mcp@sha256:0000000000000000000000000000000000000000000000000000000000000000
+          image: ghcr.io/smores56/nix-config/memory-mcp@sha256:a63814a12802b11c92d7354d50bd52b4469dd26df51b11cf7ca49fa680df8241
           env:
             # The wrapper serves the NodePort and the in-namespace graph; the
             # bearer token, not the bind address, is the boundary.

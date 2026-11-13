@@ -50,7 +50,8 @@ spec:
           containers:
             - name: export
               # Same image as the wrapper: one artefact, one schema version.
-              image: ghcr.io/smores56/nix-config/memory-mcp@sha256:0000000000000000000000000000000000000000000000000000000000000000
+              # Published by nix-config's publish-memory workflow.
+              image: ghcr.io/smores56/nix-config/memory-mcp@sha256:a63814a12802b11c92d7354d50bd52b4469dd26df51b11cf7ca49fa680df8241
               command:
                 - memory-export
                 - export
