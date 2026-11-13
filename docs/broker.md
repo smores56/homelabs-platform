@@ -65,7 +65,7 @@ each request's logical host (see "GitHub App identity" below).
 | `github-apps` | `https://github.com:443` | `Authorization: Basic x-access-token:<token>` | app: `homelabs-apps`, `contents: write` | no |
 | `github-platform-push` | `https://github.com:443` | `Authorization: Basic x-access-token:<token>` | app: `homelabs-platform`, `contents: write` | no |
 | `github-platform` | `https://api.github.com:443` | `Authorization: Bearer` | app: `homelabs-platform`, `contents: write`, `pull_requests: write` | no |
-| `github-agent-push` | `https://github.com:443` | `Authorization: Basic x-access-token:<token>` | app: `nix-config`, `kanbei`, `contents: write` | no |
+| `github-agent-push` | `https://github.com:443` | `Authorization: Basic x-access-token:<token>` | app: `nix-config`, `kanbei`, `contents: write`, `workflows: write` | no |
 | `github-agent` | `https://api.github.com:443` | `Authorization: Bearer` | app: `nix-config`, `kanbei`, `contents: read`, `pull_requests: write` | no |
 | `tinyfish` | `https://api.search.tinyfish.ai:443` | `X-Api-Key: <token>` | `tinyfish-api-key` | no |
 | `loki` | `http://loki-gateway.observability.svc.cluster.local:3100` | `Authorization: Bearer`, fixed `X-Scope-OrgID: data` | `loki-gateway-token` | yes |
@@ -97,6 +97,12 @@ by the `agent-gating` and `main` rulesets, not by this file: the token can only
 reach `agent/*`, and `main` requires a reviewed pull request. Adding a
 repository here is therefore not enough on its own — the rulesets must already
 be in place.
+
+`github-agent-push` also asks for `workflows: write`. GitHub refuses a push that
+touches `.github/workflows/` without it, and it refuses the whole push, not just
+the workflow file, so without the permission the agent cannot land a CI change it
+proposed. It is not a wider reach into the repositories: the same rulesets bound
+it, and a workflow change still needs a reviewed pull request on `main`.
 
 Every repository named on a host goes into a single token request, so one name
 that is not in the app installation fails the whole host with a 422. Add a

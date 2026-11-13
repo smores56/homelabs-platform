@@ -85,7 +85,7 @@ class ShippedConfigTest(unittest.TestCase):
         self.assertEqual(push.injection.kind, "basic")
         self.assertEqual(push.injection.username, "x-access-token")
         self.assertEqual(push.app.repositories, expected)
-        self.assertEqual(dict(push.app.permissions), {"contents": "write"})
+        self.assertEqual(dict(push.app.permissions), {"contents": "write", "workflows": "write"})
         api = self.config.hosts["github-agent"]
         self.assertEqual(api.host, "api.github.com")
         self.assertEqual(api.injection.kind, "bearer")

@@ -73,7 +73,8 @@
         "installation": "github-installation-id",
         "repositories": ["nix-config", "kanbei"],
         "permissions": {
-          "contents": "write"
+          "contents": "write",
+          "workflows": "write"
         }
       },
       "inject": {
