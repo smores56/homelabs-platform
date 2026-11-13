@@ -504,10 +504,13 @@ cluster-kubectl -n graphiti scale deploy/graphiti-falkordb --replicas=0
 
 # 2. Verify first, then write, from the same image the wrapper runs. Deleting
 #    the job makes the command repeatable: a Job's template is immutable.
+#    The pod template must carry `homelabs.dev/managed-by: platform`: the
+#    admission policy (platform/policies/08-data-workload-source.yaml) denies a
+#    job-created pod without it, so the Job stays 0/1 with FailedCreate events.
 cluster-kubectl -n graphiti delete job memory-restore --ignore-not-found
 cluster-kubectl -n graphiti create job memory-restore --image=<the pinned digest> \
   --dry-run=client -o yaml \
-  | yq '.spec.ttlSecondsAfterFinished = 86400 | .spec.template.spec = {"securityContext": {"runAsUser": 1000, "runAsGroup": 1000, "runAsNonRoot": true, "seccompProfile": {"type": "RuntimeDefault"}, "restartPolicy": "Never", "serviceAccountName": "data-workload", "automountServiceAccountToken": false}, "containers": [{"name": "restore", "image": "<the pinned digest>", "command": ["memory-export", "restore", "/data/db-dumps/memory", "--state-dir", "/data/memory", "--graph-dir", "/data/falkordb", "--owner", "", "--no-stop"], "securityContext": {"allowPrivilegeEscalation": false, "readOnlyRootFilesystem": true, "capabilities": {"drop": ["ALL"]}}, "resources": {"limits": {"cpu": "500m", "memory": "512Mi"}}, "volumeMounts": [{"name": "data", "mountPath": "/data"}, {"name": "tmp", "mountPath": "/tmp"}]}], "volumes": [{"name": "data", "persistentVolumeClaim": {"claimName": "graphiti-data"}}, {"name": "tmp", "emptyDir": {}}]}' \
+  | yq '.spec.ttlSecondsAfterFinished = 86400 | .spec.template.metadata.labels = {"homelabs.dev/managed-by": "platform", "homelabs.dev/tier": "data"} | .spec.template.spec = {"securityContext": {"runAsUser": 1000, "runAsGroup": 1000, "runAsNonRoot": true, "seccompProfile": {"type": "RuntimeDefault"}, "restartPolicy": "Never", "serviceAccountName": "data-workload", "automountServiceAccountToken": false}, "containers": [{"name": "restore", "image": "<the pinned digest>", "command": ["memory-export", "restore", "/data/db-dumps/memory", "--state-dir", "/data/memory", "--graph-dir", "/data/falkordb", "--owner", "", "--no-stop"], "securityContext": {"allowPrivilegeEscalation": false, "readOnlyRootFilesystem": true, "capabilities": {"drop": ["ALL"]}}, "resources": {"limits": {"cpu": "500m", "memory": "512Mi"}}, "volumeMounts": [{"name": "data", "mountPath": "/data"}, {"name": "tmp", "mountPath": "/tmp"}]}], "volumes": [{"name": "data", "persistentVolumeClaim": {"claimName": "graphiti-data"}}, {"name": "tmp", "emptyDir": {}}]}' \
   | cluster-kubectl -n graphiti apply -f -
 cluster-kubectl -n graphiti logs -f job/memory-restore
 
