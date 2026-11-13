@@ -173,7 +173,11 @@ logical=<host> method=<method> path=<path> status=<status> bytes=<n> outcome=<pr
 
 ## Address policy in the CNI
 
-The broker's own check is authoritative; `NetworkPolicy` is the coarse layer:
+The broker's own check is authoritative; `NetworkPolicy` is the coarse layer.
+It bounds broker traffic only: the tenant also has its own direct public egress
+(`platform/network/tenant-egress.yaml`, `docs/tenancy.md`), so a call that
+skips the broker gets none of the guarantees below — no address policy, no
+redirect refusal, no credential stripping, no redaction.
 
 - `broker` egress: TCP 443 to global unicast only (`0.0.0.0/0` with every
   non-global IPv4 range in `except`, and the IPv6 equivalents), plus TCP 3100

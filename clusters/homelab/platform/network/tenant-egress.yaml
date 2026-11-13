@@ -1,0 +1,72 @@
+# The tenant's direct path to the public internet (SDLC #625). The broker stays
+# for anything that needs a credential injected or an address policy enforced,
+# but it is no longer the only way out: an agent that must fetch a tarball, open
+# a plain TCP connection or speak UDP does it itself.
+#
+# Scope: every global-unicast destination, every TCP and UDP port. The `except`
+# lists are the whole of the restriction:
+#
+#   10/8, 172.16/12, 192.168/16   RFC 1918: the pod and service networks, the
+#                                 tap, the host's LAN
+#   169.254/16                    link-local, including the cloud metadata
+#                                 service (169.254.169.254)
+#   100.64/10                     CGNAT, which is also the tailnet range
+#   127/8                         loopback
+#   fc00::/7, fe80::/10, ::1/128  IPv6 ULA, link-local and loopback
+#
+# This is an address filter, not a security control: it does not inspect
+# names, payloads or destinations beyond the ranges above. There is no proxy,
+# no rate limit, no bandwidth cap, no allowlist and no kill switch on it on
+# purpose. It is also not DLP: content that leaves the tenant leaves it, and
+# the only record is the flow itself. Loopback and the metadata address are
+# denied so a public destination can never become the API server, the broker,
+# a data namespace or the cloud metadata endpoint.
+#
+# On the host side the guest's tap firewall (nix-config
+# modules/nixos/cluster-vm.nix) admits only TCP 80/443, 7844, DNS and NTP out of
+# the guest, so this policy is necessary but not sufficient: 80/443 and DNS work
+# today, and any other port starts working only when that firewall is widened
+# (tracked in the nix-config lane, not here). The tenant cannot widen either
+# layer itself; both copies are platform-owned.
+#
+# homelabs-apps keeps a mirrored copy of the tenant-side policies as its
+# reviewed contract. That copy must gain the same two `ipBlock` entries, or the
+# namespace-side render the tenant reviews and the one the cluster enforces
+# disagree.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: egress-public
+  namespace: tenant-apps
+  labels:
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: tenant
+spec:
+  podSelector: {}
+  policyTypes: ["Egress"]
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+              - 169.254.0.0/16
+              - 100.64.0.0/10
+              - 127.0.0.0/8
+      # Port omitted on purpose: every TCP and UDP port is admitted. ICMP and
+      # anything that is not TCP or UDP stay denied.
+      ports:
+        - protocol: TCP
+        - protocol: UDP
+    - to:
+        - ipBlock:
+            cidr: ::/0
+            except:
+              - fc00::/7
+              - fe80::/10
+              - ::1/128
+      ports:
+        - protocol: TCP
+        - protocol: UDP

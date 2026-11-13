@@ -314,6 +314,25 @@ eq "$(jq -r 'select(.metadata.namespace == "tenant-apps" and .metadata.name == "
   "broker:8080" "tenant egress is broker-only on 8080"
 eq "$(jq -r 'select(.metadata.namespace == "broker" and .metadata.name == "ingress-tenant-only") | [.spec.ingress[0].from[0].namespaceSelector.matchLabels["homelabs.dev/tier"], .spec.ingress[0].ports[0].port] | join(":")' "$network_json")" \
   "tenant:8080" "broker ingress accepts tenants on 8080"
+
+# The tenant's direct public path (#625). The `except` lists are the contract:
+# every non-global range is denied on both families, every TCP/UDP port is
+# admitted, and the policy cannot widen without this block changing.
+tenant_public='select(.metadata.namespace == "tenant-apps" and .metadata.name == "egress-public")'
+eq "$(jq -r "$tenant_public | [(.spec.podSelector | length | tostring), (.spec.policyTypes | join(\",\"))] | join(\":\")" "$network_json")" \
+  "0:Egress" "tenant public egress applies to the whole namespace, outbound only"
+eq "$(jq -r "$tenant_public | .spec.egress[0].to[0].ipBlock | [.cidr, (.except | sort | join(\",\"))] | join(\":\")" "$network_json")" \
+  "0.0.0.0/0:10.0.0.0/8,100.64.0.0/10,127.0.0.0/8,169.254.0.0/16,172.16.0.0/12,192.168.0.0/16" \
+  "tenant public egress goes to global unicast IPv4 only"
+eq "$(jq -r "$tenant_public | .spec.egress[1].to[0].ipBlock | [.cidr, (.except | sort | join(\",\"))] | join(\":\")" "$network_json")" \
+  "::/0:::1/128,fc00::/7,fe80::/10" "tenant public egress goes to global unicast IPv6 only"
+eq "$(jq -r "$tenant_public | [.spec.egress[] | (.ports | map(.protocol) | sort | join(\"+\")) + \"@\" + ([.ports[] | select(has(\"port\"))] | length | tostring)] | join(\",\")" "$network_json")" \
+  "TCP+UDP@0,TCP+UDP@0" "tenant public egress admits every TCP and UDP port and no other protocol"
+# The broker is still reachable, and the tenant has no other flow: an added
+# policy has to be added to this set, which is what keeps the egress reviewable.
+eq "$(jq -s -r 'map(select(.metadata.namespace == "tenant-apps") | .metadata.name) | sort | join(",")' "$network_json")" \
+  "allow-dns-egress,allow-tunnel-ingress,default-deny,egress-broker-only,egress-public" \
+  "tenant-apps holds exactly the DNS, tunnel, broker and public-egress allows"
 while IFS=: read -r app port; do
   eq "$(jq -r --arg ns "$app" --arg name "$app-http-from-ingress" \
     'select(.metadata.namespace == $ns and .metadata.name == $name) | [.spec.ingress[0].from[0].namespaceSelector.matchLabels["kubernetes.io/metadata.name"], .spec.ingress[0].from[0].podSelector.matchLabels["app.kubernetes.io/name"], .spec.ingress[0].ports[0].port] | join(":")' "$network_json")" \
