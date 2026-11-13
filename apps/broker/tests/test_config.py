@@ -22,6 +22,8 @@ class ShippedConfigTest(unittest.TestCase):
         self.assertEqual(
             sorted(self.config.hosts),
             [
+                "github-agent",
+                "github-agent-push",
                 "github-apps",
                 "github-platform",
                 "github-platform-push",
@@ -33,7 +35,15 @@ class ShippedConfigTest(unittest.TestCase):
         )
 
     def test_public_hosts_never_allow_private_addresses(self) -> None:
-        for name in ("neuralwatt", "github-apps", "github-platform-push", "github-platform", "tinyfish"):
+        for name in (
+            "neuralwatt",
+            "github-apps",
+            "github-platform-push",
+            "github-platform",
+            "github-agent-push",
+            "github-agent",
+            "tinyfish",
+        ):
             self.assertFalse(self.config.hosts[name].allow_private, name)
 
     def test_in_cluster_hosts_are_private_and_use_http(self) -> None:
@@ -65,6 +75,22 @@ class ShippedConfigTest(unittest.TestCase):
         self.assertEqual(dict(push.permissions), {"contents": "write"})
         self.assertEqual(push.repositories, ("homelabs-platform",))
         self.assertEqual(self.config.hosts["github-platform-push"].injection.kind, "basic")
+
+    def test_agent_enrollments_cover_the_pr_repositories(self) -> None:
+        # The agent's own repos: it may push agent/* branches and open pull
+        # requests, and nothing else. The per-repo rulesets are the real gate.
+        expected = ("nix-config", "kanbei")
+        push = self.config.hosts["github-agent-push"]
+        self.assertEqual(push.host, "github.com")
+        self.assertEqual(push.injection.kind, "basic")
+        self.assertEqual(push.injection.username, "x-access-token")
+        self.assertEqual(push.app.repositories, expected)
+        self.assertEqual(dict(push.app.permissions), {"contents": "write"})
+        api = self.config.hosts["github-agent"]
+        self.assertEqual(api.host, "api.github.com")
+        self.assertEqual(api.injection.kind, "bearer")
+        self.assertEqual(api.app.repositories, expected)
+        self.assertEqual(dict(api.app.permissions), {"contents": "read", "pull_requests": "write"})
 
     def test_no_credential_value_in_the_config(self) -> None:
         raw = json.loads(SHIPPED.read_text())

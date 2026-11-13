@@ -65,6 +65,8 @@ each request's logical host (see "GitHub App identity" below).
 | `github-apps` | `https://github.com:443` | `Authorization: Basic x-access-token:<token>` | app: `homelabs-apps`, `contents: write` | no |
 | `github-platform-push` | `https://github.com:443` | `Authorization: Basic x-access-token:<token>` | app: `homelabs-platform`, `contents: write` | no |
 | `github-platform` | `https://api.github.com:443` | `Authorization: Bearer` | app: `homelabs-platform`, `contents: read`, `pull_requests: write` | no |
+| `github-agent-push` | `https://github.com:443` | `Authorization: Basic x-access-token:<token>` | app: `nix-config`, `kanbei`, `contents: write` | no |
+| `github-agent` | `https://api.github.com:443` | `Authorization: Bearer` | app: `nix-config`, `kanbei`, `contents: read`, `pull_requests: write` | no |
 | `tinyfish` | `https://api.search.tinyfish.ai:443` | `X-Api-Key: <token>` | `tinyfish-api-key` | no |
 | `loki` | `http://loki-gateway.observability.svc.cluster.local:3100` | `Authorization: Bearer`, fixed `X-Scope-OrgID: data` | `loki-gateway-token` | yes |
 | `status` | `http://status-exporter.observability.svc.cluster.local:9101` | none (metrics text) | — | yes |
@@ -76,6 +78,21 @@ are REST on `api.github.com`. The agent pushes `agent/*` branches to
 GitHub App cannot fork, and GitHub refuses a fork of your own private
 repository), so branch rulesets, not the fork boundary, keep the identity off
 every other branch (docs/manual-steps.md step 1).
+
+`github-agent-push` and `github-agent` are the same pair for the agent's own
+repositories: `nix-config` and `kanbei`. They exist so the agent can propose
+changes there the way it does for `homelabs-platform` — push an `agent/*`
+branch, open a pull request — without a second credential. The repositories are
+listed on both hosts and the installation token is minted per request, so the
+scope is exactly those two repos. Write access is still governed per repository
+by the `agent-gating` and `main` rulesets, not by this file: the token can only
+reach `agent/*`, and `main` requires a reviewed pull request. Adding a
+repository here is therefore not enough on its own — the rulesets must already
+be in place.
+
+Every repository named on a host goes into a single token request, so one name
+that is not in the app installation fails the whole host with a 422. Add a
+repository only after confirming it is in the installation.
 
 The two private enrollments are the only exception to the TLS rule: they never
 leave the cluster network and their credentials are already cluster-local. A
