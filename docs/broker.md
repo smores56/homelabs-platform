@@ -64,7 +64,7 @@ each request's logical host (see "GitHub App identity" below).
 | `neuralwatt` | `https://api.neuralwatt.com:443` | `Authorization: Bearer` | `neuralwatt-api-key` | no |
 | `github-apps` | `https://github.com:443` | `Authorization: Basic x-access-token:<token>` | app: `homelabs-apps`, `contents: write` | no |
 | `github-platform-push` | `https://github.com:443` | `Authorization: Basic x-access-token:<token>` | app: `homelabs-platform`, `contents: write` | no |
-| `github-platform` | `https://api.github.com:443` | `Authorization: Bearer` | app: `homelabs-platform`, `contents: read`, `pull_requests: write` | no |
+| `github-platform` | `https://api.github.com:443` | `Authorization: Bearer` | app: `homelabs-platform`, `contents: write`, `pull_requests: write` | no |
 | `github-agent-push` | `https://github.com:443` | `Authorization: Basic x-access-token:<token>` | app: `nix-config`, `kanbei`, `contents: write` | no |
 | `github-agent` | `https://api.github.com:443` | `Authorization: Bearer` | app: `nix-config`, `kanbei`, `contents: read`, `pull_requests: write` | no |
 | `tinyfish` | `https://api.search.tinyfish.ai:443` | `X-Api-Key: <token>` | `tinyfish-api-key` | no |
@@ -78,6 +78,14 @@ are REST on `api.github.com`. The agent pushes `agent/*` branches to
 GitHub App cannot fork, and GitHub refuses a fork of your own private
 repository), so branch rulesets, not the fork boundary, keep the identity off
 every other branch (docs/manual-steps.md step 1).
+
+`github-platform` asks for `contents: write` because merging a pull request is a
+contents write in the REST API; `pull_requests: write` alone is not enough and
+the merge call fails with `403 Resource not accessible by integration`. The
+scope is still bounded by the rulesets, not by this file: `agent-branch-gate`
+allows create/update only on `refs/heads/agent/**`, and `main` requires a pull
+request with an approving review, so the token can merge what a human approved
+and nothing else.
 
 `github-agent-push` and `github-agent` are the same pair for the agent's own
 repositories: `nix-config` and `kanbei`. They exist so the agent can propose

@@ -56,7 +56,7 @@
         "installation": "github-installation-id",
         "repositories": ["homelabs-platform"],
         "permissions": {
-          "contents": "read",
+          "contents": "write",
           "pull_requests": "write"
         }
       },

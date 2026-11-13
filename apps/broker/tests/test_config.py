@@ -70,7 +70,7 @@ class ShippedConfigTest(unittest.TestCase):
         self.assertEqual(apps.repositories, ("homelabs-apps",))
         self.assertEqual(dict(apps.permissions), {"contents": "write"})
         platform = self.config.hosts["github-platform"].app
-        self.assertEqual(dict(platform.permissions), {"contents": "read", "pull_requests": "write"})
+        self.assertEqual(dict(platform.permissions), {"contents": "write", "pull_requests": "write"})
         push = self.config.hosts["github-platform-push"].app
         self.assertEqual(dict(push.permissions), {"contents": "write"})
         self.assertEqual(push.repositories, ("homelabs-platform",))
