@@ -1,0 +1,29 @@
+# The credential contract, asserted at reconcile time rather than described only
+# in a document. No key material lives here: the private key is SOPS ciphertext
+# created by the operator (docs/manual-steps.md) and the resulting Secret is
+# `homelabs-apps-write` in flux-system. It is not applied from a plaintext
+# manifest and the root Kustomization needs no decryption block.
+#
+# `homelabs-apps-write` is a write deploy key on smores56/homelabs-apps. It is
+# only reachable from flux-system (--no-cross-namespace-refs on both image
+# controllers), so the tenant never holds a credential that can write its own
+# reconciler source.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: homelabs-apps-write-contract
+  namespace: flux-system
+  labels:
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: platform
+data:
+  secretName: homelabs-apps-write
+  secretType: Opaque
+  key: identity
+  url: ssh://git@ssh.github.com:443/smores56/homelabs-apps
+  repository: smores56/homelabs-apps
+  deployKeyScope: write
+  marker: '# {"$imagepolicy": "flux-system:nanobot"}'
+  verify: |
+    kubectl -n flux-system get gitrepository homelabs-apps -o jsonpath='{.status.conditions[?(@.type=="Ready")].message}'
+    kubectl -n flux-system get imagepolicy nanobot -o jsonpath='{.status.latestRef.image}'

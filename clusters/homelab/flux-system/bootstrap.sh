@@ -101,7 +101,7 @@ flux bootstrap github \
   --path="${cluster_path}" \
   --personal \
   --token-auth \
-  --components-extra=source-watcher \
+  --components-extra=source-watcher,image-reflector-controller,image-automation-controller \
   --interval=10m
 
 git pull --ff-only

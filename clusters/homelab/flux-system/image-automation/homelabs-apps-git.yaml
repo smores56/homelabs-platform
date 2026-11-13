@@ -1,0 +1,22 @@
+# Image automation's own view of the tenant repository: the ImageUpdateAutomation
+# pushes commits back through this GitRepository, so it needs a write credential
+# (`homelabs-apps-write`), not the tenant reconciler's read-only deploy key.
+# Scoped to flux-system, and the controller runs with --no-cross-namespace-refs,
+# so the tenant Kustomization's source cannot see this secret.
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: GitRepository
+metadata:
+  name: homelabs-apps
+  namespace: flux-system
+  labels:
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: platform
+spec:
+  interval: 10m
+  # GitHub's SSH endpoint on 443: the cluster guest forwards only 80/443 out of
+  # the tap, so ssh://github.com:22 never connects.
+  url: ssh://git@ssh.github.com:443/smores56/homelabs-apps
+  ref:
+    branch: main
+  secretRef:
+    name: homelabs-apps-write
