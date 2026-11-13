@@ -37,7 +37,7 @@ applied by the first stage (`docs/flux.md`).
 | Tier | Admission policy | Egress | Ingress |
 | --- | --- | --- | --- |
 | `platform` | exempt from `no-host-access` | unrestricted | unrestricted |
-| `tenant` | gVisor, digest-pinned images, scratch PVC only, no `sops-age`, no reconciler SA, `agent-identity` | broker only, plus DNS | the cluster tunnel on 8080 (`nanobot` only) |
+| `tenant` | gVisor, digest-pinned images, scratch PVC only, no `sops-age`, no reconciler SA, `agent-identity` | broker only, plus DNS; the k3s API (443/6443) for `agent-control` only | the cluster tunnel on 8080 (`nanobot` only); the broker on 8081 (`agent-control` only) |
 | `broker` | `no-host-access`, `broker-runtime` | public TCP 443 (global unicast only), DNS, `loki-gateway` 3100 and `status-exporter` 9101 | `tenant` tier on 8080 |
 | `data` (each of `immich`, `navidrome`, `calibre`, `graphiti`) | `no-host-access`, `data-workload-source`, `data-pvc-scope`, `data-pvc-storage` | same namespace, DNS; HTTPS for `immich-machine-learning` and `graphiti` | same namespace, `ingress` on the app's port |
 | `ingress` | none beyond PSA | the four data apps on their ports, `tenant-apps/nanobot` 8080, Cloudflare edge 443, DNS | none |
@@ -101,12 +101,53 @@ portforward, proxy, secrets, deployment patch, node or node-metrics rule, and
 the pod has no token or API route; the grant is a break-glass ceiling
 (`docs/broker.md`).
 
+## Agent cluster access
+
+`agent-control` (`clusters/homelab/agent-control`) is the one identity that talks
+to the Kubernetes API on the agent's behalf, and the only tenant pod with an
+automounted token: `agent-identity` still pins
+`automountServiceAccountToken: false` for every nanobot-labelled pod, so the
+token cannot be copied into the agent. It is the **only cluster API capability
+the agent gets** — there is no kubeconfig, no proxy and no generic forwarding.
+
+| Piece | Where | Ceiling |
+| --- | --- | --- |
+| Service | `tenant-apps/agent-control`, ClusterIP **8081** | ingress only from the `broker` namespace on 8081; egress only DNS and the k3s API range (443/6443) |
+| Role | `tenant-apps/agent-control` (platform RBAC stage) | `pods`, `pods/log`, `events` get/list/watch; `patch` on `deployments/nanobot` only (`resourceNames`) |
+| ClusterRole | `agent-control-read`, bound in the agent-control stage | `pods`, `events`, `nodes` get/list/watch; `deployments`, `statefulsets`, `daemonsets` get/list; Flux `kustomizations` get/list |
+
+The HTTP surface is exactly nine routes; any other path is `404` and a wrong
+method on a known path is `405`. Probes are TCP checks, so no HTTP health route
+exists outside the list.
+
+| Route | Does |
+| --- | --- |
+| `GET /self/status` | the nanobot Deployment's replica counts and its own pods (status only) |
+| `GET /self/logs?tail=N` | container logs, `tail` clamped to 1..500, only for pods labelled `app.kubernetes.io/name=nanobot` **and** owned by the nanobot Deployment's ReplicaSets |
+| `GET /self/events` | events about those pods and the Deployment |
+| `POST /self/restart` | patches the `homelabs.dev/restart-requested-at` pod-template annotation on `deployments/nanobot` (`202`) |
+| `GET /cluster/pods`, `/cluster/events`, `/cluster/nodes` | read-only cluster picture, curated fields |
+| `GET /cluster/workloads` | Deployments/StatefulSets/DaemonSets across namespaces, **metadata only** |
+| `GET /cluster/flux` | Flux Kustomizations with readiness, revision and message |
+
+Secrets and ConfigMaps appear in no rule, and the client refuses those paths
+before it builds a request. Pod specs never leave the service (no env, no secret
+references); workload answers are metadata; Kustomization answers drop `spec`.
+Every request prints one audit line to stdout
+(`level=audit method=… path=… status=… caller=… duration_ms=…`); headers, tokens
+and bodies are never logged.
+
+The broker reaches it through its `self` logical host
+(`agent-control.tenant-apps.svc.cluster.local:8081`), so the agent never holds
+the Service's address, let alone the token. `docs/manual-steps.md` step 24 is the
+post-apply verification.
+
 ## NetworkPolicy
 
 | Namespace | default-deny | Allowed |
 | --- | --- | --- |
-| `tenant-apps` | both directions | DNS to `kube-system`; TCP 8080 to `broker` tier; ingress from `ingress/cloudflared` on 8080 (nanobot only) |
-| `broker` | both directions | DNS; ingress from `tenant` tier on 8080; egress TCP 443 to global unicast only (every non-global range excluded), TCP 3100 to `loki-gateway` and 9101 to `status-exporter` in `observability` |
+| `tenant-apps` | both directions | DNS to `kube-system`; TCP 8080 to `broker` tier; TCP 8081 from the `broker` namespace (`agent-control` only); TCP 443/6443 to the k3s API range (`agent-control` only); ingress from `ingress/cloudflared` on 8080 (nanobot only) |
+| `broker` | both directions | DNS; ingress from `tenant` tier on 8080; egress TCP 443 to global unicast only (every non-global range excluded), TCP 3100 to `loki-gateway`, 9101 to `status-exporter` in `observability` and 8081 to `tenant-apps/agent-control` |
 | `immich` | both directions | DNS; same-namespace any port; TCP 2283 from `ingress`; HTTPS from the machine-learning pod for model weights |
 | `navidrome` | both directions | DNS; same-namespace any port; TCP 4533 from `ingress` |
 | `calibre` | both directions | DNS; same-namespace any port; TCP 8083 from `ingress` |
