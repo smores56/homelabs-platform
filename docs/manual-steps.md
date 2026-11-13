@@ -21,10 +21,25 @@ main-gated environment secrets), and the ruleset in item 3.
    - Name: `smores56-homelabs-agent` (its actor becomes
      `smores56-homelabs-agent[bot]`).
    - Homepage: `https://github.com/smores56/homelabs-platform`.
-   - Webhook: inactive (the broker polls; nothing is delivered to it).
+   - Webhook: **inactive** (the broker polls; there is no endpoint for GitHub
+     to deliver to, and the tunnel admits nothing from GitHub).
+   - Post installation: Setup URL blank, **Redirect on update** off.
+   - Identifying and authorizing users: Callback URL blank;
+     **Expire user authorization tokens** at its default (on) — it governs user
+     access tokens only, which this app never issues; **Request user
+     authorization (OAuth) during installation** off; **Enable Device Flow**
+     off. Turning any of these on would create a second, human-impersonating
+     token type the broker does not need and cannot audit.
    - Repository permissions: **Contents: read and write**, **Pull requests:
      read and write**, **Metadata: read** (mandatory); **Actions: read** if you
-     want CI status in agent context.
+     want CI status in agent context. Leave **Workflows** at **No access** on
+     purpose: GitHub refuses a push that touches `.github/workflows/**`
+     without it, so a workflow change stays a diff the agent hands to the human
+     (`.github/` is Kanbei-critical), not something it can push.
+   - Organization permissions, Account permissions, Enterprise permissions:
+     **No access**, all of them. The app operates on two user-owned
+     repositories through scoped installation tokens; anything broader is
+     authority the broker would hold and never use.
    - Where can this app be installed: **Only on this account**.
 2. Record the **App ID** from the app's settings page, generate a **private
    key** (downloads a `.pem`; keep it in the password manager), then install the
