@@ -44,7 +44,7 @@ spec:
           # apps/webhook (digest in the run summary). The all-zero digest is the
           # documented pre-publish placeholder: replace it before the first
           # deploy (docs/manual-steps.md, webhook image step).
-          image: ghcr.io/smores56/homelabs-platform/webhook@sha256:0000000000000000000000000000000000000000000000000000000000000000
+          image: ghcr.io/smores56/homelabs-platform/webhook@sha256:6ae6bbebd6e6559568033a5f01191f5ec084de6725f99e45f1c7552828ea80e5
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
