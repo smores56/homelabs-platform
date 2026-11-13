@@ -27,7 +27,10 @@ class ShippedConfigTest(unittest.TestCase):
                 "github-apps",
                 "github-platform",
                 "github-platform-push",
+                "github-sdlc",
+                "github-sdlc-git",
                 "loki",
+                "memory",
                 "neuralwatt",
                 "notify",
                 "self",
@@ -44,12 +47,14 @@ class ShippedConfigTest(unittest.TestCase):
             "github-platform",
             "github-agent-push",
             "github-agent",
+            "github-sdlc-git",
+            "github-sdlc",
             "tinyfish",
         ):
             self.assertFalse(self.config.hosts[name].allow_private, name)
 
     def test_in_cluster_hosts_are_private_and_use_http(self) -> None:
-        for name in ("loki", "self", "status"):
+        for name in ("loki", "memory", "self", "status"):
             enrollment = self.config.hosts[name]
             self.assertTrue(enrollment.allow_private, name)
             self.assertEqual(enrollment.scheme, "http", name)
@@ -94,6 +99,58 @@ class ShippedConfigTest(unittest.TestCase):
         self.assertEqual(api.app.repositories, expected)
         self.assertEqual(dict(api.app.permissions), {"contents": "read", "pull_requests": "write"})
 
+    def test_sdlc_hosts_scope_the_registry_repository(self) -> None:
+        # SDLC #629: the work registry (smores56/sdlc) is a repository of its
+        # own. Git transport and REST API are separate hosts, a token cannot
+        # mint `metadata` without `read`, and issues are the only thing written.
+        git = self.config.hosts["github-sdlc-git"]
+        self.assertEqual(git.host, "github.com")
+        self.assertEqual(git.scheme, "https")
+        self.assertEqual(git.injection.kind, "basic")
+        self.assertEqual(git.injection.username, "x-access-token")
+        self.assertEqual(git.app.repositories, ("sdlc",))
+        self.assertEqual(dict(git.app.permissions), {"contents": "write"})
+        api = self.config.hosts["github-sdlc"]
+        self.assertEqual(api.host, "api.github.com")
+        self.assertEqual(api.scheme, "https")
+        self.assertEqual(api.injection.kind, "bearer")
+        self.assertEqual(api.app.repositories, ("sdlc",))
+        self.assertEqual(dict(api.app.permissions), {"issues": "write", "metadata": "read"})
+
+    def test_memory_is_a_private_http_host_with_an_optional_token(self) -> None:
+        # SDLC #631: the graphiti wrapper. In-cluster HTTP with a bearer token
+        # is the documented private exception. The token lives in the graphiti
+        # Secret, so until step 32 projects it a missing file must be a 503 for
+        # this host, never a startup abort.
+        memory = self.config.hosts["memory"]
+        self.assertEqual(memory.host, "memory-mcp.graphiti.svc.cluster.local")
+        self.assertEqual(memory.port, 8182)
+        self.assertEqual(memory.scheme, "http")
+        self.assertTrue(memory.allow_private)
+        self.assertEqual(memory.secret_name, "memory-mcp-token")
+        self.assertEqual(memory.injection.kind, "bearer")
+        self.assertTrue(memory.optional_secret)
+
+    def test_only_the_unprovisioned_hosts_are_optional(self) -> None:
+        # Fail-closed stays the default: an optional secret is a 503 per host,
+        # so widening it to another enrollment needs this list to change.
+        self.assertEqual(
+            {name for name, enrollment in self.config.hosts.items() if enrollment.optional_secret},
+            {"memory", "notify"},
+        )
+
+    def test_a_missing_memory_token_never_aborts_the_load(self) -> None:
+        directory = tempfile.mkdtemp()
+        required = {
+            enrollment.secret_name
+            for enrollment in self.config.hosts.values()
+            if enrollment.secret_name and not enrollment.optional_secret
+        }
+        for name in required:
+            pathlib.Path(directory, name).write_text("value\n")
+        secrets = load_secrets(self.config.hosts, directory)
+        self.assertNotIn("memory-mcp-token", secrets)
+
     def test_notify_is_a_public_placeholder_with_a_body_limit(self) -> None:
         # The provider is undecided (SDLC #640): the endpoint is a deliberate
         # `.invalid` placeholder, documented in docs/manual-steps.md step 24.
@@ -128,8 +185,11 @@ class ShippedConfigTest(unittest.TestCase):
             "github-platform",
             "github-agent-push",
             "github-agent",
+            "github-sdlc-git",
+            "github-sdlc",
             "tinyfish",
             "loki",
+            "memory",
             "status",
         ):
             enrollment = self.config.hosts[name]
@@ -153,6 +213,7 @@ class ShippedConfigTest(unittest.TestCase):
                         "tinyfish-api-key",
                         "loki-gateway-token",
                         "notify-token",
+                        "memory-mcp-token",
                     },
                 )
             self.assertNotIn("private_key", enrollment)
