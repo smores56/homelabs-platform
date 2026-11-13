@@ -17,10 +17,17 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Callable
 from urllib.parse import quote
 
-from .config import HEADER_NAME, Config, Enrollment
+from .config import HEADER_NAME, MAX_REQUEST_BYTES, METHODS, Config, Enrollment
 from .credentials import Credentials, StaticCredentials
 from .github_app import CredentialUnavailable
-from .policy import Denied, PinnedAddress, check_redirect, resolve_pinned, split_target
+from .policy import (
+    Denied,
+    PinnedAddress,
+    check_redirect,
+    check_request,
+    resolve_pinned,
+    split_target,
+)
 from .redact import redact, redact_header
 
 LOG = logging.getLogger("broker")
@@ -60,8 +67,6 @@ AGENT_CREDENTIALS = frozenset(
         "forwarded",
     }
 )
-METHODS = ("GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS")
-MAX_REQUEST_BYTES = 64 * 1024 * 1024
 REDACTION_CAP = 1024 * 1024
 CONNECT_TIMEOUT = 10.0
 READ_TIMEOUT = 60.0
@@ -132,7 +137,11 @@ class Broker:
     connector: Connector = connect_pinned
 
     def credential(self, enrollment: Enrollment) -> str:
-        return self.credentials.value(enrollment)
+        value = self.credentials.value(enrollment)
+        if enrollment.secret_name and not value:
+            # optional_secret hosts are enrolled before their credential exists.
+            raise CredentialUnavailable(f"{enrollment.name}: credential is not provisioned")
+        return value
 
     def handle(self, handler: BaseHTTPRequestHandler) -> None:
         method = handler.command.upper()
@@ -142,6 +151,7 @@ class Broker:
         status = 500
         size = 0
         outcome = "error"
+        reason = ""
         try:
             if method in ("CONNECT", "TRACE"):
                 raise Denied("connect_not_allowed", status=405)
@@ -155,7 +165,8 @@ class Broker:
             enrollment = self.config.hosts.get(logical)
             if enrollment is None:
                 raise Denied("unknown_logical_host", status=404)
-            body = self._read_body(handler)
+            body = self._read_body(handler, enrollment.max_body_bytes)
+            check_request(enrollment, method, path, body)
             pinned = resolve_pinned(
                 enrollment.host,
                 enrollment.port,
@@ -168,30 +179,35 @@ class Broker:
         except Denied as denial:
             status = self._deny(handler, denial, logical)
             outcome = "denied"
+            reason = denial.reason
         except CredentialUnavailable as exc:
             # Never forward without the credential: a minting failure is a 503.
             LOG.warning("broker credential unavailable logical=%s class=%s", logical, type(exc).__name__)
             status = self._deny(handler, Denied("credential_unavailable", status=503), logical)
             outcome = "denied"
+            reason = "credential_unavailable"
         except (OSError, http.client.HTTPException, ssl.SSLError) as exc:
             # The exception text can name the pinned address; log its class only.
             status = self._deny(handler, Denied("upstream_unreachable", status=502), logical)
             outcome = "denied"
+            reason = "upstream_unreachable"
             LOG.warning("broker upstream failure class=%s", type(exc).__name__)
         except Exception as exc:  # pragma: no cover - last-resort denial
             LOG.error("unhandled broker error class=%s", type(exc).__name__)
             status = self._deny(handler, Denied("internal_error", status=500), logical)
             outcome = "error"
+            reason = "internal_error"
         finally:
             if outcome != "health":
                 LOG.info(
-                    "logical=%s method=%s path=%s status=%d bytes=%d outcome=%s",
+                    "logical=%s method=%s path=%s status=%d bytes=%d outcome=%s%s",
                     logical,
                     method,
                     self._safe_path(path, logical),
                     status,
                     size,
                     outcome,
+                    f" reason={reason}" if reason else "",
                 )
 
     def _safe_path(self, path: str, logical: str) -> str:
@@ -205,16 +221,22 @@ class Broker:
         handler.wfile.write(b"ok\n")
         return 200
 
-    def _read_body(self, handler: BaseHTTPRequestHandler) -> bytes:
+    def _read_body(self, handler: BaseHTTPRequestHandler, limit: int | None = None) -> bytes:
+        cap = limit if limit is not None else MAX_REQUEST_BYTES
         if handler.headers.get("Transfer-Encoding", "").lower() not in ("", "identity"):
+            handler.close_connection = True
             raise Denied("chunked_request_body", status=411)
         try:
             length = int(handler.headers.get("Content-Length") or 0)
         except ValueError:
+            handler.close_connection = True
             raise Denied("bad_content_length", status=400) from None
         if length < 0:
+            handler.close_connection = True
             raise Denied("bad_content_length", status=400)
-        if length > MAX_REQUEST_BYTES:
+        if length > cap:
+            # The unread body must not be parsed as a second request.
+            handler.close_connection = True
             raise Denied("request_too_large", status=413)
         if handler.headers.get("Expect", "").lower() == "100-continue":
             # Git and curl wait for this before sending the body. The broker

@@ -110,6 +110,20 @@
         "header": "X-Api-Key"
       }
     },
+    "notify": {
+      "scheme": "https",
+      "host": "notify.invalid",
+      "port": 443,
+      "allow_private": false,
+      "secret": "notify-token",
+      "optional_secret": true,
+      "inject": {
+        "kind": "bearer"
+      },
+      "allow_methods": ["POST"],
+      "allow_paths": ["^/v1/notify$"],
+      "max_body_bytes": 4096
+    },
     "loki": {
       "scheme": "http",
       "host": "loki-gateway.observability.svc.cluster.local",
@@ -122,6 +136,12 @@
       "headers": {
         "X-Scope-OrgID": "data"
       }
+    },
+    "self": {
+      "scheme": "http",
+      "host": "agent-control.tenant-apps.svc.cluster.local",
+      "port": 8081,
+      "allow_private": true
     },
     "status": {
       "scheme": "http",

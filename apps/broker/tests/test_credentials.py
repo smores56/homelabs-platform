@@ -131,3 +131,40 @@ class FailClosedTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class OptionalSecretTests(unittest.TestCase):
+    def test_an_unprovisioned_optional_secret_is_a_503_and_never_a_forward(self):
+        # SDLC #640: the notify provider is undecided, so the enrollment ships
+        # with optional_secret and must not take the broker down at startup.
+        config = Config(
+            listen_host="127.0.0.1",
+            listen_port=8080,
+            deny_addresses=(),
+            hosts={
+                "notify": Enrollment(
+                    name="notify",
+                    scheme="https",
+                    host="notify.invalid",
+                    port=443,
+                    allow_private=False,
+                    secret_name="notify-token",
+                    injection=Injection(kind="bearer"),
+                    optional_secret=True,
+                )
+            },
+        )
+        broker = Broker(
+            config=config,
+            credentials=StaticCredentials({}),
+            resolver=lambda *args, **kwargs: [(2, 1, 6, "", ("93.184.216.34", 443))],
+        )
+        handler = Handler()
+        handler.command = "POST"
+        handler.path = "/notify/v1/notify"
+        handler.headers = {"Host": "broker", "Content-Length": "0"}
+
+        broker.handle(handler)
+
+        self.assertEqual(handler.status, 503)
+        self.assertIn(b"credential_unavailable", handler.wfile.getvalue())

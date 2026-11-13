@@ -1,0 +1,22 @@
+# Broker egress is an allowlist: egress-public-https admits public TCP 443 only
+# and excludes every non-global range, so the in-cluster `self` logical host
+# needs its own rule. One namespace, one port; agent-control's own Service and
+# ingress policy belong to the tenant repository.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: egress-agent-control
+  labels:
+    app.kubernetes.io/name: broker
+    homelabs.dev/tier: broker
+spec:
+  podSelector: {}
+  policyTypes: ["Egress"]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: tenant-apps
+      ports:
+        - protocol: TCP
+          port: 8081

@@ -8,11 +8,14 @@ so the tests can drive each branch without touching the network; production uses
 from __future__ import annotations
 
 import ipaddress
+import json
 import posixpath
 import socket
 from dataclasses import dataclass
 from typing import Callable, Iterable
 from urllib.parse import unquote, urlsplit
+
+from .config import BodyGuard, Enrollment
 
 Address = ipaddress.IPv4Address | ipaddress.IPv6Address
 Resolver = Callable[..., list[tuple]]
@@ -163,6 +166,80 @@ def check_redirect(location: str, *, scheme: str, host: str, port: int) -> None:
     target_port = target_port or (443 if target.scheme == "https" else 80)
     if target_port != port:
         raise Denied("cross_host_redirect", status=502)
+
+
+# -------------------------------------------------------- request predicates
+# Per-host method, path and body gates (#624). They run after the target is
+# split and before DNS resolution, so a denied request never reaches an
+# upstream and never needs a credential.
+
+class _DuplicateKey(ValueError):
+    """A JSON body repeats a key; two parsers could then read two values."""
+
+
+def _reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    document: dict[str, object] = {}
+    for key, value in pairs:
+        if key in document:
+            raise _DuplicateKey(key)
+        document[key] = value
+    return document
+
+
+def _json_field(document: object, field: str) -> object:
+    value = document
+    for part in field.split("."):
+        if not isinstance(value, dict) or part not in value:
+            return None
+        value = value[part]
+    return value
+
+
+def _check_body_guard(guard: BodyGuard, text: str) -> None:
+    try:
+        document = json.loads(text, object_pairs_hook=_reject_duplicate_keys)
+    except (ValueError, RecursionError):
+        raise Denied("body_json_invalid") from None
+    value = _json_field(document, guard.field)
+    if not isinstance(value, str) or guard.allow.match(value) is None:
+        raise Denied("body_field_denied")
+
+
+def check_request(enrollment: Enrollment, method: str, path: str, body: bytes) -> None:
+    """Enforce this enrollment's method, path and body predicates.
+
+    Everything here happens before DNS resolution and before a credential is
+    attached. Empty predicate tuples are a no-op, which is how every enrollment
+    turned on before #624 keeps its behavior. Patterns are reviewed config, and
+    a per-host body cap bounds the work a pattern can cause.
+    """
+    method = method.upper()
+    if enrollment.allow_methods and method not in enrollment.allow_methods:
+        raise Denied("method_denied")
+    if method in enrollment.deny_methods:
+        raise Denied("method_denied")
+    if enrollment.allow_paths and not any(pattern.fullmatch(path) for pattern in enrollment.allow_paths):
+        raise Denied("path_denied")
+    if any(pattern.match(path) for pattern in enrollment.deny_paths):
+        raise Denied("path_denied")
+    if enrollment.max_body_bytes is not None and len(body) > enrollment.max_body_bytes:
+        raise Denied("request_too_large", status=413)
+    if not enrollment.deny_body_patterns and not enrollment.body_guards:
+        return
+    if enrollment.deny_body_patterns:
+        text = body.decode("utf-8", "replace")
+        if any(pattern.search(text) for pattern in enrollment.deny_body_patterns):
+            raise Denied("body_denied")
+    for guard in enrollment.body_guards:
+        if guard.methods and method not in guard.methods:
+            continue
+        if not any(pattern.fullmatch(path) for pattern in guard.paths):
+            continue
+        try:
+            strict = body.decode("utf-8")
+        except UnicodeDecodeError:
+            raise Denied("body_json_invalid") from None
+        _check_body_guard(guard, strict)
 
 
 def split_target(raw_target: str, host_header: str | None) -> tuple[str, str, str]:

@@ -1,7 +1,8 @@
 # Egress is the coarse CNI layer; the authoritative rule is the broker's own
 # pinned-address check. Public space is reachable on TCP 443 only, with every
-# non-global range excluded here as well as in the broker. The two in-cluster
-# logical hosts are opened by name in observability/network/.
+# non-global range excluded here as well as in the broker. The in-cluster
+# logical hosts are opened by name: loki/status in observability/network/, and
+# the `self` host in egress-agent-control.yaml beside this file.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:

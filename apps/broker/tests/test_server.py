@@ -12,18 +12,21 @@ import http.client
 import io
 import json
 import logging
+import re
 import socket
 import threading
 import time
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from broker.config import Config, Enrollment, Injection
+from broker.config import BodyGuard, Config, Enrollment, Injection
 from broker.credentials import StaticCredentials
 from broker.server import Broker, make_server
 
 SECRET = "s3cr3t-broker-token"
 AGENT_SECRET = "agent-supplied-value"
+HOOK_PATH = "/repos/smores56/kanbei/hooks"
+HOOK_URL = "https://agent-hooks.sammohr.dev/kanbei"
 
 
 class UpstreamHandler(BaseHTTPRequestHandler):
@@ -128,6 +131,36 @@ class BrokerTest(unittest.TestCase):
                     injection=Injection(kind="bearer"),
                     headers=(("X-Scope-OrgID", "data"),),
                 ),
+                "hooks": Enrollment(
+                    name="hooks",
+                    scheme="https",
+                    host="api.github.com",
+                    port=443,
+                    allow_private=False,
+                    secret_name="hooks-token",
+                    injection=Injection(kind="bearer"),
+                    allow_methods=("POST",),
+                    allow_paths=(re.compile(r"^/repos/[^/]+/[^/]+/hooks$"),),
+                    body_guards=(
+                        BodyGuard(
+                            methods=("POST",),
+                            paths=(re.compile(r"^/repos/[^/]+/[^/]+/hooks$"),),
+                            field="config.url",
+                            allow=re.compile(r"^https://agent-hooks\.sammohr\.dev/"),
+                        ),
+                    ),
+                ),
+                "limited": Enrollment(
+                    name="limited",
+                    scheme="https",
+                    host="notify.test",
+                    port=443,
+                    allow_private=False,
+                    secret_name="",
+                    injection=Injection(kind="none"),
+                    allow_methods=("POST",),
+                    max_body_bytes=8,
+                ),
             },
         )
         self.logs = io.StringIO()
@@ -141,7 +174,9 @@ class BrokerTest(unittest.TestCase):
     def start(self, resolver) -> None:
         broker = Broker(
             config=self.config,
-            credentials=StaticCredentials({"test-token": SECRET, "loki-token": "loki-secret"}),
+            credentials=StaticCredentials(
+                {"test-token": SECRET, "loki-token": "loki-secret", "hooks-token": "hooks-secret"}
+            ),
             resolver=resolver,
             connector=lambda enrollment, pinned, timeout: http.client.HTTPConnection(
                 "127.0.0.1", self.upstream_port, timeout=timeout
@@ -249,6 +284,56 @@ class BrokerTest(unittest.TestCase):
         response, _ = self.request("POST", "/upstream/post", body=b'{"a":1}')
         self.assertEqual(response.status, 200)
         self.assertEqual(UpstreamHandler.requests[-1]["body"], b'{"a":1}')
+
+    def test_hook_creation_with_the_enrolled_url_is_forwarded(self) -> None:
+        raw = json.dumps({"config": {"url": HOOK_URL, "content_type": "json"}}).encode()
+        response, _ = self.request("POST", f"/hooks{HOOK_PATH}", body=raw)
+        self.assertEqual(response.status, 200)
+        forwarded = UpstreamHandler.requests[-1]
+        self.assertEqual(forwarded["path"], HOOK_PATH)
+        self.assertEqual(forwarded["body"], raw)
+        self.assertEqual(forwarded["headers"]["authorization"], "Bearer hooks-secret")
+
+    def test_hook_creation_with_another_url_is_refused_and_not_forwarded(self) -> None:
+        raw = json.dumps({"config": {"url": "https://evil.example/collect"}}).encode()
+        response, body = self.request("POST", f"/hooks{HOOK_PATH}", body=raw)
+        self.assertEqual(response.status, 403)
+        self.assertIn(b"body_field_denied", body)
+        self.assertNotIn(b"evil.example", body)
+        self.assertEqual(UpstreamHandler.requests, [])
+
+    def test_malformed_hook_body_is_refused(self) -> None:
+        response, body = self.request("POST", f"/hooks{HOOK_PATH}", body=b"{not json")
+        self.assertEqual(response.status, 403)
+        self.assertIn(b"body_json_invalid", body)
+        self.assertEqual(UpstreamHandler.requests, [])
+
+    def test_method_and_path_predicates_refuse_without_forwarding(self) -> None:
+        response, body = self.request("GET", f"/hooks{HOOK_PATH}")
+        self.assertEqual(response.status, 403)
+        self.assertIn(b"method_denied", body)
+        response, body = self.request(
+            "POST", "/hooks/repos/smores56/kanbei/issues", body=b'{"config": {"url": "x"}}'
+        )
+        self.assertEqual(response.status, 403)
+        self.assertIn(b"path_denied", body)
+        self.assertEqual(UpstreamHandler.requests, [])
+
+    def test_oversized_body_is_refused_before_forwarding(self) -> None:
+        response, body = self.request("POST", "/limited/notify", body=b"x" * 9)
+        self.assertEqual(response.status, 413)
+        self.assertIn(b"request_too_large", body)
+        self.assertEqual(UpstreamHandler.requests, [])
+
+    def test_denial_logs_the_reason_and_never_the_body(self) -> None:
+        raw = json.dumps({"config": {"url": "https://evil.example/" + AGENT_SECRET}}).encode()
+        self.request("POST", f"/hooks{HOOK_PATH}", body=raw)
+        logs = self.wait_for_log("reason=body_field_denied")
+        self.assertIn("logical=hooks method=POST path=" + HOOK_PATH, logs)
+        self.assertIn("status=403", logs)
+        self.assertIn("outcome=denied", logs)
+        self.assertNotIn(AGENT_SECRET, logs)
+        self.assertNotIn("evil.example", logs)
 
     def test_pod_address_is_refused_before_connect(self) -> None:
         self.server.shutdown()

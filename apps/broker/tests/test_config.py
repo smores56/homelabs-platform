@@ -29,6 +29,8 @@ class ShippedConfigTest(unittest.TestCase):
                 "github-platform-push",
                 "loki",
                 "neuralwatt",
+                "notify",
+                "self",
                 "status",
                 "tinyfish",
             ],
@@ -47,7 +49,7 @@ class ShippedConfigTest(unittest.TestCase):
             self.assertFalse(self.config.hosts[name].allow_private, name)
 
     def test_in_cluster_hosts_are_private_and_use_http(self) -> None:
-        for name in ("loki", "status"):
+        for name in ("loki", "self", "status"):
             enrollment = self.config.hosts[name]
             self.assertTrue(enrollment.allow_private, name)
             self.assertEqual(enrollment.scheme, "http", name)
@@ -92,6 +94,53 @@ class ShippedConfigTest(unittest.TestCase):
         self.assertEqual(api.app.repositories, expected)
         self.assertEqual(dict(api.app.permissions), {"contents": "read", "pull_requests": "write"})
 
+    def test_notify_is_a_public_placeholder_with_a_body_limit(self) -> None:
+        # The provider is undecided (SDLC #640): the endpoint is a deliberate
+        # `.invalid` placeholder, documented in docs/manual-steps.md step 24.
+        notify = self.config.hosts["notify"]
+        self.assertEqual(notify.host, "notify.invalid")
+        self.assertEqual(notify.scheme, "https")
+        self.assertFalse(notify.allow_private)
+        self.assertEqual(notify.secret_name, "notify-token")
+        self.assertTrue(notify.optional_secret, "the provider is undecided; a missing token must not crashloop the broker")
+        self.assertEqual(notify.injection.kind, "bearer")
+        self.assertEqual(notify.allow_methods, ("POST",))
+        self.assertEqual(len(notify.allow_paths), 1)
+        self.assertIsNotNone(notify.max_body_bytes)
+        self.assertLessEqual(notify.max_body_bytes, 64 * 1024)
+
+    def test_self_is_private_and_credential_free(self) -> None:
+        agent_control = self.config.hosts["self"]
+        self.assertEqual(agent_control.host, "agent-control.tenant-apps.svc.cluster.local")
+        self.assertEqual(agent_control.port, 8081)
+        self.assertEqual(agent_control.scheme, "http")
+        self.assertTrue(agent_control.allow_private)
+        self.assertEqual(agent_control.secret_name, "")
+        self.assertEqual(agent_control.injection.kind, "none")
+
+    def test_existing_hosts_carry_no_request_predicates(self) -> None:
+        # Defaults must preserve the pre-#624 broker: an enrollment without
+        # predicates forwards every method and path it always did.
+        for name in (
+            "neuralwatt",
+            "github-apps",
+            "github-platform-push",
+            "github-platform",
+            "github-agent-push",
+            "github-agent",
+            "tinyfish",
+            "loki",
+            "status",
+        ):
+            enrollment = self.config.hosts[name]
+            self.assertEqual(enrollment.allow_methods, (), name)
+            self.assertEqual(enrollment.deny_methods, (), name)
+            self.assertEqual(enrollment.allow_paths, (), name)
+            self.assertEqual(enrollment.deny_paths, (), name)
+            self.assertEqual(enrollment.deny_body_patterns, (), name)
+            self.assertEqual(enrollment.body_guards, (), name)
+            self.assertIsNone(enrollment.max_body_bytes, name)
+
     def test_no_credential_value_in_the_config(self) -> None:
         raw = json.loads(SHIPPED.read_text())
         for enrollment in raw["logical_hosts"].values():
@@ -99,7 +148,12 @@ class ShippedConfigTest(unittest.TestCase):
             if "secret" in enrollment:
                 self.assertIn(
                     enrollment["secret"],
-                    {"neuralwatt-api-key", "tinyfish-api-key", "loki-gateway-token"},
+                    {
+                        "neuralwatt-api-key",
+                        "tinyfish-api-key",
+                        "loki-gateway-token",
+                        "notify-token",
+                    },
                 )
             self.assertNotIn("private_key", enrollment)
         self.assertNotRegex(SHIPPED.read_text(), r"[A-Za-z0-9_-]{32,}")
@@ -141,14 +195,19 @@ class ConfigValidationTest(unittest.TestCase):
     def test_no_injection_must_not_name_a_secret(self) -> None:
         with self.assertRaises(ConfigError):
             load_config(self.write(self.base(inject={"kind": "none"})), env={})
-
     def test_unknown_kind_and_bad_port(self) -> None:
         with self.assertRaises(ConfigError):
             load_config(self.write(self.base(inject={"kind": "oauth"})), env={})
         with self.assertRaises(ConfigError):
             load_config(self.write(self.base(port=70000)), env={})
 
+    def test_optional_secret_needs_a_static_secret(self) -> None:
+        with self.assertRaises(ConfigError):
+            load_config(self.write(self.base(secret="", inject={"kind": "none"}, optional_secret=True)), env={})
+
     def test_credential_header_cannot_be_a_fixed_header(self) -> None:
+        with self.assertRaises(ConfigError):
+            load_config(self.write(self.base(headers={"Authorization": "Bearer x"})), env={})
         with self.assertRaises(ConfigError):
             load_config(self.write(self.base(headers={"Authorization": "Bearer x"})), env={})
 
@@ -164,6 +223,93 @@ class ConfigValidationTest(unittest.TestCase):
         self.assertEqual(config.listen_host, "0.0.0.0")
         self.assertEqual(config.listen_port, 9000)
         self.assertEqual(len(config.deny_addresses), 2)
+
+
+class PredicateConfigTest(unittest.TestCase):
+    def write(self, raw: object) -> str:
+        directory = tempfile.mkdtemp()
+        path = pathlib.Path(directory, "broker.json")
+        path.write_text(json.dumps(raw))
+        return str(path)
+
+    def base(self, **overrides: object) -> dict:
+        enrollment = {
+            "scheme": "https",
+            "host": "api.example.test",
+            "port": 443,
+            "secret": "example-token",
+            "inject": {"kind": "bearer"},
+        }
+        enrollment.update(overrides)
+        return {"listen": "127.0.0.1:8080", "logical_hosts": {"example": enrollment}}
+
+    def test_predicates_parse_and_compile(self) -> None:
+        config = load_config(
+            self.write(
+                self.base(
+                    allow_methods=["post", "GET"],
+                    deny_methods=["delete"],
+                    allow_paths=["^/repos/[^/]+/[^/]+/hooks$"],
+                    deny_paths=["^/admin"],
+                    deny_body_patterns=['"public"\\s*:\\s*true'],
+                    max_body_bytes=4096,
+                    body_guards=[
+                        {
+                            "methods": ["POST"],
+                            "paths": ["^/repos/[^/]+/[^/]+/hooks$"],
+                            "field": "config.url",
+                            "allow": "^https://agent-hooks\\.sammohr\\.dev/",
+                        }
+                    ],
+                )
+            ),
+            env={},
+        )
+        enrollment = config.hosts["example"]
+        self.assertEqual(enrollment.allow_methods, ("POST", "GET"))
+        self.assertEqual(enrollment.deny_methods, ("DELETE",))
+        self.assertTrue(enrollment.allow_paths[0].fullmatch("/repos/a/b/hooks"))
+        self.assertEqual(enrollment.max_body_bytes, 4096)
+        guard = enrollment.body_guards[0]
+        self.assertEqual(guard.methods, ("POST",))
+        self.assertEqual(guard.field, "config.url")
+        self.assertTrue(guard.allow.match("https://agent-hooks.sammohr.dev/x"))
+
+    def test_predicates_default_to_empty(self) -> None:
+        enrollment = load_config(self.write(self.base()), env={}).hosts["example"]
+        self.assertEqual(enrollment.allow_methods, ())
+        self.assertEqual(enrollment.deny_methods, ())
+        self.assertEqual(enrollment.allow_paths, ())
+        self.assertEqual(enrollment.deny_paths, ())
+        self.assertEqual(enrollment.deny_body_patterns, ())
+        self.assertEqual(enrollment.body_guards, ())
+        self.assertIsNone(enrollment.max_body_bytes)
+
+    def test_bad_predicates_are_refused_at_load(self) -> None:
+        for overrides in (
+            {"allow_methods": ["FETCH"]},
+            {"deny_methods": ["POST", 1]},
+            {"allow_methods": ["POST"], "deny_methods": ["POST"]},
+            {"allow_methods": "POST"},
+            {"allow_paths": ["("]},
+            {"deny_paths": ["ok", None]},
+            {"deny_body_patterns": [""]},
+            {"deny_body_patterns": ["("]},
+            {"max_body_bytes": 0},
+            {"max_body_bytes": 64 * 1024 * 1024 + 1},
+            {"max_body_bytes": True},
+            {"max_body_bytes": "1024"},
+            {"body_guards": [{"field": "config.url", "allow": "x"}]},
+            {"body_guards": [{"paths": ["^/hooks$"], "allow": "x"}]},
+            {"body_guards": [{"paths": ["^/hooks$"], "field": "config.url"}]},
+            {"body_guards": [{"paths": ["^/hooks$"], "field": "", "allow": "x"}]},
+            {"body_guards": [{"paths": ["^/hooks$"], "field": "a..b", "allow": "x"}]},
+            {"body_guards": [{"paths": ["^/hooks$"], "field": "config.url", "allow": "("}]},
+            {"body_guards": [{"paths": ["^/hooks$"], "field": "config.url", "allow": "x", "extra": 1}]},
+            {"body_guards": [{"paths": ["^/hooks$"], "field": "config.url", "allow": "x", "methods": ["FETCH"]}]},
+        ):
+            with self.assertRaises(ConfigError, msg=repr(overrides)):
+                load_config(self.write(self.base(**overrides)), env={})
 
 
 class GithubAppEnrollmentTest(unittest.TestCase):
@@ -260,6 +406,20 @@ class SecretsTest(unittest.TestCase):
         pathlib.Path(directory, "neuralwatt-api-key").write_text("\n")
         with self.assertRaises(ConfigError):
             load_secrets(config.hosts, directory)
+
+    def test_optional_secret_is_skipped_when_absent_or_empty(self) -> None:
+        config = load_config(SHIPPED, env={})
+        directory = tempfile.mkdtemp()
+        for name in {enrollment.secret_name for enrollment in config.hosts.values() if enrollment.secret_name}:
+            if name == "notify-token":
+                continue
+            pathlib.Path(directory, name).write_text("value\n")
+        secrets = load_secrets(config.hosts, directory)
+        self.assertNotIn("notify-token", secrets)
+        pathlib.Path(directory, "notify-token").write_text("\n")
+        self.assertNotIn("notify-token", load_secrets(config.hosts, directory))
+        pathlib.Path(directory, "notify-token").write_text("token\n")
+        self.assertEqual(load_secrets(config.hosts, directory)["notify-token"], "token")
 
     def test_the_app_key_is_required_when_an_app_is_enrolled(self) -> None:
         config = load_config(SHIPPED, env={})

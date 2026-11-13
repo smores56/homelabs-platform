@@ -16,13 +16,14 @@ data:
   secretName: broker-credentials
   namespace: broker
   keys: >-
-    neuralwatt-api-key,tinyfish-api-key,loki-gateway-token
+    neuralwatt-api-key,tinyfish-api-key,loki-gateway-token,notify-token
   app_keys: >-
     github-app-id,github-app-private-key,github-installation-id
   source: >-
     broker-credentials.yaml, SOPS-encrypted with the flux-system age recipient;
     decrypt with `sops -d` and pipe each key into the Secret. Never commit the
-    encrypted file to the tenant repository.
+    encrypted file to the tenant repository. notify-token is optional until the
+    #640 provider is chosen (optional_secret in the enrollment).
   rotate: >-
     write the new value to the SOPS file, replace the Secret, then
     `kubectl -n broker rollout restart deployment/broker` (the broker reads
