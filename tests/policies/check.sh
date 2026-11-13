@@ -514,8 +514,8 @@ eq "$(jq -s -r 'map(select(.metadata.namespace == "calibre") | .metadata.name) |
   "allow-dns-egress,allow-same-namespace,calibre-http-from-ingress,default-deny,restic-egress" \
   "calibre keeps only default-deny, DNS, same-namespace, ingress HTTP and restic egress"
 eq "$(jq -s -r 'map(select(.metadata.namespace == "graphiti") | .metadata.name) | sort | join(",")' "$network_json")" \
-  "allow-dns-egress,allow-same-namespace,default-deny,graphiti-public-https,memory-mcp-from-ingress,memory-mcp-nodeport-from-host,restic-egress" \
-  "graphiti keeps only default-deny, DNS, same-namespace, Neuralwatt HTTPS, the tunnel and host-tap paths to the wrapper, and restic egress"
+  "allow-dns-egress,allow-same-namespace,default-deny,graphiti-public-https,memory-mcp-from-broker,memory-mcp-from-ingress,memory-mcp-nodeport-from-host,restic-egress" \
+  "graphiti keeps only default-deny, DNS, same-namespace, Neuralwatt HTTPS, the broker, tunnel and host-tap paths to the wrapper, and restic egress"
 
 eq "$(jq -r 'select(.metadata.namespace == "ingress" and .metadata.name == "egress-data-apps-only") | [.spec.egress[] | .to[0] | "\(.namespaceSelector.matchLabels["kubernetes.io/metadata.name"]):\(.podSelector.matchLabels["app.kubernetes.io/name"])"] | sort | join(",")' "$network_json")" \
   "calibre:calibre,graphiti:memory-mcp,immich:immich,navidrome:navidrome" \
@@ -533,6 +533,10 @@ eq "$(jq -r 'select(.metadata.namespace == "graphiti" and .metadata.name == "mem
   "ingress:cloudflared:8182" "the tunnel reaches the memory wrapper on its MCP port"
 eq "$(jq -r 'select(.metadata.namespace == "graphiti" and .metadata.name == "memory-mcp-nodeport-from-host") | [(.spec.ingress[0].from | map(.ipBlock.cidr) | sort | join(",")), (.spec.ingress[0].ports[0].port | tostring)] | join(":")' "$network_json")" \
   "10.77.1.1/32,10.77.1.2/32:8182" "the host tap path to the wrapper is untouched"
+# The broker's own path (#631): its credential is the boundary, the rule is the
+# network half, and it names the broker namespace rather than a tier.
+eq "$(jq -r 'select(.metadata.namespace == "graphiti" and .metadata.name == "memory-mcp-from-broker") | [.spec.ingress[0].from[0].namespaceSelector.matchLabels["kubernetes.io/metadata.name"], (.spec.ingress[0].from[0].podSelector // {} | length | tostring), .spec.ingress[0].ports[0].port] | join(":")' "$network_json")" \
+  "broker:0:8182" "the broker reaches the memory wrapper on its MCP port and nothing else"
 
 # ------------------------------------------------------- data storage contract
 storage_dir=clusters/homelab/platform/storage
@@ -772,18 +776,23 @@ fi
 # agent's BROKER_URL paths depend on; the unit tests parse the same file.
 enrollment='.[] | select(.kind == "ConfigMap" and (.metadata.name | startswith("broker-config"))) | .data["broker.json"] | fromjson'
 eq "$(jq -r "$enrollment | .logical_hosts | keys | sort | join(\",\")" "$work/broker.json")" \
-  "github-agent,github-agent-push,github-apps,github-platform,github-platform-push,loki,neuralwatt,notify,self,status,tinyfish" \
+  "github-agent,github-agent-push,github-apps,github-platform,github-platform-push,github-sdlc,github-sdlc-git,loki,memory,neuralwatt,notify,self,status,tinyfish" \
   "the broker enrolls exactly the agent's logical hosts"
 eq "$(jq -r "$enrollment | [.logical_hosts | to_entries[] | select(.value.allow_private) | .key] | sort | join(\",\")" "$work/broker.json")" \
-  "loki,self,status" "only the in-cluster hosts are private enrollments"
+  "loki,memory,self,status" "only the in-cluster hosts are private enrollments"
 eq "$(jq -r "$enrollment | .logical_hosts.notify | [.host, .allow_private, .inject.kind, .secret, (.optional_secret | tostring), (.allow_methods | join(\",\")), (.allow_paths | join(\";\")), (.max_body_bytes | tostring)] | join(\":\")" "$work/broker.json")" \
   "notify.invalid:false:bearer:notify-token:true:POST:^/v1/notify$:4096" \
   "notify is a public placeholder, POST-only, bearer, body-capped, optional token"
 eq "$(jq -r "$enrollment | .logical_hosts.self | [.host, .port, .allow_private, (.secret // \"-\"), (.inject.kind // \"none\")] | join(\":\")" "$work/broker.json")" \
   "agent-control.tenant-apps.svc.cluster.local:8081:true:-:none" \
   "self is a credential-free private enrollment"
+eq "$(jq -r "$enrollment | .logical_hosts.memory | [.scheme, .host, .port, .allow_private, .inject.kind, .secret, (.optional_secret | tostring)] | join(\":\")" "$work/broker.json")" \
+  "http:memory-mcp.graphiti.svc.cluster.local:8182:true:bearer:memory-mcp-token:true" \
+  "memory is the in-cluster wrapper on 8182 with an optional bearer token"
 eq "$(jq -r '.[] | select(.kind == "NetworkPolicy" and .metadata.name == "egress-agent-control") | [.spec.egress[0].to[0].namespaceSelector.matchLabels["kubernetes.io/metadata.name"], .spec.egress[0].ports[0].port] | join(":")' "$work/broker.json")" \
   "tenant-apps:8081" "broker egress admits agent-control on 8081 only"
+eq "$(jq -r '.[] | select(.kind == "NetworkPolicy" and .metadata.name == "egress-memory") | [.spec.egress[0].to[0].namespaceSelector.matchLabels["kubernetes.io/metadata.name"], .spec.egress[0].to[0].podSelector.matchLabels["app.kubernetes.io/name"], .spec.egress[0].ports[0].port] | join(":")' "$work/broker.json")" \
+  "graphiti:memory-mcp:8182" "broker egress admits the memory wrapper on 8182 only"
 eq "$(jq -r "$enrollment | .logical_hosts.loki.headers[\"X-Scope-OrgID\"]" "$work/broker.json")" "data" \
   "the loki logical host pins the data tenant header"
 eq "$(jq -r "$enrollment | .logical_hosts[\"github-apps\"].inject.kind" "$work/broker.json")" "basic" \
