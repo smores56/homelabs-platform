@@ -7,18 +7,21 @@ resolves and pins the address itself, strips whatever credential the agent sent,
 injects exactly one enrolled credential, refuses redirects that leave the
 enrolled endpoint, and logs metadata only.
 
-Source: `apps/broker/` (Python stdlib, 77 unit tests). Manifests:
+Source: `apps/broker/` (Python stdlib, 102 unit tests). Manifests:
 `clusters/homelab/broker/`. Applied by the Flux stage `platform-broker`.
 
 ## Trust boundary and non-goals
 
 The broker is inside the boundary: it holds the provider and GitHub tokens and
 is the only place they exist in the cluster. It is **not** an egress proxy and
-**not** an action authorizer. It does not inspect method, path or payload for
-allow/deny (Kanbei spec `04-security-deployment.md` §6.5), so an enrolled token
-is a credential oracle limited only by provider-side authorization. What it
-does enforce is target integrity: the agent names a logical host and a relative
-path, never a hostname, IP, SNI or `Host`.
+**not** a policy engine: there is no user identity, no per-tool authorization
+and no action model. It enforces two reviewed layers before a credential is
+attached — target integrity (the agent names a logical host and a relative
+path, never a hostname, IP, SNI or `Host`) and the per-host request predicates
+below (SDLC #624). A predicate is a narrow, config-reviewed gate on one
+enrollment; everything a predicate does not forbid is limited only by
+provider-side authorization, so an enrolled token remains a credential oracle
+within its scope.
 
 `nanobot` holds no credential, including no broker token. Caller authentication
 is the namespace boundary: `NetworkPolicy` admits only tenant-tier pods to the
@@ -40,8 +43,12 @@ dropped before injection. There is no shared secret to leak, rotate or mount.
 - `CONNECT` and `TRACE` are refused with 405. The broker is not a forward
   proxy, so there is no tunnel and no `HTTPS_PROXY` setting in the agent.
 - Every other method is forwarded when the destination passes the checks.
-- The request body is read up to 64 MiB; a chunked request body is refused
-  (411) rather than half-forwarded.
+- A request that fails its logical host's predicates is refused with `403` (or
+  `413` for a body over that host's cap) before DNS resolution; nothing is
+  forwarded. See "Per-host request predicates".
+- The request body is read up to 64 MiB, or less when the logical host sets
+  `max_body_bytes`; a chunked request body is refused (411) rather than
+  half-forwarded.
 - `/healthz` is the kubelet probe and never proxied.
 
 The agent's environment points at this Service:
@@ -69,6 +76,8 @@ each request's logical host (see "GitHub App identity" below).
 | `github-agent` | `https://api.github.com:443` | `Authorization: Bearer` | app: `nix-config`, `kanbei`, `contents: read`, `pull_requests: write` | no |
 | `tinyfish` | `https://api.search.tinyfish.ai:443` | `X-Api-Key: <token>` | `tinyfish-api-key` | no |
 | `loki` | `http://loki-gateway.observability.svc.cluster.local:3100` | `Authorization: Bearer`, fixed `X-Scope-OrgID: data` | `loki-gateway-token` | yes |
+| `notify` | `https://notify.invalid:443` (placeholder) | `Authorization: Bearer` | `notify-token` | no |
+| `self` | `http://agent-control.tenant-apps.svc.cluster.local:8081` | none | — | yes |
 | `status` | `http://status-exporter.observability.svc.cluster.local:9101` | none (metrics text) | — | yes |
 
 `github-platform-push` is the git transport half of the `github-platform`
@@ -108,9 +117,79 @@ Every repository named on a host goes into a single token request, so one name
 that is not in the app installation fails the whole host with a 422. Add a
 repository only after confirming it is in the installation.
 
-The two private enrollments are the only exception to the TLS rule: they never
-leave the cluster network and their credentials are already cluster-local. A
-credentialed enrollment over plain HTTP is otherwise rejected at load time.
+`notify` (SDLC #640) ships as a deliberate placeholder. `notify.invalid` is a
+reserved name (RFC 2606) that never resolves, so every call fails closed as
+`dns_failure` (502) until an operator sets the real provider endpoint
+(docs/manual-steps.md step 24). It admits only `POST /v1/notify` with a body of
+at most 4 KiB and injects `Authorization: Bearer <notify-token>`; it never
+reaches a private address. The provider is undecided (ntfy, an email relay or a
+Slack webhook), so the host, port, path and header kind are configuration, not
+code — the placeholder is where that decision lands.
+
+`self` (SDLC #637) is the platform's `agent-control` service in `tenant-apps`:
+plain HTTP inside the cluster, `allow_private: true` and no credential. The
+broker forwards whatever paths agent-control serves; the service, its RBAC and
+its own ingress policy are owned by the agent-control change. The namespace
+boundary is the caller authentication, exactly as for the rest of the broker.
+
+The private enrollments (`loki`, `status`) are the only exception to the TLS
+rule: they never leave the cluster network and their credentials are already
+cluster-local. A credentialed enrollment over plain HTTP is otherwise rejected
+at load time. `self` carries no credential, so the exception does not apply to
+it.
+
+## Per-host request predicates
+
+Every enrollment may carry predicates (SDLC #624). All of them are optional and
+every default is empty, so an enrollment without them forwards exactly what it
+did before the feature existed.
+
+| Key | Meaning |
+| --- | --- |
+| `allow_methods` | Non-empty list: the request method must be in it. |
+| `deny_methods` | The request method is refused. A method cannot be in both lists. |
+| `allow_paths` | Non-empty list: the upstream path must `fullmatch` one regex. |
+| `deny_paths` | The upstream path is refused when a regex matches its start (prefix). |
+| `deny_body_patterns` | The body (UTF-8, undecodable bytes replaced) is refused when a regex `search` matches. |
+| `body_guards` | Conditional JSON gate, described below. |
+| `max_body_bytes` | Per-host cap, 1..64 MiB; a larger `Content-Length` is `413` before the body is read. |
+
+`allow_paths` and a guard's `paths` match the **normalized** upstream path
+(`posixpath.normpath` of everything after the logical host), so `/<host>/a/../b`
+is checked as `/b` and cannot dodge a prefix. `deny_paths` is a prefix match so
+a reviewed `^/admin(/|$)` denies the subtree while a near-miss
+(`/administrators`) does not match by accident.
+
+A denial is `403` with `broker: <reason>` and no body detail, and it happens
+before DNS resolution, before connecting and before credential injection. The
+reason is a fixed token: `method_denied`, `path_denied`, `body_denied`,
+`body_json_invalid`, `body_field_denied`, or `request_too_large` (413).
+Patterns are reviewed config, and the per-host body cap bounds the work they can
+do on agent-supplied input.
+
+The one conditional rule is `body_guards`: each entry names `methods` (empty
+means any), one or more `paths` regexes, a `field` (dot-separated JSON keys) and
+an `allow` regex. When a request matches the method and path, the body must be
+valid UTF-8 JSON with no repeated key, and the named field must be a string
+matching `allow` at its start. A repeated key is `body_json_invalid` because two
+JSON parsers can read two different values from it. The canonical use is webhook
+creation (the enrollment lands with the webhook receiver, not here):
+
+```json
+"body_guards": [
+  {
+    "methods": ["POST"],
+    "paths": ["^/repos/[^/]+/[^/]+/hooks$"],
+    "field": "config.url",
+    "allow": "^https://agent-hooks\\.sammohr\\.dev/"
+  }
+]
+```
+
+`https://agent-hooks.sammohr.dev.evil.example/` and
+`https://evil.example/?https://agent-hooks.sammohr.dev/` both fail: `allow` is
+anchored at the start of the value (`re.match`), so only a URL that begins with
+the enrolled origin passes.
 
 ## DNS self-resolution and IP pinning
 
@@ -131,7 +210,8 @@ Refused for every enrollment, including a private one:
 - any address that is not global unicast (TEST-NET, documentation and
   benchmarking ranges included).
 
-Refused unless the enrollment is one of the two private ones: RFC1918
+Refused unless the enrollment is one of the private ones (`loki`, `status`,
+`self`): RFC1918
 (`10/8`, `172.16/12`, `192.168/16`), the service CIDR `10.43.0.0/16`, IPv6 ULA
 (`fc00::/7`). A DNS answer that mixes a public and a private address is a
 denial, not a fallback to the public one: that mix is the rebinding signature.
@@ -151,12 +231,14 @@ enrollment lookup and a fresh injection.
 Each request writes one line at INFO:
 
 ```text
-logical=<host> method=<method> path=<path> status=<status> bytes=<n> outcome=<proxied|denied|error>
+logical=<host> method=<method> path=<path> status=<status> bytes=<n> outcome=<proxied|denied|error>[ reason=<token>]
 ```
 
 - The path is the broker path, **without the query string** (search queries
   stay out of logs). Path and denial text are redacted against every known
   credential.
+- `reason=` appears only on a denial and is the fixed token from the request
+  predicate or target check; it never contains the body, a header or a URL.
 - No header value, request body or response body is logged. Upstream failures
   log the exception class only.
 - Response headers that can carry a URL or a reflected credential (`Location`,
@@ -177,7 +259,11 @@ The broker's own check is authoritative; `NetworkPolicy` is the coarse layer:
 
 - `broker` egress: TCP 443 to global unicast only (`0.0.0.0/0` with every
   non-global IPv4 range in `except`, and the IPv6 equivalents), plus TCP 3100
-  to `loki-gateway` and 9101 to `status-exporter` (`observability/network/`).
+  to `loki-gateway` and 9101 to `status-exporter` (`observability/network/`),
+  plus TCP 8081 to `tenant-apps` for the `self` host
+  (`broker/egress-agent-control.yaml`). The broker namespace is an egress
+  allowlist: an unlisted destination is dropped by the CNI before the broker's
+  own check sees it.
 - `broker` ingress: tenant tier on 8080 only (`platform/network/tenant-broker.yaml`).
 - DNS: `kube-system` on 53 (`platform/network/dns-egress.yaml`).
 - Tunnel: `ingress/cloudflared` to `tenant-apps/nanobot` on 8080 only
@@ -323,6 +409,9 @@ Live-gated (need the cluster, the real tokens and the operator):
 - publishing the broker image and replacing the digest placeholder;
 - creating `broker-credentials` from SOPS (manual steps);
 - the broker's first real call to each logical host (GitHub push, platform PR,
-  Neuralwatt, TinyFish, Loki);
+  Neuralwatt, TinyFish, Loki, notify, agent-control);
+- the notify provider decision and endpoint (the enrollment is a placeholder);
+- agent-control's Service, RBAC and tenant-side ingress
+  (`tenant-apps` -> port 8081);
 - tunnel/Access routing and the `nanobot.sammohr.dev` retirement;
 - NetworkPolicy and gVisor enforcement (no CNI/kubelet on the test bench).

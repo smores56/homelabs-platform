@@ -298,10 +298,15 @@ until that image is published and pinned (its `docs/manual-steps.md`, step 3).
 ## 10. Create the broker credential Secret
 
 The broker is platform-owned (`clusters/homelab/broker/`); this step supplies
-six files, none of which enters git. Static enrollments name three of them
+seven files, none of which enters git. Static enrollments name four of them
 (`keys` in `clusters/homelab/broker/sops-contract.yaml`); the GitHub App
 enrollments add the app id, the private key and one installation id per
 installation (`app_keys`). **Step 1 must be finished first.**
+
+`notify-token` must exist even though the notify endpoint is still a placeholder
+(step 24): the broker reads every named file at start and fails closed, so a
+missing file keeps the Deployment in CrashLoopBackOff. Generate a random value
+now and replace it in step 24 when the provider is chosen.
 
 Run this on smortress as `smores`. `cluster-kubectl` reads a root-only
 kubeconfig, hence `sudo`.
@@ -314,6 +319,7 @@ LOKI=$(sudo cluster-kubectl -n observability get secret loki-gateway-token \
 read -rp 'App ID (digits): ' APP_ID
 read -rp 'installation ID: ' INSTALL
 read -rsp 'private key path: ' KEY_PATH; echo
+NOTIFY=$(openssl rand -hex 32)
 
 # No value reaches the command line or a transcript.
 umask 077
@@ -321,10 +327,11 @@ tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 printf '%s\n' "$NW" > "$tmp/neuralwatt-api-key"
 printf '%s\n' "$TF" > "$tmp/tinyfish-api-key"
 printf '%s\n' "$LOKI" > "$tmp/loki-gateway-token"
+printf '%s\n' "$NOTIFY" > "$tmp/notify-token"
 printf '%s\n' "$APP_ID" > "$tmp/github-app-id"
 printf '%s\n' "$INSTALL" > "$tmp/github-installation-id"
 install -m 0600 "$KEY_PATH" "$tmp/github-app-private-key"
-unset NW TF LOKI APP_ID INSTALL
+unset NW TF LOKI NOTIFY APP_ID INSTALL
 
 sudo cluster-kubectl -n broker create secret generic broker-credentials \
   --from-file="$tmp"
@@ -1038,3 +1045,116 @@ inbox. The cluster holds no age key.
    kubectl -n observability get networkpolicy cluster-digest-egress \
      -o jsonpath='{.spec.policyTypes}{"\n"}{.spec.ingress}{"\n"}'             # Egress,Ingress / nothing
    ```
+
+## 24. Point the `notify` logical host at the real provider
+
+The `notify` enrollment (SDLC #640) is a reviewed placeholder: the broker admits
+only `POST /v1/notify`, caps the body at 4 KiB, and injects
+`Authorization: Bearer <notify-token>`. The endpoint is `notify.invalid`, a name
+reserved by RFC 2606 that never resolves, so every call fails closed with
+`502 dns_failure` until the provider is chosen and the values below replace the
+placeholder in `clusters/homelab/broker/config/broker.json`.
+
+Fill in exactly these fields, then commit and let Flux apply:
+
+| Field | Value to enter | Why |
+| --- | --- | --- |
+| `host` | the provider's API hostname (DNS name, never an IP literal) | the broker resolves and pins the address itself |
+| `port` | `443`, or the provider's TLS port | keep `scheme: https`; a credential over plain HTTP is refused at load |
+| `allow_paths` | `^<provider path>$` | the only upstream path the broker forwards |
+| `inject` | `{"kind": "bearer"}` for ntfy or Slack, `{"kind": "header", "header": "<name>"}` for an API-key provider | exactly one credential is injected |
+| `max_body_bytes` | at most `4096`; raise only if the provider needs it | bounds a notification message |
+| `secret` | `notify-token` | names the Secret file; the value never enters git |
+
+Keep `allow_private: false`. A provider that answers on a private address would
+mean the broker is no longer the public boundary; refuse that instead of
+widening the enrollment.
+
+Supply the token, without the value reaching the command line or a transcript:
+
+```sh
+read -rsp 'notify token: ' NOTIFY; echo
+umask 077
+tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+printf '%s\n' "$NOTIFY" > "$tmp/notify-token"; unset NOTIFY
+sudo cluster-kubectl -n broker patch secret broker-credentials --type merge \
+  -p "$(jq -nc --rawfile v "$tmp/notify-token" '{stringData:{"notify-token":$v}}')"
+sudo cluster-kubectl -n broker rollout restart deployment/broker
+```
+
+Verify from inside the broker pod; it is the only place the value exists:
+
+```sh
+sudo cluster-kubectl -n broker exec deploy/broker -- python -c '
+import http.client, json
+c = http.client.HTTPConnection("127.0.0.1", 8080, timeout=20)
+body = json.dumps({"message": "broker notify check"}).encode()
+c.putrequest("POST", "/notify/v1/notify", skip_host=True)
+c.putheader("Host", "broker.broker.svc.cluster.local")
+c.putheader("Content-Type", "application/json")
+c.putheader("Content-Length", str(len(body)))
+c.endheaders(); c.send(body)
+r = c.getresponse(); print(r.status, r.read(200)); c.close()
+'
+```
+
+Expected `2xx`. `502 dns_failure` means the placeholder is still in place; `403
+path_denied` or `body_denied` means a predicate no longer matches the provider;
+`413` means the message is over the cap. Size limits: 4 KiB of JSON per message
+(raise `max_body_bytes` deliberately), and the broker's 64 MiB global cap still
+applies. The body is never logged or echoed, and the provider's response is
+redacted like every other.
+
+The broker reads credentials once at start, so any later token change needs the
+rollout restart above. `broker-credentials-contract` already lists
+`notify-token`, and `tests/policies/check.sh` fails if the enrollment and that
+contract drift apart.
+
+## 25. Admit the broker to agent-control
+
+The broker's `self` logical host (SDLC #637) calls
+`agent-control.tenant-apps.svc.cluster.local:8081`. The broker-side egress rule
+is in this repository (`clusters/homelab/broker/egress-agent-control.yaml`), but
+`tenant-apps` is default-deny, so the Service stays unreachable until the tenant
+repository admits the broker namespace on that port. That rule belongs with the
+agent-control manifests in `homelabs-apps`:
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: agent-control-from-broker
+  namespace: tenant-apps
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: agent-control
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: broker
+      ports:
+        - protocol: TCP
+          port: 8081
+```
+
+Verify both halves after both changes land:
+
+```sh
+sudo cluster-kubectl -n tenant-apps get networkpolicy agent-control-from-broker
+sudo cluster-kubectl -n broker get networkpolicy egress-agent-control
+sudo cluster-kubectl -n broker exec deploy/broker -- python -c '
+import http.client
+c = http.client.HTTPConnection("127.0.0.1", 8080, timeout=20)
+c.putrequest("GET", "/self/self/status", skip_host=True)
+c.putheader("Host", "broker.broker.svc.cluster.local")
+c.endheaders(); r = c.getresponse(); print(r.status, r.read(120)); c.close()
+'
+```
+
+A `502 dns_failure` means the Service name does not resolve (the agent-control
+Service is missing); a timeout is the CNI dropping the packet, i.e. the
+tenant-side ingress policy above is absent. No credential is involved: the
+`self` host has none, and the namespace policy is the caller boundary.
