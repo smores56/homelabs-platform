@@ -49,6 +49,22 @@ patches:
       namespace: flux-system
       name: source-watcher
     path: flux-system/gotk-patches/source-watcher.json
+  # Image automation is the only thing that writes to another repository, so it
+  # gets the same namespace-scoped ACL as every other controller.
+  - target:
+      group: apps
+      version: v1
+      kind: Deployment
+      namespace: flux-system
+      name: image-reflector-controller
+    path: flux-system/gotk-patches/image-reflector-controller.json
+  - target:
+      group: apps
+      version: v1
+      kind: Deployment
+      namespace: flux-system
+      name: image-automation-controller
+    path: flux-system/gotk-patches/image-automation-controller.json
   # The bootstrap install manifests create flux-system without tenancy labels;
   # policies and NetworkPolicies select namespaces by label.
   - target:

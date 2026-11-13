@@ -1,0 +1,37 @@
+# The nanobot image source. `publish-nanobot.yml` tags every build
+# build-<run_number>; the numerical policy picks the highest number, so a
+# rebuild (same source, later run) is still a newer image. A digest is what gets
+# committed: the admissions policy compares the pod image to
+# ghcr.io/smores56/homelabs-platform/nanobot@sha256:... exactly.
+apiVersion: image.toolkit.fluxcd.io/v1
+kind: ImageRepository
+metadata:
+  name: nanobot
+  namespace: flux-system
+  labels:
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: platform
+spec:
+  image: ghcr.io/smores56/homelabs-platform/nanobot
+  interval: 5m
+  # The package is public (docs/manual-steps.md); a private package would need
+  # an imagePullSecret here and in tenant-apps, and the cluster has none.
+---
+apiVersion: image.toolkit.fluxcd.io/v1
+kind: ImagePolicy
+metadata:
+  name: nanobot
+  namespace: flux-system
+  labels:
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: platform
+spec:
+  imageRepositoryRef:
+    name: nanobot
+  filterTags:
+    # Only the workflow's own tags; a human-pushed tag elsewhere is ignored.
+    pattern: '^build-(?P<run>[0-9]+)$'
+    extract: '$run'
+  policy:
+    numerical:
+      order: asc

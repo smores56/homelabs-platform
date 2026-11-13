@@ -1,0 +1,91 @@
+# nanobot's prompt and model catalogue are platform-owned (#639). The tenant
+# repository keeps skills and cron; `nanobot-policy` (tenant-apps) supplies
+# prompts/system.md and models/providers.yaml. A pod may not omit that mount, may
+# not put another volume under those paths, and may not point
+# NANOBOT_CONFIG_DIR somewhere else — any of the three would let a tenant push
+# change the agent's behaviour. A second policy keeps the ConfigMap itself
+# unwritable by the tenant reconciler, which otherwise has configmaps: *.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: nanobot-policy
+  labels:
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: platform
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["pods"]
+  variables:
+    - name: agent
+      expression: >-
+        has(object.metadata.labels)
+        && 'app.kubernetes.io/name' in object.metadata.labels
+        && object.metadata.labels['app.kubernetes.io/name'] == 'nanobot'
+    - name: containers
+      expression: >-
+        object.spec.containers
+    - name: policyVolume
+      expression: >-
+        has(object.spec.volumes)
+        && object.spec.volumes.exists(v,
+          v.name == 'nanobot-policy' && has(v.configMap) && v.configMap.name == 'nanobot-policy')
+  validations:
+    - expression: >-
+        !variables.agent || variables.policyVolume
+      message: "nanobot pods must mount the platform nanobot-policy ConfigMap"
+    - expression: >-
+        !variables.agent
+        || variables.containers.all(c,
+          has(c.volumeMounts)
+          && c.volumeMounts.exists(m,
+            m.name == 'nanobot-policy'
+            && m.mountPath == '/etc/nanobot/prompts/system.md'
+            && m.subPath == 'system.md'
+            && has(m.readOnly) && m.readOnly)
+          && c.volumeMounts.exists(m,
+            m.name == 'nanobot-policy'
+            && m.mountPath == '/etc/nanobot/models/providers.yaml'
+            && m.subPath == 'providers.yaml'
+            && has(m.readOnly) && m.readOnly))
+      message: "nanobot pods must mount nanobot-policy at /etc/nanobot/prompts/system.md and /etc/nanobot/models/providers.yaml"
+    - expression: >-
+        !variables.agent
+        || variables.containers.all(c,
+          (has(c.volumeMounts) ? c.volumeMounts : []).all(m,
+            !(m.mountPath == '/etc/nanobot'
+              || m.mountPath == '/etc/nanobot/prompts'
+              || m.mountPath == '/etc/nanobot/models')
+            && !(m.mountPath.startsWith('/etc/nanobot/prompts/') && m.mountPath != '/etc/nanobot/prompts/system.md')
+            && !(m.mountPath.startsWith('/etc/nanobot/models/') && m.mountPath != '/etc/nanobot/models/providers.yaml')
+            && !(m.mountPath == '/etc/nanobot/prompts/system.md' && m.name != 'nanobot-policy')
+            && !(m.mountPath == '/etc/nanobot/models/providers.yaml' && m.name != 'nanobot-policy')))
+      message: "nanobot pods must not mount or override anything under /etc/nanobot/prompts or /etc/nanobot/models"
+    - expression: >-
+        !variables.agent
+        || variables.containers.all(c,
+          size((has(c.env) ? c.env : []).filter(e, e.name == 'NANOBOT_CONFIG_DIR')) == 1
+          && c.env.exists(e,
+            e.name == 'NANOBOT_CONFIG_DIR' && has(e.value) && e.value == '/etc/nanobot'))
+      message: "nanobot pods must set NANOBOT_CONFIG_DIR=/etc/nanobot exactly once"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: nanobot-policy
+  labels:
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: platform
+spec:
+  policyName: nanobot-policy
+  validationActions: [Deny]
+  matchResources:
+    namespaceSelector:
+      matchExpressions:
+        - key: homelabs.dev/tier
+          operator: In
+          values: ["tenant"]

@@ -342,6 +342,8 @@ declare -A controller_flags=(
   [notification-controller]="--feature-gates=ObjectLevelWorkloadIdentity=true --no-cross-namespace-refs=true --default-service-account=default"
   [source-controller]="--feature-gates=ObjectLevelWorkloadIdentity=true --default-service-account=default"
   [source-watcher]="--no-cross-namespace-refs=true"
+  [image-reflector-controller]="--no-cross-namespace-refs=true"
+  [image-automation-controller]="--no-cross-namespace-refs=true"
 )
 
 for controller in "${!controller_flags[@]}"; do
@@ -373,6 +375,81 @@ if [[ -z $forbidden ]]; then
 else
   bad "insecure kubeconfig flag present" "$forbidden"
 fi
+
+# ------------------------------------------------------- image automation
+# The controllers are part of the install manifest; their objects and the write
+# credential's contract are asserted separately so a widened policy or a
+# checked-in Secret cannot pass review unnoticed.
+kustomize build clusters/homelab/flux-system >"$work/flux-system.yaml"
+json_of "$work/flux-system.yaml" >"$work/flux-system.json"
+
+eq "$(jq -r '.[] | select(.kind == "ImageRepository" and .metadata.name == "nanobot") | [.metadata.namespace, .spec.image, .spec.interval] | join(":")' "$work/flux-system.json")" \
+  "flux-system:ghcr.io/smores56/homelabs-platform/nanobot:5m" \
+  "ImageRepository nanobot watches the platform registry path in flux-system"
+eq "$(jq -r '.[] | select(.kind == "ImagePolicy" and .metadata.name == "nanobot") | [.metadata.namespace, .spec.imageRepositoryRef.name, .spec.filterTags.pattern, .spec.filterTags.extract, (.spec.policy.numerical.order // "")] | join(":")' "$work/flux-system.json")" \
+  "flux-system:nanobot:^build-(?P<run>[0-9]+)$:\$run:asc" \
+  "ImagePolicy nanobot orders the workflow's build-<n> tags numerically"
+eq "$(jq -r '.[] | select(.kind == "ImageUpdateAutomation" and .metadata.name == "nanobot") | [.metadata.namespace, .spec.sourceRef.kind, .spec.sourceRef.name, .spec.git.checkout.ref.branch, .spec.git.push.branch, .spec.update.strategy, .spec.update.path] | join(":")' "$work/flux-system.json")" \
+  "flux-system:GitRepository:homelabs-apps:main:main:Setters:./" \
+  "ImageUpdateAutomation pushes to homelabs-apps main with the Setters strategy"
+eq "$(jq -r '.[] | select(.kind == "GitRepository" and .metadata.namespace == "flux-system" and .metadata.name == "homelabs-apps") | [.spec.url, .spec.ref.branch, .spec.secretRef.name] | join(":")' "$work/flux-system.json")" \
+  "ssh://git@ssh.github.com:443/smores56/homelabs-apps:main:homelabs-apps-write" \
+  "the image automation source is homelabs-apps over SSH 443 with the write secret"
+eq "$(jq -r '[.[] | select(.kind == "Secret")] | length' "$work/flux-system.json")" \
+  "0" "the write credential is not in git (SOPS-managed Secret)"
+if jq -r '.[] | select(.kind == "ConfigMap" and .metadata.name == "homelabs-apps-write-contract") | .data.marker' "$work/flux-system.json" |
+  grep -Fq "{\"\$imagepolicy\": \"flux-system:nanobot\"}"; then
+  ok "the write contract records the tenant-side setter marker"
+else
+  bad "the write contract does not record the setter marker"
+fi
+if [[ -f .github/workflows/publish-nanobot.yml ]] &&
+  grep -Fq "tag=\"build-\${GITHUB_RUN_NUMBER}\"" .github/workflows/publish-nanobot.yml &&
+  grep -Fq 'workflow_dispatch:' .github/workflows/publish-nanobot.yml &&
+  grep -Fq 'GITHUB_STEP_SUMMARY' .github/workflows/publish-nanobot.yml; then
+  ok "publish-nanobot builds build-<run_number> and publishes the digest"
+else
+  bad "publish-nanobot workflow is missing its tag or digest contract"
+fi
+
+# The image is deliberately barebones: a tool that is not in the Dockerfile and
+# not in metadata.nanobot.requires.bins must fail at start, not drift.
+if grep -Eq '^FROM python:3\.12-slim@sha256:[0-9a-f]{64}$' images/nanobot/Dockerfile; then
+  ok "the nanobot image base is digest-pinned"
+else
+  bad "the nanobot image base is not digest-pinned"
+fi
+if grep -v "^#" images/nanobot/Dockerfile | grep -Eqi "\b(jq|yq|ripgrep|rg|node|gh|sdlc)\b"; then
+  bad "the nanobot image bakes a tool outside the bootstrap shell"
+else
+  ok "the nanobot image installs only the bootstrap shell"
+fi
+if grep -Eq '(exec nanobot "\$@")' images/nanobot/entrypoint.sh &&
+  grep -Fq 'render.py' images/nanobot/entrypoint.sh; then
+  ok "the entrypoint renders from NANOBOT_CONFIG_DIR then execs the pod args"
+else
+  bad "the entrypoint does not render-then-exec"
+fi
+
+# ------------------------------------------------ nanobot platform policy tree
+# The prompt and model catalogue live in this repository and reach the pod as an
+# exact-name ConfigMap; admission pins the mount, so the name cannot gain a hash
+# suffix.
+kustomize build clusters/homelab/platform/policy >"$work/nanobot-policy.yaml"
+json_of "$work/nanobot-policy.yaml" >"$work/nanobot-policy.json"
+eq "$(jq -r '.[] | select(.kind == "ConfigMap") | [.metadata.namespace, .metadata.name] | join(":")' "$work/nanobot-policy.json")" \
+  "tenant-apps:nanobot-policy" "the platform renders nanobot-policy into tenant-apps with an exact name"
+eq "$(jq -r '.[] | select(.kind == "ConfigMap") | .data | keys | sort | join(",")' "$work/nanobot-policy.json")" \
+  "providers.yaml,system.md" "nanobot-policy holds only the prompt and the model catalogue"
+for source in prompts/system.md models/providers.yaml; do
+  key=${source##*/}
+  first=$(head -1 "clusters/homelab/platform/policy/nanobot/$source")
+  if jq -r --arg k "$key" '.[] | select(.kind == "ConfigMap") | .data[$k]' "$work/nanobot-policy.json" | grep -Fqx -- "$first"; then
+    ok "nanobot-policy $key is rendered from cluster/homelab/platform/policy/nanobot/$source"
+  else
+    bad "nanobot-policy $key does not match its platform source"
+  fi
+done
 
 # -------------------------------------------------------- NetworkPolicy shape
 network_json="$work/network.json"
@@ -935,6 +1012,7 @@ declare -A stage_edges=(
   [platform-data-apps]="platform-network,platform-policies,platform-storage"
   [platform-ingress]="platform-namespaces,platform-network"
   [platform-observability]="platform-policies"
+  [platform-nanobot-policy]="platform-namespaces,platform-policies"
   [platform-tenants]="platform-network,platform-policies,platform-secrets"
 )
 
@@ -960,7 +1038,7 @@ done
 
 listed=$(yq -o=json -I=0 '.' clusters/homelab/platform/kustomization.yaml |
   jq -r '[.resources[] | sub("^kustomizations/"; "") | sub("\\.yaml$"; "")] | .[]')
-eq "$listed" "$(printf '%s\n' namespaces rbac policies network secrets broker agent-control webhook storage backup digest data ingress observability tenants)" \
+eq "$listed" "$(printf '%s\n' namespaces rbac policies network secrets broker agent-control webhook storage backup digest data ingress observability nanobot-policy tenants)" \
   "platform/kustomization.yaml lists every stage in apply order"
 missing=$(comm -23 <(find "$stages_dir" -maxdepth 1 -name '*.yaml' -printf '%f\n' | sed 's|\.yaml$||' | sort) \
   <(yq -o=json -I=0 '.' clusters/homelab/platform/kustomization.yaml |
@@ -999,6 +1077,8 @@ done <<'FLAGS'
 --branch	main
 --path	clusters/homelab
 --components-extra	source-watcher
+--components-extra	image-reflector-controller
+--components-extra	image-automation-controller
 --personal
 FLAGS
 
@@ -1057,7 +1137,7 @@ if ((runtime)); then
   else
     bad "runtime: applying flux components failed" "$(cat "$work/crds.err")"
   fi
-  for stage in namespaces rbac policies network secrets storage backup tenants; do
+  for stage in namespaces rbac policies network secrets storage backup policy tenants; do
     if kubectl apply -k "clusters/homelab/platform/$stage" >/dev/null 2>"$work/stage.err"; then
       ok "runtime: stage $stage applied"
     else
@@ -1153,6 +1233,24 @@ CONTROL_RBAC
     ok "runtime: tenant cannot create a Secret over the API"
   else
     bad "runtime: tenant created a Secret" "$out"
+  fi
+
+  # The prompt and model catalogue are platform-owned: the tenant reconciler has
+  # configmaps write, so only this policy stops a tenant push from rewriting them.
+  out=$(kubectl apply --dry-run=server -n tenant-apps --as "$tenant_sa" -f - 2>&1 <<'YAML'
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nanobot-policy
+  namespace: tenant-apps
+data:
+  system.md: "tenant override"
+YAML
+)
+  if [[ $out == *"ValidatingAdmissionPolicy 'nanobot-policy-write'"* ]]; then
+    ok "runtime: tenant cannot rewrite the platform nanobot-policy ConfigMap"
+  else
+    bad "runtime: tenant rewrote nanobot-policy" "$out"
   fi
 
   out=$(kubectl apply --dry-run=server -n tenant-apps --as "$tenant_sa" \

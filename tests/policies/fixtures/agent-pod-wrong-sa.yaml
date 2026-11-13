@@ -18,9 +18,25 @@ spec:
       type: RuntimeDefault
   containers:
     - name: nanobot
-      image: ghcr.io/smores56/nix-config/nanobot@sha256:0000000000000000000000000000000000000000000000000000000000000000
+      image: ghcr.io/smores56/homelabs-platform/nanobot@sha256:0000000000000000000000000000000000000000000000000000000000000000
       securityContext:
         allowPrivilegeEscalation: false
         readOnlyRootFilesystem: true
         capabilities:
           drop: ["ALL"]
+      env:
+        - name: NANOBOT_CONFIG_DIR
+          value: /etc/nanobot
+      volumeMounts:
+        - name: nanobot-policy
+          mountPath: /etc/nanobot/prompts/system.md
+          subPath: system.md
+          readOnly: true
+        - name: nanobot-policy
+          mountPath: /etc/nanobot/models/providers.yaml
+          subPath: providers.yaml
+          readOnly: true
+  volumes:
+    - name: nanobot-policy
+      configMap:
+        name: nanobot-policy

@@ -1,0 +1,62 @@
+# The agent image. It builds from this repository, so what runs as the tenant
+# identity changes only when a human merges here: a tenant push to
+# smores56/homelabs-apps cannot reach images/nanobot/.
+#
+# Dispatch contract (consumed by agent-control's `POST /self/build`, owned by
+# another lane; it never holds or prints this job's token):
+#   workflow id   publish-nanobot.yml (ref refs/heads/main)
+#   event         workflow_dispatch (no inputs)
+#   result        tag build-<GITHUB_RUN_NUMBER>, digest in the run summary
+#   credential    the dispatcher uses a platform-held Actions:write token; the
+#                 tenant never receives it and this job's GITHUB_TOKEN is
+#                 scoped to this run only
+# The tag is numeric so `ImagePolicy nanobot` can order it (flux-system).
+name: publish-nanobot
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "images/nanobot/**"
+      - ".github/workflows/publish-nanobot.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: publish-nanobot
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          persist-credentials: false
+      - name: Build, push, and print the digest
+        env:
+          IMAGE: ghcr.io/smores56/homelabs-platform/nanobot
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="build-${GITHUB_RUN_NUMBER}"
+          printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          docker build \
+            --label "org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}" \
+            -t "$IMAGE:$tag" images/nanobot
+          docker push "$IMAGE:$tag"
+          digest=$(docker inspect --format '{{index .RepoDigests 0}}' "$IMAGE:$tag" | cut -d@ -f2)
+          [[ $digest =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "no digest in RepoDigests"; exit 1; }
+          {
+            echo "### nanobot image"
+            echo
+            echo "- \`$IMAGE:$tag\`"
+            echo "- \`$IMAGE@$digest\`"
+            echo
+            echo "Flux commits the digest to smores56/homelabs-apps (ImagePolicy"
+            echo "\`flux-system/nanobot\`); nothing here writes to that repository."
+          } >>"$GITHUB_STEP_SUMMARY"
+          echo "pin: $IMAGE@$digest"

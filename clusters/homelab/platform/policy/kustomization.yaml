@@ -1,0 +1,27 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Platform-owned half of nanobot's declarative tree (#639). The tenant repository
+# keeps skills and cron; this ConfigMap is the system prompt and the model
+# catalogue, so a tenant push cannot change either. Admission (nanobot-policy)
+# pins the mount paths and NANOBOT_CONFIG_DIR, and nanobot-policy-write keeps the
+# ConfigMap itself unwritable by the tenant reconciler.
+#
+# The name is exact on purpose: admission compares volume.configMap.name to
+# `nanobot-policy`, so a content-hash suffix would make the pin unusable. A
+# prompt change therefore needs a pod restart; the tenant owns that Deployment.
+namespace: tenant-apps
+
+generatorOptions:
+  disableNameSuffixHash: true
+
+configMapGenerator:
+  - name: nanobot-policy
+    options:
+      labels:
+        app.kubernetes.io/part-of: homelabs
+        homelabs.dev/tier: tenant
+        app.kubernetes.io/component: policy
+    files:
+      - system.md=nanobot/prompts/system.md
+      - providers.yaml=nanobot/models/providers.yaml
