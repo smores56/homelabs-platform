@@ -153,11 +153,11 @@ post-apply verification.
 | Namespace | default-deny | Allowed |
 | --- | --- | --- |
 | `tenant-apps` | both directions | DNS to `kube-system`; TCP 8080 to `broker` tier; direct TCP/UDP to global unicast (`0.0.0.0/0` and `::/0` with every non-global range in `except`); TCP 8081 from the `broker` namespace (`agent-control` only); TCP 443/6443 to the k3s API range (`agent-control` only); ingress from `ingress/cloudflared` on 8080 (nanobot only) |
-| `broker` | both directions | DNS; ingress from `tenant` tier on 8080; egress TCP 443 to global unicast only (every non-global range excluded), TCP 3100 to `loki-gateway`, 9101 to `status-exporter` in `observability` and 8081 to `tenant-apps/agent-control` |
+| `broker` | both directions | DNS; ingress from `tenant` tier on 8080; egress TCP 443 to global unicast only (every non-global range excluded), TCP 3100 to `loki-gateway` and 9101 to `status-exporter` in `observability`, 8081 to `tenant-apps/agent-control` and 8182 to `graphiti/memory-mcp` |
 | `immich` | both directions | DNS; same-namespace any port; TCP 2283 from `ingress`; HTTPS from the machine-learning pod for model weights |
 | `navidrome` | both directions | DNS; same-namespace any port; TCP 4533 from `ingress` |
 | `calibre` | both directions | DNS; same-namespace any port; TCP 8083 from `ingress` |
-| `graphiti` | both directions | DNS; same-namespace any port; TCP 8182 from the host tap addresses (the memory wrapper's NodePort) and from `ingress/cloudflared` (the cluster tunnel, SDLC #617); HTTPS from the graphiti pod to the Neuralwatt API; TCP 443 to R2 for the restic job |
+| `graphiti` | both directions | DNS; same-namespace any port; TCP 8182 from the host tap addresses (the memory wrapper's NodePort), from `ingress/cloudflared` (the cluster tunnel, SDLC #617) and from the `broker` namespace (the `memory` logical host, SDLC #631); HTTPS from the graphiti pod to the Neuralwatt API; TCP 443 to R2 for the restic job |
 | `ingress` | both directions | DNS; the three published app Services on their ports; `tenant-apps/nanobot` on 8080; TCP 443 to the Cloudflare edge (`cloudflared` only) |
 
 Adding an app flow means adding a policy with its exact port and namespace
@@ -214,7 +214,8 @@ Two mechanisms, no third:
    controller-wide `--sops-age-secret` flag is deliberately unset, so a
    namespace without the Secret fails instead of borrowing another key.
    `tenant-apps` carries the tenant ciphertext; `broker` holds the hand-made
-   `broker-credentials` Secret (six credential files, never a manifest); the
+   `broker-credentials` Secret (eight credential files, two of them optional,
+   never a manifest); the
    `webhook` namespace holds the hand-made `webhook-tokens` Secret (admin and
    enqueue tokens, `docs/webhook.md`). The contract is spelled out in the
    `sops-contract` ConfigMaps in `flux-system`, `broker` and `webhook`, and in

@@ -47,8 +47,8 @@ main-gated environment secrets), and the ruleset in item 3.
    - Where can this app be installed: **Only on this account**.
 2. Record the **App ID** from the app's settings page, generate a **private
    key** (downloads a `.pem`; keep it in the password manager), then install the
-   app once on the `smores56` account with **all four** repositories selected:
-   `homelabs-apps`, `homelabs-platform`, `nix-config` and `kanbei` (an
+   app once on the `smores56` account with **all five** repositories selected:
+   `homelabs-apps`, `homelabs-platform`, `nix-config`, `kanbei` and `sdlc` (an
    installation is per account, not per repository: one ID covers all of them,
    and the broker narrows each minted token to the repositories named on the
    logical host it is serving). Record the **installation ID** from the install
@@ -81,7 +81,10 @@ main-gated environment secrets), and the ruleset in item 3.
    The same two rulesets must exist on `nix-config` and `kanbei`, where the
    branch gate is named `agent-gating`: the broker's `github-agent-push` host
    can write `contents` on both, so the rulesets, not the token, are what keep
-   the app off `main` and off every branch outside `agent/**`.
+   the app off `main` and off every branch outside `agent/**`. The same gate
+   applies to `sdlc`, which is also private and agent-maintained: without an
+   `agent/**`-only ruleset, the `github-sdlc-git` host's `contents: write` could
+   reach `main`.
 4. The mirror's `github-backup-read-pat` (step 22) is not the agent's identity;
    it stays an operator-owned fine-grained PAT.
 
@@ -302,7 +305,7 @@ the setter marker.
 ## 10. Create the broker credential Secret
 
 The broker is platform-owned (`clusters/homelab/broker/`); this step supplies
-seven files, none of which enters git. Static enrollments name four of them
+eight files, none of which enters git. Static enrollments name five of them
 (`keys` in `clusters/homelab/broker/sops-contract.yaml`); the GitHub App
 enrollments add the app id, the private key and one installation id per
 installation (`app_keys`). **Step 1 must be finished first.**
@@ -311,6 +314,11 @@ installation (`app_keys`). **Step 1 must be finished first.**
 missing file is a 503 for that host instead of a startup abort. Create it when
 the provider is chosen in step 24; until then the placeholder host answers
 `dns_failure` and the rest of the broker is unaffected.
+
+`memory-mcp-token` is optional for the same reason: its value already exists in
+the graphiti Secret, and step 32 projects it into this Secret. Until it is
+there, the `memory` host answers `503 credential_unavailable` and nothing else
+changes.
 
 Run this on smortress as `smores`. `cluster-kubectl` reads a root-only
 kubeconfig, hence `sudo`.
@@ -1661,3 +1669,69 @@ the run, and the source changes only by human merge here.
    ```sh
    kubectl -n tenant-apps rollout restart deploy/nanobot
    ```
+
+## 32. Project the memory token into `broker-credentials` and probe the `memory` host
+
+The broker's `memory` logical host (SDLC #631) calls the graphiti wrapper at
+`memory-mcp.graphiti.svc.cluster.local:8182` with the same bearer token the
+wrapper already enforces. That value lives in the graphiti Secret
+`memory-mcp-token` (key `token`, projected from `memory-mcp-token-sops` in step
+12). The broker reads credentials as files, so the value must also be a file
+named `memory-mcp-token` in `broker-credentials` (step 10 created the rest).
+The enrollment declares `optional_secret`: until this step runs, `memory`
+answers `503 credential_unavailable` and the rest of the broker is unaffected.
+
+Run this on smortress as `smores`. The value never reaches the command line or
+a transcript: it is already base64 in the API server, and only a 0600 temporary
+patch file holds it.
+
+```sh
+TOKEN_B64=$(sudo cluster-kubectl -n graphiti get secret memory-mcp-token \
+  -o jsonpath='{.data.token}')
+umask 077
+tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+printf '{"data":{"memory-mcp-token":"%s"}}\n' "$TOKEN_B64" >"$tmp/patch.json"
+unset TOKEN_B64
+sudo cluster-kubectl -n broker patch secret broker-credentials \
+  --type merge --patch-file "$tmp/patch.json"
+sudo cluster-kubectl -n broker rollout restart deployment/broker
+sudo cluster-kubectl -n broker rollout status deployment/broker --timeout=120s
+```
+
+`patch --type merge` adds the one key and leaves the other files untouched; a
+`create secret --from-file` of the whole directory would have replaced them.
+Credentials are read once at start, hence the rollout.
+
+Probe through the broker itself, so the injected header is what the wrapper
+checks. The explicit `Host` matters: curl to `127.0.0.1` would otherwise send an
+IP-literal Host, which the broker refuses with `400 ip_literal_host`.
+
+```sh
+sudo cluster-kubectl -n broker port-forward deploy/broker 18080:8080 &
+sleep 2
+curl -sS -o /dev/null -w '%{http_code}\n' -H 'Host: broker.broker.svc.cluster.local' \
+  'http://127.0.0.1:18080/memory/health'          # expect 200
+curl -sS -o /dev/null -w '%{http_code}\n' -X POST \
+  -H 'Host: broker.broker.svc.cluster.local' \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: application/json, text/event-stream' \
+  --data '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"broker-probe","version":"0"}}}' \
+  'http://127.0.0.1:18080/memory/mcp'             # expect 200
+kill %1
+```
+
+`/memory/health` proves the two network halves (`egress-memory` in `broker`,
+`memory-mcp-from-broker` in `graphiti`); `/memory/mcp` proves the credential,
+because the wrapper exempts only `/health` from its bearer gate.
+
+Expected: `200` and `200` (the second is the MCP `initialize` result). A `503`
+(`credential_unavailable`) means the pod started without the file: the patch
+did not land or the rollout replaced nothing. A `502` (`upstream_unreachable`)
+means the wrapper Service or the NetworkPolicy pair is missing. A `401` from the
+wrapper means the projected value differs from the one the wrapper reads; a
+`503` with `token missing` in the wrapper's log means its own
+`memory-mcp-token-sops` projection is broken (step 12).
+
+Rotation: rewrite `memory-mcp-token-sops` (step 12), let ESO refresh the graphiti
+Secret and restart the wrapper, then repeat this step so the broker holds the
+new value.
