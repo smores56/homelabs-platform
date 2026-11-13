@@ -1,6 +1,6 @@
 # Tenancy
 
-Ten namespaces carry every workload. Each is labelled with the owning tenant, a
+Eleven namespaces carry every workload. Each is labelled with the owning tenant, a
 tier, and PSA enforcement, so admission policy, RBAC scope and NetworkPolicy
 all select by label rather than by hard-coded name. The data tier is one
 namespace per application (smores56/sdlc#580), because each app is bound to one
@@ -12,6 +12,7 @@ virtiofs share and must not be able to reach another app's.
 | `platform` | `platform` | `platform` | `baseline` | ESO, policy controllers, platform jobs |
 | `tenant-apps` | `apps` | `tenant` | `restricted` | `homelabs-apps` workloads (nanobot and successors) |
 | `broker` | `broker` | `broker` | `restricted` | Egress broker with per-host tokens |
+| `webhook` | `webhook` | `webhook` | `restricted` | Inbound webhook receiver; capability URLs enqueue into the agent (`docs/webhook.md`) |
 | `immich` | `immich` | `data` | `restricted` | Immich server, machine-learning, Postgres, Valkey |
 | `navidrome` | `navidrome` | `data` | `restricted` | Navidrome |
 | `calibre` | `calibre` | `data` | `restricted` | OPDShelf over the books library |
@@ -39,18 +40,19 @@ applied by the first stage (`docs/flux.md`).
 | `platform` | exempt from `no-host-access` | unrestricted | unrestricted |
 | `tenant` | gVisor, digest-pinned images, scratch PVC only, no `sops-age`, no reconciler SA, `agent-identity` | broker only, plus DNS | the cluster tunnel on 8080 (`nanobot` only) |
 | `broker` | `no-host-access`, `broker-runtime` | public TCP 443 (global unicast only), DNS, `loki-gateway` 3100 and `status-exporter` 9101 | `tenant` tier on 8080 |
+| `webhook` | `no-host-access`, `webhook-runtime` | DNS, `tenant-apps/nanobot` 8765 only | the cluster tunnel on 8080 |
 | `data` (each of `immich`, `navidrome`, `calibre`, `graphiti`) | `no-host-access`, `data-workload-source`, `data-pvc-scope`, `data-pvc-storage` | same namespace, DNS; HTTPS for `immich-machine-learning` and `graphiti` | same namespace, `ingress` on the app's port |
 | `ingress` | none beyond PSA | the four data apps on their ports, `tenant-apps/nanobot` 8080, Cloudflare edge 443, DNS | none |
 | `observability` | exempt from `no-host-access` | DNS, the k3s API range on 443 (Vector, Prometheus, exporter), Loki and the annotated scrape targets; no public egress | default-deny; Vector/Loki/gateway wiring, Prometheus scrapes, and the broker paths only |
 
 ## Admission policy
 
-Thirteen policies, each in its own file with the binding that scopes it
+Fourteen policies, each in its own file with the binding that scopes it
 (`clusters/homelab/platform/policies/`, asserted by `tests/policies/check.sh`).
 
 | Policy | Bound to | Rejects |
 | --- | --- | --- |
-| `no-host-access` | `tenant`, `broker`, `data` (all four namespaces) | `hostNetwork`, `hostPID`, `hostIPC`, `hostPath`, privileged containers, `hostPort`, added capabilities, `allowPrivilegeEscalation` |
+| `no-host-access` | `tenant`, `broker`, `data` (all four namespaces), `webhook` | `hostNetwork`, `hostPID`, `hostIPC`, `hostPath`, privileged containers, `hostPort`, added capabilities, `allowPrivilegeEscalation` |
 | `tenant-gvisor` | `tenant` | any pod without `spec.runtimeClassName: gvisor` |
 | `tenant-images` | `tenant` | images not pinned by `@sha256:`, floating tags, nanobot from outside `ghcr.io/smores56/nix-config/nanobot@sha256:` |
 | `tenant-scratch-pvc` | `tenant` | pod volumes whose PVC name does not start with the pod's `app.kubernetes.io/name` |
@@ -61,6 +63,7 @@ Thirteen policies, each in its own file with the binding that scopes it
 | `data-workload-source` | `data` (all four) | pods without `homelabs.dev/managed-by=platform` or not running as `data-workload` |
 | `data-pvc-scope` | `data` (all four) | pods mounting a PVC whose name does not start with their own namespace, i.e. another app's share |
 | `data-pvc-storage` | `data` (all four) | PVCs not named `<namespace>-*` or not claiming `data-local` (no dynamic provisioning in the data tier) |
+| `webhook-runtime` | `webhook` | pods without gVisor, `runAsNonRoot` or a read-only rootfs (the publicly reachable receiver) |
 
 All policies use `failurePolicy: Fail`. CEL cannot read who sent a request, so
 creator identity is enforced by RBAC (below) and the policies pin the label and
@@ -140,8 +143,10 @@ Two mechanisms, no third:
    namespace without the Secret fails instead of borrowing another key.
    `tenant-apps` carries the tenant ciphertext; `broker` holds the hand-made
    `broker-credentials` Secret (six credential files, never a manifest); the
-   contract is spelled out in the `sops-contract` ConfigMaps in `flux-system`
-   and `broker`, and in `docs/runbook.md`.
+   `webhook` namespace holds the hand-made `webhook-tokens` Secret (admin and
+   enqueue tokens, `docs/webhook.md`). The contract is spelled out in the
+   `sops-contract` ConfigMaps in `flux-system`, `broker` and `webhook`, and in
+   `docs/runbook.md`.
 2. **External Secrets, two shapes.** `platform/secrets/eso/` holds a
    namespaced `SecretStore`, a `Password` generator and `ExternalSecret`s. No
    credential is committed. Those objects are applied by the

@@ -299,6 +299,16 @@ these minted scopes plus the reviewed `broker.json`. The trust boundary is
 unchanged: the broker was already the only credential holder; now the credential
 is short-lived and revocable from the app's settings page.
 
+## Inbound webhooks: `agent-hooks.sammohr.dev`
+
+The broker is egress-only and the agent has no inbound listener. Deliveries
+terminate on the platform-owned receiver in the `webhook` namespace
+(`clusters/homelab/webhook/`, `apps/webhook/`): an unguessable capability URL,
+an optional GitHub HMAC, a 1 MiB limit and delivery-id dedupe, then one
+enqueue call to this gateway's WebSocket listener on 8765. The hostname is an
+Access bypass by construction and is not rate limited. Contract, threat model
+and the researched gateway frames: `docs/webhook.md`.
+
 ## Verification
 
 ```sh

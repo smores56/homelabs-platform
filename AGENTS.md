@@ -25,6 +25,7 @@ tests/policies/check.sh                 # static policy, RBAC, network, broker a
 tests/policies/check.sh --runtime       # real admission + can-i probes on a throwaway
                                         # apiserver (CI job `policy admission runtime`)
 python3 -m unittest discover -s apps/broker/tests -t apps/broker   # broker unit tests
+python3 -m unittest discover -s apps/webhook/tests -t apps/webhook  # webhook unit tests
 tests/tofu/check.sh                     # Cloudflare config shape, no credentials
 tests/backup/check.sh                   # mirror script args/URLs, no network
 tests/observability/check.sh            # vector unit tests, config drift, exporter tests

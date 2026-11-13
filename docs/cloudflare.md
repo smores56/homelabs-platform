@@ -154,6 +154,7 @@ zone with no application of its own is reachable only by the owner's identity.
   | `photos.sammohr.dev` | mobile clients cannot complete an Access login |
   | `music.sammohr.dev` | same, for the Navidrome clients |
   | `opds.sammohr.dev` | OPDS readers and the web reader; app login and the per-IP rate limit are the gates |
+  | `agent-hooks.sammohr.dev` | GitHub delivers webhooks with no browser and no service token; the capability URL is the credential and the receiver verifies the source's HMAC (`docs/webhook.md`). Not rate limited |
 
   The set carries no `prevent_destroy`, deliberately. Removing a name deletes
   its bypass application and the name falls back to the wildcard deny on the
