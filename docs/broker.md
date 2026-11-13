@@ -7,7 +7,7 @@ resolves and pins the address itself, strips whatever credential the agent sent,
 injects exactly one enrolled credential, refuses redirects that leave the
 enrolled endpoint, and logs metadata only.
 
-Source: `apps/broker/` (Python stdlib, 52 unit tests). Manifests:
+Source: `apps/broker/` (Python stdlib, 77 unit tests). Manifests:
 `clusters/homelab/broker/`. Applied by the Flux stage `platform-broker`.
 
 ## Trust boundary and non-goals

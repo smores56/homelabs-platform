@@ -47,12 +47,16 @@ main-gated environment secrets), and the ruleset in item 3.
    - Where can this app be installed: **Only on this account**.
 2. Record the **App ID** from the app's settings page, generate a **private
    key** (downloads a `.pem`; keep it in the password manager), then install the
-   app once on the `smores56` account with **both** `homelabs-apps` and
-   `homelabs-platform` selected (an installation is per account, not per
-   repository: one ID covers both, and the broker narrows each minted token to
-   one repository). Record the **installation ID** from the install URL
-   (`/installations/<id>`). The app id, key and installation id reach the broker
-   only as files (step 10); nothing is committed.
+   app once on the `smores56` account with **all four** repositories selected:
+   `homelabs-apps`, `homelabs-platform`, `nix-config` and `kanbei` (an
+   installation is per account, not per repository: one ID covers all of them,
+   and the broker narrows each minted token to the repositories named on the
+   logical host it is serving). Record the **installation ID** from the install
+   URL (`/installations/<id>`). The app id, key and installation id reach the
+   broker only as files (step 10); nothing is committed. Every repository named
+   on a logical host goes into one token request, so a repository that is in
+   `broker.json` but not in the installation fails the whole host with a 422:
+   add it to the installation first.
 3. Contain the identity to `agent/**`: Settings -> Rules -> Rulesets -> New
    branch ruleset:
    - Target branches: **Include all branches**, exclude by pattern `agent/*`.
@@ -74,6 +78,10 @@ main-gated environment secrets), and the ruleset in item 3.
    and `bypass_actors`. The acceptance script also probes both refusals live
    (a push outside `agent/**` and a push touching `.github/workflows/`), so a
    silently removed control fails the run instead of waiting for an incident.
+   The same two rulesets must exist on `nix-config` and `kanbei`, where the
+   branch gate is named `agent-gating`: the broker's `github-agent-push` host
+   can write `contents` on both, so the rulesets, not the token, are what keep
+   the app off `main` and off every branch outside `agent/**`.
 4. The mirror's `github-backup-read-pat` (step 22) is not the agent's identity;
    it stays an operator-owned fine-grained PAT.
 
