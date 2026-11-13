@@ -2,7 +2,7 @@
 # in that repository (tenant side, added by another lane):
 #
 #   image: ghcr.io/smores56/homelabs-platform/nanobot@sha256:<old>
-#     # {"$imagepolicy": "flux-system:nanobot"}
+#     # {"$imagepolicy": "flux-system:nanobot:digest"}
 #
 # The push uses the same write deploy key as `homelabs-apps-git.yaml`, so the
 # commit is attributable to the automation identity and the tenant's own
