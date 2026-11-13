@@ -198,6 +198,60 @@ cluster-kubectl -n tenant-apps exec deploy/nanobot -- \
   python -c 'import json;print(json.load(open("/data/home/.nanobot/config.json"))["tools"]["mcp_servers"])'
 ```
 
+### SDLC tooling on the tools PVC
+
+The image ships neither the `sdlc` CLI nor its skills (SDLC #626). After
+`render.py`, `images/nanobot/entrypoint.sh` runs a `bootstrap_extensions` block
+whenever the pod's `BROKER_URL` is set:
+
+1. `$HOME/tools`, `$HOME/tools/bin` and `$TMPDIR` are created on the tools PVC.
+2. `git clone --depth 1 --filter=blob:none
+   "$BROKER_URL/github-sdlc-git/smores56/sdlc.git"` into a scratch directory;
+   it is swapped into `$HOME/tools/sdlc-src` only after a complete clone, so a
+   failed fetch keeps the previous tree.
+3. `uv tool install --force "$HOME/tools/sdlc-src"` into `$HOME/tools/bin`
+   (`UV_TOOL_DIR=$HOME/tools/uv`, `UV_TOOL_BIN_DIR=$HOME/tools/bin`).
+4. The repository's `skills/` is overlaid onto
+   `$HOME/.nanobot/workspace/skills`, and only when it exists: the render step
+   owns the ConfigMap skills, so a repository without `skills/` cannot empty
+   them.
+
+`github-sdlc-git` injects the git basic auth for `github.com`
+(`docs/broker.md`), so a plain clone works and the pod holds no credential. The
+build's dependencies come from PyPI over the tenant's public egress
+(`clusters/homelab/platform/network/tenant-egress.yaml`), not through the
+broker.
+
+The bootstrap is **fail-soft**: every step is
+`|| echo "nanobot-bootstrap: <what> failed; continuing" >&2` and the entrypoint
+still execs the gateway. A broker outage at container start therefore leaves the
+agent running without SDLC — the CLI and skills keep whatever the PVC already
+holds, and nothing is retried until the next pod restart. It never
+crashloops, and it never half-replaces the tree. On the very first start with
+no PVC contents, `sdlc` is simply absent from `PATH` and a skill that needs it
+fails at that point.
+
+The entrypoint exports the environment the pod relies on; the Deployment must
+provide `HOME=/data/home`, `BROKER_URL`, and the tools PVC mounted at
+`/data/home/tools` (writable, and `TMPDIR` lands on it so a large download is
+not squeezed into `emptyDir` or the container layer). It then puts
+`$HOME/tools/bin` first on `PATH` and defaults `TMPDIR=$HOME/tmp`,
+`UV_TOOL_DIR=$HOME/tools/uv` and `UV_TOOL_BIN_DIR=$HOME/tools/bin` when the pod
+does not set them.
+
+The last line of the bootstrap names the state:
+
+```sh
+cluster-kubectl -n tenant-apps logs deploy/nanobot | grep nanobot-bootstrap
+# nanobot-bootstrap: sdlc=<short rev|none> tools=<n> skills=<n>
+cluster-kubectl -n tenant-apps exec deploy/nanobot -- git -C /data/home/tools/sdlc-src rev-parse --short HEAD
+```
+
+`sdlc=none` means no tree is on the PVC (the first start could not clone), so
+the CLI is whatever the previous start installed, or absent; `tools=0` means the
+`uv tool install` failed even though a tree is present. Both are warnings, not
+outages: the gateway still started.
+
 ## Root namespace labels
 
 The bootstrap manifests create `flux-system` without tenancy labels. The

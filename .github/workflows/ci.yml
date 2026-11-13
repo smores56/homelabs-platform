@@ -85,6 +85,9 @@ jobs:
         run: |
           python3 -m py_compile images/nanobot/render.py
           python3 -m unittest discover -s tests/nanobot-image -t tests/nanobot-image -v
+      # A syntax error here would only surface as a crashloop in the cluster.
+      - name: entrypoint syntax
+        run: bash -n images/nanobot/entrypoint.sh
 
   kubeconform:
     name: kubeconform
