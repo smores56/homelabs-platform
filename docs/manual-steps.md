@@ -32,12 +32,14 @@ main-gated environment secrets), and the ruleset in item 3.
      token type the broker does not need and cannot audit.
    - Repository permissions: **Contents: read and write**, **Pull requests:
      read and write**, **Metadata: read** (mandatory); **Actions: read** for CI
-     status and publish digests. Leave **Workflows** at **No access**, but do
-     not treat it as a push gate: verified 2026-11-12, an installation token
-     with only `contents: write` pushed a modification to
-     `.github/workflows/ci.yml` on an `agent/**` branch. The permission still
-     bounds releases and API use; the control for workflow *changes* is the
-     merge, below.
+     status and publish digests. Leave **Workflows** at **No access**: GitHub
+     refuses a push touching `.github/workflows/**` with
+     `refusing to allow a GitHub App to create or update workflow ... without
+     workflows permission` (verified with the app token, 2026-11-12). A local
+     probe must disable git's credential helper
+     (`-c credential.helper= -c credential.https://github.com.helper=`), or it
+     authenticates as the owner and the permission looks unenforced. The merge
+     review is the backstop, not the gate.
    - Organization permissions, Account permissions, Enterprise permissions:
      **No access**, all of them. The app operates on two user-owned
      repositories through scoped installation tokens; anything broader is
@@ -53,12 +55,13 @@ main-gated environment secrets), and the ruleset in item 3.
    only as files (step 10); nothing is committed.
 3. Contain the identity to `agent/**`: Settings -> Rules -> Rulesets -> New
    branch ruleset:
-   - Target branches: **Include all branches**, exclude by pattern `agent/**`
-     (double star: a single `*` does not cross `/`, so nested agent branches
-     would otherwise fall back under the restrictive rule). An **empty
-     include** is inert: the ruleset is listed and `GET /rules/branches/...`
-     reports its rules, but pushes are not blocked — verified live, so set the
-     include explicitly.
+   - Target branches: **Include all branches**, exclude by pattern `agent/*`.
+     Agent branches are exactly one segment (`agent/<slug>`): measured
+     2026-11-12, a nested `agent/nested/probe` was refused even with the
+     exclude written as `agent/**`, so do not assume `**` crosses `/` here.
+     An **empty include** is inert: the ruleset is listed and
+     `GET /rules/branches/...` reports its rules, but pushes are not blocked —
+     verified live, so set the include explicitly.
    - Rules: Restrict creations, Restrict updates, Restrict deletions.
    - Bypass list: Repository admins (the human); leave the app out.
    Branch protection on `main` (step 5) requires a PR, passing checks, and a
