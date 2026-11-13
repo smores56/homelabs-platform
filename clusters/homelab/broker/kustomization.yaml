@@ -17,6 +17,7 @@ resources:
   - service.yaml
   - networkpolicy.yaml
   - egress-agent-control.yaml
+  - egress-memory.yaml
   - sops-contract.yaml
 configMapGenerator:
   - name: broker-config

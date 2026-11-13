@@ -4,9 +4,10 @@
 #   1. same-namespace traffic, because Immich talks to its own Postgres and
 #      Valkey and Graphiti to its own FalkorDB;
 #   2. the app's HTTP port from the `ingress` namespace only, which is the one
-#      path cloudflared may use into a data app. The memory wrapper has two
-#      clients: the host's tap NodePort (the loopback forwarder) and, since
-#      SDLC #617, `cloudflared` on 8182 for `memory.sammohr.dev`;
+#      path cloudflared may use into a data app. The memory wrapper has three
+#      clients: the host's tap NodePort (the loopback forwarder), `cloudflared`
+#      on 8182 for `memory.sammohr.dev` (SDLC #617), and the broker namespace
+#      for the `memory` logical host (SDLC #631);
 #   3. HTTPS to the public internet for the two pods that fetch remote content
 #      (`immich-machine-learning` downloads model weights, Graphiti calls the
 #      Neuralwatt API). Port 443 is the only port the cluster guest can open
@@ -205,6 +206,32 @@ spec:
             cidr: 10.77.1.1/32
         - ipBlock:
             cidr: 10.77.1.2/32
+      ports:
+        - protocol: TCP
+          port: 8182
+---
+# The broker's half of the `memory` logical host (SDLC #631). A separate policy
+# from the two above on purpose: the broker is a distinct namespace, and the day
+# either host-side path is retired this one still carries the agent's memory
+# calls. The broker injects the bearer token, so this is only the network half.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: memory-mcp-from-broker
+  namespace: graphiti
+  labels:
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: data
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: memory-mcp
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: broker
       ports:
         - protocol: TCP
           port: 8182

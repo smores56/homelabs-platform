@@ -1,0 +1,25 @@
+# The `memory` logical host (SDLC #631): the graphiti memory wrapper is in-cluster
+# and egress-public-https excludes every private range, so it needs its own rule.
+# The broker is the only namespace admitted here besides the tunnel and the host
+# tap (clusters/homelab/platform/network/data-flows.yaml states the far half).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: egress-memory
+  labels:
+    app.kubernetes.io/name: broker
+    homelabs.dev/tier: broker
+spec:
+  podSelector: {}
+  policyTypes: ["Egress"]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: graphiti
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: memory-mcp
+      ports:
+        - protocol: TCP
+          port: 8182
