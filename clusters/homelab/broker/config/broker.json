@@ -133,6 +133,33 @@
         "kind": "bearer"
       }
     },
+    "github-hooks": {
+      "scheme": "https",
+      "host": "api.github.com",
+      "port": 443,
+      "allow_private": false,
+      "github_app": {
+        "installation": "github-installation-id",
+        "repositories": ["sdlc", "homelabs-apps"],
+        "permissions": {
+          "repository_hooks": "write",
+          "metadata": "read"
+        }
+      },
+      "inject": {
+        "kind": "bearer"
+      },
+      "allow_methods": ["POST"],
+      "allow_paths": ["^/repos/[^/]+/[^/]+/hooks$"],
+      "body_guards": [
+        {
+          "methods": ["POST"],
+          "paths": ["^/repos/[^/]+/[^/]+/hooks$"],
+          "field": "config.url",
+          "allow": "^https://agent-hooks\\.sammohr\\.dev/"
+        }
+      ]
+    },
     "tinyfish": {
       "scheme": "https",
       "host": "api.search.tinyfish.ai",

@@ -1825,3 +1825,65 @@ client-side manifest), then `kubectl -n tenant-apps rollout restart
 deployment/agent-control`. The service re-reads the file on every dispatch, but
 the restart is what proves both replicas hold the new value. Revoke the old
 token in GitHub after the rollout completes.
+
+## 34. Grant the app `Repository webhooks` and re-consent the installation
+
+The `github-hooks` logical host (SDLC #628) registers outbound repository
+webhooks that GitHub delivers to `https://agent-hooks.sammohr.dev/`. Its
+installation token asks for `repository_hooks: write` and `metadata: read` on
+`sdlc` and `homelabs-apps`. The app does not hold that permission yet, and
+installation permissions are not retroactive: a permission added to the app
+applies to an existing installation only after the account owner accepts it. A
+token request for a permission the installation never approved fails the whole
+host with `422`, and hook creation is refused with
+`403 Resource not accessible by integration` until the re-consent lands.
+
+1. In the app's settings, Permissions & events -> Repository permissions ->
+   **Repository webhooks: Read and write**, then Save. Change nothing else:
+   the broker requests only `repository_hooks` and the mandatory `metadata`
+   from these repositories, so a wider app permission is authority no host uses.
+2. Re-consent the installation: https://github.com/settings/installations ->
+   `homelabs-agent` -> **Review permissions** -> accept the new permissions.
+   The installation page lists `Repository webhooks: Read and write` afterwards;
+   the broker does not restart, because the token is minted per request.
+3. Probe through the broker. The explicit `Host` matters: curl to `127.0.0.1`
+   would otherwise send an IP-literal Host, which the broker refuses with
+   `400 ip_literal_host`. This creates a real hook; step 4 removes it.
+
+   ```sh
+   sudo cluster-kubectl -n broker port-forward deploy/broker 18080:8080 &
+   sleep 2
+   curl -sS -o /dev/null -w '%{http_code}\n' -X POST \
+     -H 'Host: broker.broker.svc.cluster.local' \
+     -H 'Content-Type: application/json' \
+     --data '{"name":"web","active":true,"events":["issues"],"config":{"url":"https://agent-hooks.sammohr.dev/probe","content_type":"json"}}' \
+     'http://127.0.0.1:18080/github-hooks/repos/smores56/sdlc/hooks'   # expect 201
+   curl -sS -o /dev/null -w '%{http_code}\n' -X DELETE \
+     -H 'Host: broker.broker.svc.cluster.local' \
+     'http://127.0.0.1:18080/github-hooks/repos/smores56/sdlc/hooks/1' # expect 403
+   curl -sS -o /dev/null -w '%{http_code}\n' -X POST \
+     -H 'Host: broker.broker.svc.cluster.local' \
+     -H 'Content-Type: application/json' \
+     --data '{"config":{"url":"https://evil.example/hook"}}' \
+     'http://127.0.0.1:18080/github-hooks/repos/smores56/sdlc/hooks'   # expect 403
+   kill %1
+   ```
+
+   `201` is the token and the permission working. `403` on `DELETE` and on the
+   foreign URL is the enrollment refusing before the credential is attached;
+   the response body names `method_denied` and `body_field_denied`
+   respectively. A `403 upstreamStatus: 403` instead means the installation has
+   not re-consented; a `422` means the token request named a permission the
+   installation lacks.
+4. Delete the probe hook with the operator's own token (the broker cannot
+   `DELETE` by design):
+
+   ```sh
+   gh api repos/smores56/sdlc/hooks \
+     --jq '.[] | select(.config.url == "https://agent-hooks.sammohr.dev/probe") | .id'
+   gh api -X DELETE repos/smores56/sdlc/hooks/<id>
+   ```
+
+Both repositories are already in the installation (step 1, item 2), so nothing
+else changes. Repeating this step after a permission edit is the only work: no
+secret file, no `broker-credentials` key and no restart are involved.

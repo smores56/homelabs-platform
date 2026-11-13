@@ -26,6 +26,7 @@ class ShippedConfigTest(unittest.TestCase):
                 "github-agent",
                 "github-agent-push",
                 "github-apps",
+                "github-hooks",
                 "github-platform",
                 "github-platform-push",
                 "github-sdlc",
@@ -44,6 +45,7 @@ class ShippedConfigTest(unittest.TestCase):
         for name in (
             "neuralwatt",
             "github-apps",
+            "github-hooks",
             "github-platform-push",
             "github-platform",
             "github-agent-push",
@@ -117,6 +119,30 @@ class ShippedConfigTest(unittest.TestCase):
         self.assertEqual(api.injection.kind, "bearer")
         self.assertEqual(api.app.repositories, ("sdlc",))
         self.assertEqual(dict(api.app.permissions), {"issues": "write", "metadata": "read"})
+
+    def test_github_hooks_is_post_only_hook_creation_behind_a_url_guard(self) -> None:
+        # SDLC #628: outbound repository webhooks. The agent may create a hook
+        # and nothing else: PATCH/DELETE are refused by method, every other path
+        # by the allowlist, and a hook whose config.url leaves the receiver is
+        # refused by the body guard.
+        hooks = self.config.hosts["github-hooks"]
+        self.assertEqual(hooks.host, "api.github.com")
+        self.assertEqual(hooks.port, 443)
+        self.assertEqual(hooks.scheme, "https")
+        self.assertFalse(hooks.allow_private)
+        self.assertEqual(hooks.injection.kind, "bearer")
+        self.assertEqual(hooks.app.installation, "github-installation-id")
+        self.assertEqual(hooks.app.repositories, ("sdlc", "homelabs-apps"))
+        self.assertEqual(dict(hooks.app.permissions), {"repository_hooks": "write", "metadata": "read"})
+        self.assertEqual(hooks.allow_methods, ("POST",))
+        self.assertEqual(len(hooks.allow_paths), 1)
+        self.assertTrue(hooks.allow_paths[0].fullmatch("/repos/smores56/sdlc/hooks"))
+        self.assertEqual(len(hooks.body_guards), 1)
+        guard = hooks.body_guards[0]
+        self.assertEqual(guard.methods, ("POST",))
+        self.assertEqual(guard.field, "config.url")
+        self.assertTrue(guard.allow.match("https://agent-hooks.sammohr.dev/hook/abc"))
+        self.assertIsNone(guard.allow.match("https://evil.example/hook"))
 
     def test_memory_is_a_private_http_host_with_an_optional_token(self) -> None:
         # SDLC #631: the graphiti wrapper. In-cluster HTTP with a bearer token
