@@ -274,11 +274,67 @@ done
 has 'tunnel health covers both tunnels' 'tunnel_id = compact\(\[var\.host_tunnel_id, var\.cluster_tunnel_id\]\)'
 has 'rate limit still covers the three public apps' 'http\.host eq \\"music\.\$\{var\.domain\}\\".*photos.*opds'
 
-echo "== state and secrets"
-if grep -qE '^[[:space:]]*backend[[:space:]]+"' "$work/code.tf"; then
-  bad "no state backend is committed" "state is operator-local; see docs/cloudflare.md"
+echo "== state backend"
+# The state lives in R2 (SDLC #622). The block has to be the S3 shim pointed at
+# this account's R2 endpoint, with no credential in it, and the apply path has to
+# stay a reviewed dispatch rather than an apply on push.
+backend=tofu/backend.tf
+if [[ -f $backend ]] && grep -qE '^[[:space:]]*backend[[:space:]]+"s3"' "$backend"; then
+  ok "the state backend is the S3-compatible one"
 else
-  ok "no state backend is committed"
+  bad "the state backend is the S3-compatible one" "tofu/backend.tf"
+fi
+eq "$(grep -cE '^[[:space:]]*backend[[:space:]]+"' "$work/code.tf")" "1" \
+  "there is exactly one backend block"
+account_id=$(sed -nE 's/^[[:space:]]*account_id[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' tofu/terraform.tfvars)
+if grep -qE "^[[:space:]]*s3[[:space:]]*=[[:space:]]*\"https://${account_id}\.r2\.cloudflarestorage\.com\"" "$backend"; then
+  ok "the backend endpoint is this account's R2 endpoint"
+else
+  bad "the backend endpoint is this account's R2 endpoint" "expected https://${account_id}.r2.cloudflarestorage.com"
+fi
+eq "$(sed -nE 's/^[[:space:]]*bucket[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' "$backend")" \
+  "homelabs-tofu-state" "the state bucket is the reviewed one"
+eq "$(sed -nE 's/^[[:space:]]*key[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' "$backend")" \
+  "cloudflare/terraform.tfstate" "the state key names the zone's state"
+for flag in skip_credentials_validation skip_region_validation skip_requesting_account_id skip_s3_checksum use_path_style; do
+  if grep -qE "^[[:space:]]*${flag}[[:space:]]*=[[:space:]]*true" "$backend"; then
+    ok "backend sets $flag"
+  else
+    bad "backend sets $flag"
+  fi
+done
+if grep -qE '(access_key|secret_key|token)[[:space:]]*=' "$backend"; then
+  bad "the backend block carries no credential" "credentials come from the environment"
+else
+  ok "the backend block carries no credential"
+fi
+if grep -qE 'encryption[[:space:]]*\{' "$work/code.tf"; then
+  bad "no client-side state encryption without a key store" "R2 encrypts at rest; state holds identifiers only"
+else
+  ok "no client-side state encryption without a key store"
+fi
+# The apply path: dispatch only, no auto-approve, and a detailed-exitcode gate.
+apply=.github/workflows/tofu-apply.yml
+if grep -qE '^[[:space:]]*push:' "$apply"; then
+  bad "tofu-apply does not run on push"
+else
+  ok "tofu-apply does not run on push"
+fi
+if grep -q 'workflow_dispatch' "$apply"; then ok "tofu-apply is dispatched by hand"; else bad "tofu-apply is dispatched by hand"; fi
+if grep -q -- '-auto-approve' "$apply"; then
+  bad "no -auto-approve in the apply workflow"
+else
+  ok "no -auto-approve in the apply workflow"
+fi
+if grep -q -- '-detailed-exitcode' "$apply"; then
+  ok "the apply workflow gates on plan -detailed-exitcode"
+else
+  bad "the apply workflow gates on plan -detailed-exitcode"
+fi
+if grep -qE 'apply:[[:space:]]*true|inputs\.apply' "$apply"; then
+  ok "apply runs only when the dispatch asks for it"
+else
+  bad "apply runs only when the dispatch asks for it"
 fi
 if git ls-files | grep -q '\.tfstate'; then
   bad "no state file is tracked"

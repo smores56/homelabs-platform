@@ -361,9 +361,12 @@ or a tunnel error means the name is unprotected. Verify the CAA pin with
 `dig +short CAA sammohr.dev`: the two pinned records plus the ones Cloudflare
 appends for Universal SSL.
 
-`tofu-apply.yml` refuses to apply until a state backend exists, because state is
-operator-owned (`docs/cloudflare.md`, "State"); the manual apply is the only one
-until the backend is provisioned.
+State now lives in the `homelabs-tofu-state` R2 bucket (`tofu/backend.tf`,
+`docs/cloudflare.md` "State"), so `tofu-apply.yml` is `workflow_dispatch` only:
+a plan-only run for review, then a run with `apply: true` to apply that plan.
+It fails loudly when the zone token or the R2 state pair is missing from the
+`cloudflare` environment. `docs/manual-steps.md` step 14 has the one-time
+`-migrate-state` procedure.
 
 ### 8. Repository mirror
 

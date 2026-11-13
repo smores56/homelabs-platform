@@ -107,6 +107,10 @@ Expect `CLOUDFLARE_API_TOKEN`. An environment with no secret is why
 `tofu-plan.yml` logs `CLOUDFLARE_API_TOKEN absent; skipping plan` instead of
 failing; `tofu-apply.yml` fails loudly in that state.
 
+The state backend's R2 pair is a second pair of environment secrets
+(`R2_STATE_ACCESS_KEY_ID`, `R2_STATE_SECRET_ACCESS_KEY`); step 14 creates the
+bucket and sets both, and `tofu-plan.yml` skips with a notice until they exist.
+
 ## 3. Scope the Cloudflare API token
 
 Create the token in the Cloudflare dashboard under My Profile → API Tokens →
@@ -608,6 +612,79 @@ files over the state.
 Adopting an account whose state was lost needs imports instead: `<zone_id>/<record_id>`
 for records and `accounts/<account_id>/<app_id>` for applications, listed from
 `/zones/<zone>/dns_records` and `/accounts/<account>/access/apps`.
+
+### Moving the state into R2 (SDLC #622)
+
+The config now carries a `backend "s3" {}` block pointed at R2
+(`tofu/backend.tf`), so the operator's local file has to become that bucket's
+object. This is the destructive-looking step: an `init` against an empty bucket
+and a local file that was forgotten would plan a create for every object that
+already exists. Do it in this order and read the `state list` diff.
+
+1. Create the bucket and its key. In the Cloudflare dashboard: R2 → **Create
+   bucket** → `homelabs-tofu-state` (private, default location), then R2 → **Manage
+   API tokens** → **Create API token** → *Object Read & Write* on that bucket
+   only. Store the pair in the `cloudflare` environment:
+
+   ```sh
+   gh secret set R2_STATE_ACCESS_KEY_ID --env cloudflare --body "<access key id>"
+   gh secret set R2_STATE_SECRET_ACCESS_KEY --env cloudflare --body "<secret access key>"
+   ```
+
+2. Back up the local state and record what it holds, before touching anything:
+
+   ```sh
+   cd ~/src/homelabs-platform
+   cp tofu/terraform.tfstate "tofu/terraform.tfstate.pre-r2-$(date +%F)"
+   ./scripts/tofu-cloudflare.sh state pull > "/var/backups/tofu-state-$(date +%F).json" 2>/dev/null \
+     || tofu -chdir=tofu state pull > "/var/backups/tofu-state-$(date +%F).json"
+   ./scripts/tofu-cloudflare.sh state list | sort > /tmp/tofu-state-before.txt
+   wc -l /tmp/tofu-state-before.txt        # record the number
+   ```
+
+   Keep both copies off the checkout: the JSON is the object graph, the `.pre-r2`
+   file is what `-migrate-state` reads.
+
+3. Migrate. `init` asks whether to copy the existing state into the new backend:
+
+   ```sh
+   ./scripts/tofu-cloudflare.sh init -migrate-state
+   ```
+
+   Answer **yes**. The script supplies the R2 pair from SOPS; `AWS_DEFAULT_REGION`
+   is forced to `auto`. A `403` here means the token is not scoped to the bucket;
+   an `AccessDenied` on `HeadBucket` means the bucket name in `tofu/backend.tf`
+   does not exist yet.
+
+4. Prove the state moved unchanged:
+
+   ```sh
+   ./scripts/tofu-cloudflare.sh state list | sort > /tmp/tofu-state-after.txt
+   diff -u /tmp/tofu-state-before.txt /tmp/tofu-state-after.txt   # empty
+   ./scripts/tofu-cloudflare.sh plan -no-color | tail -20          # no changes
+   ```
+
+   A non-empty diff or a plan that proposes a create means the migration did not
+   carry the state: restore `tofu/terraform.tfstate` from step 2 and do not
+   continue.
+
+5. Remove the local copies so nothing can plan from them, then confirm CI reads
+   the same state. Dispatch `tofu-apply` with `apply` left false and check that
+   its plan is empty:
+
+   ```sh
+   rm tofu/terraform.tfstate tofu/terraform.tfstate.backup
+   gh workflow run tofu-apply --repo smores56/homelabs-platform
+   gh run watch --repo smores56/homelabs-platform
+   ```
+
+   The workflow's summary shows the plan. From here on, an apply is
+   `workflow_dispatch` with `apply: true` after a reviewed plan-only run — never a
+   push. `tofu-plan.yml` on main is the drift check.
+
+6. Rollback, if the bucket has to be abandoned: `tofu init -migrate-state` with
+   `backend.tf` reverted to the local default copies the object back into
+   `tofu/terraform.tfstate`. Do that before deleting the bucket, not after.
 
 ## 15. Create the cluster tunnel
 
