@@ -35,16 +35,22 @@ if [[ -z ${CLOUDFLARE_API_TOKEN:-} ]]; then
   export CLOUDFLARE_API_TOKEN
 fi
 
-# The state lives in R2 (tofu/backend.tf). Without the pair, `init` cannot reach
-# it and every command below would fail with a confusing 403, so fetch it the
-# same way as the token. The host's restic job uses the same key names.
+# The state backend has its own credential: a dedicated R2 token scoped to
+# `homelabs-tofu-state` only. The host's restic pair must not reach it, because
+# the state decides what the next apply does; a leaked backup key should be able
+# to lose backups at worst, never retarget the edge. Same file, different keys.
 if [[ -z ${AWS_ACCESS_KEY_ID:-} || -z ${AWS_SECRET_ACCESS_KEY:-} ]]; then
   [[ -r $secrets_file ]] || {
     printf 'tofu-cloudflare: cannot read %s; set CLOUDFLARE_SECRETS_FILE\n' "$secrets_file" >&2
     exit 1
   }
-  AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-$(sops -d --extract '["r2-access-key-id"]' "$secrets_file")}
-  AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-$(sops -d --extract '["r2-secret-access-key"]' "$secrets_file")}
+  AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-$(sops -d --extract '["r2-state-access-key-id"]' "$secrets_file" 2>/dev/null || true)}
+  AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-$(sops -d --extract '["r2-state-secret-access-key"]' "$secrets_file" 2>/dev/null || true)}
+  if [[ -z ${AWS_ACCESS_KEY_ID:-} || -z ${AWS_SECRET_ACCESS_KEY:-} ]]; then
+    printf 'tofu-cloudflare: r2-state-access-key-id / r2-state-secret-access-key are missing from %s.\n' "$secrets_file" >&2
+    printf 'Add the state-scoped R2 pair (docs/manual-steps.md step 14); the restic pair is not used here.\n' >&2
+    exit 1
+  fi
   export AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY
 fi
 # R2 has no region; the backend and the SDK still want one.

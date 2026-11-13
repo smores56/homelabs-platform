@@ -647,6 +647,22 @@ already exists. Do it in this order and read the `state list` diff.
    gh secret set R2_STATE_SECRET_ACCESS_KEY --env cloudflare --body "<secret access key>"
    ```
 
+   The operator needs the same pair, and it is **not** the host's restic key:
+   state decides what the next apply does, so the backup credential must not be
+   able to rewrite it. Add the two keys to nix-config's `secrets/smortress.yaml`
+   by hand, which keeps the value out of shell history and the checkout:
+
+   ```sh
+   cd ~/src/nix-config
+   sops secrets/smortress.yaml      # add: r2-state-access-key-id, r2-state-secret-access-key
+   git add secrets/smortress.yaml && git commit -m 'chore(secrets): add the state-scoped R2 pair'
+   ```
+
+   Do not declare them in `modules/hosts/smortress/secrets.nix`: nothing on the
+   host needs them in `/run/secrets`, and `scripts/tofu-cloudflare.sh` reads
+   them through `sops -d` as the operator. A missing key names itself and exits;
+   the script never falls back to the restic pair.
+
 2. Back up the local state and record what it holds, before touching anything:
 
    ```sh
