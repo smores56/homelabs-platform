@@ -37,6 +37,6 @@ spec:
       branch: main
   update:
     strategy: Setters
-    # The marker lives in apps/nanobot/deployment.yaml; scan from the root so a
-    # moved directory does not silently stop the automation.
+    # The markers live in apps/nanobot/kustomization.yaml; scan from the root so a
+    # moved file does not silently stop the automation.
     path: ./
