@@ -119,22 +119,23 @@ else
   ok "no nanobot application remains"
 fi
 
-# The Kanbei route is a private WARP path, not a public hostname (SDLC #586).
-echo "== kanbei private route"
+# Kanbei is a public hostname behind Access (SDLC #586). The private WARP route
+# is retired: this change drops its destroy guard so the follow-up can destroy
+# it. The route still exists here, without the guard, by design.
+echo "== kanbei access application"
 kanbei_route=$(extract cloudflare_zero_trust_network_hostname_route.kanbei)
 if [[ -z $kanbei_route ]]; then
-  bad "kanbei hostname route exists"
+  bad "kanbei hostname route is still present for its final apply"
 else
-  ok "kanbei hostname route exists"
-  if grep -qF 'hostname   = "kanbei.${var.domain}"' <<<"$kanbei_route"; then ok "kanbei route covers kanbei.<zone>"; else bad "kanbei route covers kanbei.<zone>"; fi
-  if grep -qF 'tunnel_id  = var.host_tunnel_id' <<<"$kanbei_route"; then ok "kanbei route uses the host tunnel"; else bad "kanbei route uses the host tunnel"; fi
-  if grep -qF 'prevent_destroy = true' <<<"$kanbei_route"; then ok "kanbei route is protected from destroy"; else bad "kanbei route is protected from destroy"; fi
+  ok "kanbei hostname route is still present for its final apply"
 fi
 kanbei_app=$(extract cloudflare_zero_trust_access_application.kanbei)
 if [[ -z $kanbei_app ]]; then
   bad "kanbei Access application exists"
 else
   ok "kanbei Access application exists"
+  if grep -qF 'uri  = "kanbei.${var.domain}"' <<<"$kanbei_app"; then ok "kanbei publishes kanbei.<zone>"; else bad "kanbei publishes kanbei.<zone>"; fi
+  if grep -qF 'type = "public"' <<<"$kanbei_app"; then ok "kanbei destination is public"; else bad "kanbei destination is public"; fi
   if grep -q 'cloudflare_zero_trust_access_policy.email.id' <<<"$kanbei_app"; then ok "kanbei allows the owner email"; else bad "kanbei allows the owner email"; fi
   # The account service-auth decision accepts any valid token in the account
   # (the agent's included), so the app must attach exactly the owner policy.
@@ -147,7 +148,7 @@ else
   fi
   if grep -q 'cloudflare_zero_trust_access_policy.bypass.id' <<<"$kanbei_app"; then bad "kanbei has no bypass policy"; else ok "kanbei has no bypass policy"; fi
   if grep -qF 'prevent_destroy = true' <<<"$kanbei_app"; then ok "kanbei application is protected from destroy"; else bad "kanbei application is protected from destroy"; fi
-  if grep -qF 'allow_authenticate_via_warp = true' <<<"$kanbei_app"; then ok "kanbei admits enrolled WARP devices"; else bad "kanbei admits enrolled WARP devices"; fi
+  if grep -qF 'allow_authenticate_via_warp = true' <<<"$kanbei_app"; then ok "kanbei lets a WARP client skip the login"; else bad "kanbei lets a WARP client skip the login"; fi
 fi
 hasnt "kanbei has no public DNS record" '^[[:space:]]*name[[:space:]]*=[[:space:]]*"kanbei\.'
 hasnt "kanbei has no tunnel ingress rule" 'kanbei[[:space:]]*=[[:space:]]*"http'
