@@ -1249,11 +1249,12 @@ copy; deleting `memory-forward` itself is the nix-config lane's change, only
 after this passes.
 
 1. Apply the zone: `./scripts/tofu-cloudflare.sh plan` must show exactly one new
-   DNS record for `memory` (pointing at the cluster tunnel) and the tunnel's
-   ingress list gaining the `memory.sammohr.dev -> http://memory-mcp.graphiti...`
-   rule. **Remove** the host tunnel's `memory` rule in the same apply, or the
-   name is still served by the host (two rules for one name is the ambiguity this
-   step removes).
+   DNS record for `memory`, a proxied CNAME to the cluster tunnel, and the cluster
+   tunnel's ingress list gaining the
+   `memory.sammohr.dev -> http://memory-mcp.graphiti.svc.cluster.local:8182` rule.
+   The host tunnel's own `memory` rule lives in nix-config (`web-proxy.nix`), not
+   here, so it is removed in the host lane's commit — until then it is simply
+   unreachable, because the DNS record now points at the other tunnel.
 
 2. Apply the network half and confirm the flow exists:
 
