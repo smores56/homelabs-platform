@@ -208,9 +208,10 @@ The URL is GitHub's SSH-over-443 endpoint because the cluster guest forwards onl
 443 host key added (the identity is unchanged):
 
 ```sh
-sudo cluster-kubectl -n tenant-apps get secret homelabs-apps-auth \
-  -o jsonpath='{.data.known_hosts}' | base64 -d > /tmp/kh
-ssh-keyscan -p 443 ssh.github.com 2>/dev/null >> /tmp/kh
+# Replace the host keys rather than appending: a file without a trailing
+# newline glues the next line onto the last key and Flux then rejects it
+# ("illegal base64 data").
+ssh-keyscan -p 443 ssh.github.com 2>/dev/null > /tmp/kh
 sudo cluster-kubectl -n tenant-apps patch secret homelabs-apps-auth --type merge \
   -p "{\"data\":{\"known_hosts\":\"$(base64 -w0 /tmp/kh)\"}}"
 rm -f /tmp/kh
