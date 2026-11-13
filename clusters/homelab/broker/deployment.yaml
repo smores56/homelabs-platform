@@ -37,7 +37,7 @@ spec:
           # Published by .github/workflows/publish-broker.yml on a change under
           # apps/broker (digest in the run summary); this is the build from the
           # base-pinned Dockerfile.
-          image: ghcr.io/smores56/homelabs-platform/broker@sha256:1dc549d41b2a31910964ab8a4ee16c5ad318bf8a069898be9350ef978eeac8f3
+          image: ghcr.io/smores56/homelabs-platform/broker@sha256:b2607366baad847ab5d30bfdf138e3c13d94ac0792edf27fa700f20f2544c3e7
           imagePullPolicy: IfNotPresent
           args:
             - /etc/broker/broker.json
