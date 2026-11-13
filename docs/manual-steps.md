@@ -1656,7 +1656,14 @@ the run, and the source changes only by human merge here.
    cluster-kubectl -n tenant-apps get deploy nanobot \
      -o jsonpath='{.spec.template.spec.containers[0].image}{"\n"}'
    cluster-kubectl -n tenant-apps get pods -l app.kubernetes.io/name=nanobot
+   # SDLC bootstrap on the tools PVC (docs/flux.md, "SDLC tooling on the tools PVC")
+   cluster-kubectl -n tenant-apps logs deploy/nanobot | grep nanobot-bootstrap
    ```
+
+   The bootstrap line reads `nanobot-bootstrap: sdlc=<rev|none> tools=<n> skills=<n>`;
+   `sdlc=none` means the first clone never landed on the PVC and `tools=0` means
+   the install failed; either way the agent is running without a refreshed SDLC
+   (`docs/flux.md`), not unhealthy.
 
    The admission prefix moved with the image: a pod still pointing at
    `ghcr.io/smores56/nix-config/nanobot@sha256:...` is denied by
