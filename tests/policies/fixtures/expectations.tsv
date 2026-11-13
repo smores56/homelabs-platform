@@ -6,7 +6,7 @@ tenant-pod-good.yaml	tenant-apps	allow	-	-
 tenant-pod-no-gvisor.yaml	tenant-apps	deny	tenant-gvisor	spec.runtimeClassName to gvisor
 tenant-pod-image-tag.yaml	tenant-apps	deny	tenant-images	pinned by @sha256 digest
 tenant-pod-image-no-digest.yaml	tenant-apps	deny	tenant-images	pinned by @sha256 digest
-tenant-pod-image-foreign.yaml	tenant-apps	deny	tenant-images	must run ghcr.io/smores56/nix-config/nanobot pinned by digest
+tenant-pod-image-foreign.yaml	tenant-apps	deny	tenant-images	must run ghcr.io/smores56/homelabs-platform/nanobot pinned by digest
 tenant-pod-hostpath.yaml	tenant-apps	deny	no-host-access	hostPath volumes are not allowed
 tenant-pod-hostnetwork.yaml	tenant-apps	deny	no-host-access	hostNetwork is not allowed
 tenant-pod-privileged.yaml	tenant-apps	deny	no-host-access	privileged containers are not allowed
@@ -40,3 +40,6 @@ agent-pod-automount.yaml	tenant-apps	deny	agent-identity	automountServiceAccount
 broker-pod-good.yaml	broker	allow	-	-
 broker-pod-no-gvisor.yaml	broker	deny	broker-runtime	broker pods must run on gvisor
 broker-pod-writable-root.yaml	broker	deny	broker-runtime	readOnlyRootFilesystem: true
+tenant-pod-policy-missing.yaml	tenant-apps	deny	nanobot-policy	must mount the platform nanobot-policy ConfigMap
+tenant-pod-policy-override.yaml	tenant-apps	deny	nanobot-policy	must not mount or override anything under /etc/nanobot/prompts or /etc/nanobot/models
+tenant-pod-policy-env.yaml	tenant-apps	deny	nanobot-policy	must set NANOBOT_CONFIG_DIR=/etc/nanobot exactly once

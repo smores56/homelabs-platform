@@ -14,3 +14,5 @@ data-pvc-scope	calibre,graphiti,immich,navidrome
 data-pvc-storage	calibre,graphiti,immich,navidrome
 agent-identity	tenant-apps
 broker-runtime	broker
+nanobot-policy	tenant-apps
+nanobot-policy-write	tenant-apps

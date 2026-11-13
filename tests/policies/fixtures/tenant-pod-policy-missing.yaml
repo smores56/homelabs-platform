@@ -1,0 +1,38 @@
+# expect: deny nanobot-policy
+apiVersion: v1
+kind: Pod
+metadata:
+  name: nanobot-policy-missing
+  namespace: tenant-apps
+  labels:
+    app.kubernetes.io/name: nanobot
+    app.kubernetes.io/part-of: homelabs
+spec:
+  serviceAccountName: nanobot
+  runtimeClassName: gvisor
+  automountServiceAccountToken: false
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    runAsGroup: 1000
+    fsGroup: 1000
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: nanobot
+      image: ghcr.io/smores56/homelabs-platform/nanobot@sha256:0000000000000000000000000000000000000000000000000000000000000000
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: ["ALL"]
+      env:
+        - name: NANOBOT_CONFIG_DIR
+          value: /etc/nanobot
+      volumeMounts:
+        - name: scratch
+          mountPath: /scratch
+  volumes:
+    - name: scratch
+      persistentVolumeClaim:
+        claimName: nanobot-scratch
