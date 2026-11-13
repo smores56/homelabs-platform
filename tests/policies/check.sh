@@ -346,7 +346,7 @@ eq "$(jq -r 'select(.metadata.namespace == "ingress" and .metadata.name == "egre
 eq "$(jq -r 'select(.metadata.namespace == "ingress" and .metadata.name == "egress-tunnel-edge") | [.spec.podSelector.matchLabels["app.kubernetes.io/name"], (.spec.egress[0].ports | map("\(.protocol):\(.port)") | sort | join(","))] | join(":")' "$network_json")" \
   "cloudflared:TCP:443,TCP:7844,UDP:7844" "cloudflared reaches the Cloudflare edge on 443 and the tunnel's 7844"
 eq "$(jq -r 'select(.metadata.namespace == "ingress" and .metadata.name == "egress-agent") | [.spec.egress[0].to[0].namespaceSelector.matchLabels["kubernetes.io/metadata.name"], .spec.egress[0].to[0].podSelector.matchLabels["app.kubernetes.io/name"], .spec.egress[0].ports[0].port] | join(":")' "$network_json")" \
-  "tenant-apps:nanobot:8080" "the tunnel reaches only the nanobot pod on 8080"
+  "tenant-apps:nanobot:8765" "the tunnel reaches only the nanobot pod on the WebUI port"
 
 # ------------------------------------------------------- data storage contract
 storage_dir=clusters/homelab/platform/storage

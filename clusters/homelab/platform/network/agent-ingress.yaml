@@ -1,8 +1,9 @@
 # The cluster tunnel is the only ingress path for the agent. Cloudflare Access
 # authenticates the owner and maki's service token; this rule admits the
-# connector to the tenant pod on the one port it serves. The tenant side of the
-# pair (ingress from `ingress` to `nanobot`) is in homelabs-apps, because the
-# tenant's default-deny lives there; both are needed.
+# connector to the tenant pod on the one port it serves: the WebUI/websocket
+# listener (8765). The gateway's health listener (8080) is pod-local only. The
+# tenant side of the pair (ingress from `ingress` to `nanobot`) is in
+# homelabs-apps, because the tenant's default-deny lives there; both are needed.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -26,4 +27,4 @@ spec:
               app.kubernetes.io/name: nanobot
       ports:
         - protocol: TCP
-          port: 8080
+          port: 8765
