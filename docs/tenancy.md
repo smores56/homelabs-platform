@@ -37,7 +37,7 @@ applied by the first stage (`docs/flux.md`).
 | Tier | Admission policy | Egress | Ingress |
 | --- | --- | --- | --- |
 | `platform` | exempt from `no-host-access` | unrestricted | unrestricted |
-| `tenant` | gVisor, digest-pinned images, scratch PVC only, no `sops-age`, no reconciler SA, `agent-identity` | broker only, plus DNS | the cluster tunnel on 8080 (`nanobot` only) |
+| `tenant` | gVisor, digest-pinned images, scratch PVC only, no `sops-age`, no reconciler SA, `agent-identity`, `nanobot-policy` | broker only, plus DNS | the cluster tunnel on 8080 (`nanobot` only) |
 | `broker` | `no-host-access`, `broker-runtime` | public TCP 443 (global unicast only), DNS, `loki-gateway` 3100 and `status-exporter` 9101 | `tenant` tier on 8080 |
 | `data` (each of `immich`, `navidrome`, `calibre`, `graphiti`) | `no-host-access`, `data-workload-source`, `data-pvc-scope`, `data-pvc-storage` | same namespace, DNS; HTTPS for `immich-machine-learning` and `graphiti` | same namespace, `ingress` on the app's port |
 | `ingress` | none beyond PSA | the four data apps on their ports, `tenant-apps/nanobot` 8080, Cloudflare edge 443, DNS | none |
@@ -45,26 +45,30 @@ applied by the first stage (`docs/flux.md`).
 
 ## Admission policy
 
-Thirteen policies, each in its own file with the binding that scopes it
+Fifteen policies, each in its own file with the binding that scopes it
 (`clusters/homelab/platform/policies/`, asserted by `tests/policies/check.sh`).
 
 | Policy | Bound to | Rejects |
 | --- | --- | --- |
 | `no-host-access` | `tenant`, `broker`, `data` (all four namespaces) | `hostNetwork`, `hostPID`, `hostIPC`, `hostPath`, privileged containers, `hostPort`, added capabilities, `allowPrivilegeEscalation` |
 | `tenant-gvisor` | `tenant` | any pod without `spec.runtimeClassName: gvisor` |
-| `tenant-images` | `tenant` | images not pinned by `@sha256:`, floating tags, nanobot from outside `ghcr.io/smores56/nix-config/nanobot@sha256:` |
+| `tenant-images` | `tenant` | images not pinned by `@sha256:`, floating tags, nanobot from outside `ghcr.io/smores56/homelabs-platform/nanobot@sha256:` |
 | `tenant-scratch-pvc` | `tenant` | pod volumes whose PVC name does not start with the pod's `app.kubernetes.io/name` |
 | `tenant-pvc-naming` | `tenant` | PVCs without an `app.kubernetes.io/name` label or not named `<name>-*` |
 | `tenant-flux-guard` | `tenant` | Kustomizations that use another service account, target another namespace, read another GitRepository, carry a `kubeConfig`, or decrypt with another age key |
 | `tenant-flux-sa-pods` | `tenant` | pods running as `tenant-apps-reconciler` |
 | `tenant-secret-scope` | `tenant` | pods mounting or reading the `sops-age` Secret |
+| `nanobot-policy` | `tenant` | nanobot pods that omit the `nanobot-policy` ConfigMap mount, place another volume under `/etc/nanobot/{prompts,models}`, or set `NANOBOT_CONFIG_DIR` to anything but `/etc/nanobot` |
+| `nanobot-policy-write` | `tenant` | writes to the platform-owned `nanobot-policy` ConfigMap by anyone but the platform reconciler |
 | `data-workload-source` | `data` (all four) | pods without `homelabs.dev/managed-by=platform` or not running as `data-workload` |
 | `data-pvc-scope` | `data` (all four) | pods mounting a PVC whose name does not start with their own namespace, i.e. another app's share |
 | `data-pvc-storage` | `data` (all four) | PVCs not named `<namespace>-*` or not claiming `data-local` (no dynamic provisioning in the data tier) |
 
-All policies use `failurePolicy: Fail`. CEL cannot read who sent a request, so
-creator identity is enforced by RBAC (below) and the policies pin the label and
-service account a tenant-authored manifest would have to fake.
+All policies use `failurePolicy: Fail`. Object policies cannot read who sent a
+request, so creator identity is enforced by RBAC (below) and by pinning the label
+and service account a tenant-authored manifest would have to fake. The one
+identity check is `nanobot-policy-write`, which reads `request.userInfo` to keep
+the platform ConfigMap out of the tenant reconciler's reach.
 
 PSA is the first line and overlaps `no-host-access` in the restricted tiers on
 purpose: if a namespace's PSA label drifts, the admission policy still rejects

@@ -13,13 +13,14 @@ changes by pull request from a fork, so no PR workflow can read a secret.
 | Path | Contents |
 | --- | --- |
 | `clusters/homelab/kustomization.yaml` | Flux root build; controller patches live here so bootstrap cannot overwrite them |
-| `clusters/homelab/flux-system/` | Install manifests, root sync objects, `gotk-patches/`, `bootstrap.sh` |
-| `clusters/homelab/platform/` | Ordered stages: namespaces, RBAC, admission policy, network, secrets, storage, backup, digest, data apps, ingress, observability, tenant reconciler |
+| `clusters/homelab/flux-system/` | Install manifests, root sync objects, `gotk-patches/`, image automation (`image-automation/`), `bootstrap.sh` |
+| `clusters/homelab/platform/` | Ordered stages: namespaces, RBAC, admission policy, network, secrets, storage, backup, digest, data apps, ingress, observability, nanobot policy, tenant reconciler |
 | `clusters/homelab/data/` | Data-bearing apps, one namespace and one virtiofs share each: Immich, Navidrome, Calibre, Graphiti (`docs/data-migration.md`) |
 | `clusters/homelab/ingress/` | `cloudflared` for the cluster tunnel; the host tunnel stays human-owned |
 | `clusters/homelab/observability/` | Prometheus, Loki, Vector, status exporter, Loki gateway |
 | `clusters/homelab/broker/` | Credential-injecting broker for agent traffic (`docs/broker.md`) |
 | `apps/broker/` | Broker source and unit tests (Python stdlib, no dependencies) |
+| `images/nanobot/` | Agent image source (Dockerfile, entrypoint, `render.py`); published by `publish-nanobot.yml` |
 | `tests/policies/` | Static + runtime policy checks, fixtures, expectation tables |
 | `tests/tofu/` | Static assertions on the Cloudflare config (`tests/tofu/check.sh`) |
 | `tests/backup/` | Offline argument/URL shape tests for the repository mirror (`tests/backup/check.sh`) |

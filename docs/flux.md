@@ -30,7 +30,7 @@ flux bootstrap github \
   --path=clusters/homelab \
   --personal \
   --token-auth \
-  --components-extra=source-watcher \
+  --components-extra=source-watcher,image-reflector-controller,image-automation-controller \
   --interval=10m
 ```
 
@@ -80,6 +80,8 @@ that carry telemetry and leader-election wiring.
 | `notification-controller` | v1.9.2 | `--feature-gates=ObjectLevelWorkloadIdentity=true`, `--no-cross-namespace-refs=true`, `--default-service-account=default` |
 | `source-controller` | v1.9.3 | `--feature-gates=ObjectLevelWorkloadIdentity=true`, `--default-service-account=default` |
 | `source-watcher` | v2.2.2 | `--no-cross-namespace-refs=true` |
+| `image-reflector-controller` | v1.2.3 | `--no-cross-namespace-refs=true` |
+| `image-automation-controller` | v1.2.3 | `--no-cross-namespace-refs=true` |
 
 Versions are the ones shipped by Flux 2.9.2 (`image:` lines in
 `gotk-components.yaml`).
@@ -102,7 +104,7 @@ binaries do:
 - `source-watcher` binds the ACL options (v2.2.2 `cmd/main.go`)
   but no `--default-service-account`.
 
-`tests/policies/check.sh` asserts the rendered `args` for all five controllers
+`tests/policies/check.sh` asserts the rendered `args` for all seven controllers
 against this table and fails on an added or missing flag, so the table and the
 manifests cannot diverge.
 
@@ -112,9 +114,55 @@ command or skip TLS verification to obtain a kubeconfig. The third would give
 every namespace one global age key; the per-namespace `decryption.secretRef`
 contract in `docs/tenancy.md` keeps keys apart.
 
-Image automation (`image-reflector-controller`, `image-automation-controller`) is
-not installed. If it is added, both need `--no-cross-namespace-refs=true` and the
-same digest pinning review as the rest of the tenant surface.
+## Image automation
+
+`image-reflector-controller` and `image-automation-controller` are part of the
+install manifest (`--components-extra` above) and are patched with
+`--no-cross-namespace-refs=true` like every other controller. Their objects live
+in `clusters/homelab/flux-system/image-automation/`, which `flux bootstrap` does
+not regenerate:
+
+| Object | Namespace | Contract |
+| --- | --- | --- |
+| `ImageRepository nanobot` | flux-system | watches `ghcr.io/smores56/homelabs-platform/nanobot` |
+| `ImagePolicy nanobot` | flux-system | `^build-(?P<run>[0-9]+)$` → numerical, ascending |
+| `GitRepository homelabs-apps` | flux-system | SSH 443, `homelabs-apps-write` (SOPS-managed) |
+| `ImageUpdateAutomation nanobot` | flux-system | Setters, `./`, pushes `main` |
+
+`publish-nanobot.yml` tags every build `build-<run_number>`, so the policy picks
+the highest run number and Flux commits the resolved digest to
+`smores56/homelabs-apps`. The tenant side carries the marker:
+
+```yaml
+image: ghcr.io/smores56/homelabs-platform/nanobot@sha256:<digest>
+  # {"$imagepolicy": "flux-system:nanobot"}
+```
+
+The write credential never enters git: it is a SOPS-encrypted deploy key turned
+into the `homelabs-apps-write` Secret (docs/manual-steps.md, "nanobot image
+automation"). Until it exists the GitRepository is NotReady and nothing is
+pushed — fail closed, like every other credential here. The tenant's own
+GitRepository keeps its read-only key; the two secrets are in different
+namespaces and `--no-cross-namespace-refs` keeps them apart.
+
+### Dispatch contract (`POST /self/build`)
+
+agent-control triggers a build through the Actions API; it holds a platform
+token with `Actions: write` on this repository and never passes it on.
+
+```text
+POST /repos/smores56/homelabs-platform/actions/workflows/publish-nanobot.yml/dispatches
+{"ref": "main"}
+```
+
+- workflow file (dispatch id): `publish-nanobot.yml`
+- trigger: `workflow_dispatch`, no inputs; `ref` is always `main`
+- result: `build-<GITHUB_RUN_NUMBER>` pushed, digest in the run summary
+- isolation: the dispatcher's token stays with the dispatcher; the job's
+  `GITHUB_TOKEN` is scoped to that run (`packages: write`, `contents: read`),
+  is never printed, and the tenant repository holds no credential for either
+- retry: a second dispatch is a new run number, which the `numerical` policy
+  orders above the previous one; duplicate builds are harmless
 
 ## Root namespace labels
 
@@ -126,7 +174,7 @@ policy bindings treat it like the rest of the platform tier.
 
 ## Stage ordering
 
-`clusters/homelab/platform/kustomization.yaml` applies thirteen Flux Kustomizations;
+`clusters/homelab/platform/kustomization.yaml` applies fourteen Flux Kustomizations;
 each one's `dependsOn` is asserted by `tests/policies/check.sh`.
 
 ```text
@@ -147,6 +195,8 @@ platform-data-apps    Immich, Navidrome, Calibre, Graphiti
                       (dependsOn policies, network, storage)
 platform-ingress      cloudflared + routing contract (dependsOn namespaces, network)
 platform-observability
+platform-nanobot-policy   nanobot-policy ConfigMap in tenant-apps
+                      (dependsOn namespaces, policies)
 platform-tenants      GitRepository + tenant Kustomization
                       (dependsOn policies, network, secrets)
 ```
@@ -158,7 +208,8 @@ cluster-scoped objects and the controller-wide default
 ## Regenerating the install manifests
 
 ```sh
-flux install --export --components-extra=source-watcher \
+flux install --export \
+  --components-extra=source-watcher,image-reflector-controller,image-automation-controller \
   > clusters/homelab/flux-system/gotk-components.yaml
 ```
 

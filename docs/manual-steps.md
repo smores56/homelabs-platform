@@ -291,9 +291,9 @@ so a half-finished sweep still fails CI rather than shipping `latest`.
 place a tag alone would ship: `docker.io/alpine/git:2.54.0` resolves to the
 manifest list `sha256:6a1fdb962814ca11508ca8d1bab94375b5b7ac4e4a9a40981c29fc32c02f095d`
 (recorded 2026-11-11; verify with `crane digest docker.io/alpine/git:2.54.0`
-before trusting it). The nanobot image is pinned the same way in the
-`homelabs-apps` repository; its placeholder digest is a deliberate CI failure
-until that image is published and pinned (its `docs/manual-steps.md`, step 3).
+before trusting it). The nanobot image is no longer pinned by hand: it is built
+here and rolled by Flux image automation (step 24); `homelabs-apps` only carries
+the setter marker.
 
 ## 10. Create the broker credential Secret
 
@@ -1037,4 +1037,110 @@ inbox. The cluster holds no age key.
    kubectl -n observability get svc -l app.kubernetes.io/name=cluster-digest   # empty
    kubectl -n observability get networkpolicy cluster-digest-egress \
      -o jsonpath='{.spec.policyTypes}{"\n"}{.spec.ingress}{"\n"}'             # Egress,Ingress / nothing
+   ```
+
+## 24. Publish the nanobot image and enable its automation
+
+The agent image is built in this repository (`images/nanobot/`). A merge to
+`main` that touches it, or a `workflow_dispatch` from agent-control's
+`POST /self/build`, runs the `publish-nanobot` workflow, which pushes
+`ghcr.io/smores56/homelabs-platform/nanobot:build-<run_number>` and prints the
+digest in the run summary. The tenant can trigger that workflow and nothing
+else: it never sees the dispatch token, the job's `GITHUB_TOKEN` is scoped to
+the run, and the source changes only by human merge here.
+
+1. Install the image controllers on an existing cluster. `flux bootstrap` wrote
+   the old `--components-extra` set, so applying the regenerated install
+   manifest is what adds them (a re-bootstrap does the same and also commits):
+
+   ```sh
+   kubectl apply -f clusters/homelab/flux-system/gotk-components.yaml
+   kubectl -n flux-system rollout status deploy/image-reflector-controller --timeout=120s
+   kubectl -n flux-system rollout status deploy/image-automation-controller --timeout=120s
+   ```
+
+2. Make the package public. The cluster holds no image pull secret, and
+   `ImageRepository nanobot` has no `secretRef`:
+
+   GitHub → your profile → Packages → `nanobot` → Package settings → Danger zone
+   → Change visibility → Public. Verify anonymously:
+
+   ```sh
+   crane digest ghcr.io/smores56/homelabs-platform/nanobot:build-1
+   ```
+
+3. Run the workflow once and record the digest the summary prints:
+
+   ```sh
+   gh workflow run publish-nanobot.yml --ref main
+   gh run watch
+   kubectl -n flux-system get imagepolicy nanobot -o jsonpath='{.status.latestRef.image}{"\n"}'
+   ```
+
+4. Create the write deploy key for image automation. It is a second key: the
+   tenant reconciler keeps its read-only key (`homelabs-apps-auth`).
+
+   ```sh
+   ssh-keygen -t ed25519 -N '' -C 'flux-image-automation' -f homelabs-apps-write
+   gh repo deploy-key add homelabs-apps-write.pub \
+     --repo smores56/homelabs-apps --title 'flux image automation' --allow-write
+   ```
+
+5. Encrypt that key with the `flux-system` age recipient (step 6) and apply the
+   Secret. Nothing plaintext is committed; the ciphertext is stored with the age
+   key in the password manager:
+
+   ```sh
+   AGE_KEY=~/secrets/sops-age.agekey            # from the password manager
+   RECIPIENT=$(age-keygen -y "$AGE_KEY")
+   umask 077
+   tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+   kubectl -n flux-system create secret generic homelabs-apps-write \
+     --from-file=identity=homelabs-apps-write \
+     --dry-run=client -o yaml >"$tmp/secret.yaml"
+   sops --encrypt --age "$RECIPIENT" --input-type yaml --output-type yaml \
+     "$tmp/secret.yaml" >~/secrets/homelabs-apps-write.sops.yaml
+   sops --decrypt ~/secrets/homelabs-apps-write.sops.yaml | kubectl apply -f -
+   rm -f homelabs-apps-write homelabs-apps-write.pub
+   ```
+
+   Verify the automation source is Ready (it stays NotReady until this Secret
+   exists, by design):
+
+   ```sh
+   kubectl -n flux-system get gitrepository homelabs-apps
+   kubectl -n flux-system get imageupdateautomation nanobot
+   ```
+
+6. Add the setter marker to the tenant Deployment — `homelabs-apps` owns the
+   file, this repository only pins the contract
+   (`clusters/homelab/flux-system/image-automation/write-contract.yaml`):
+
+   ```yaml
+   image: ghcr.io/smores56/homelabs-platform/nanobot@sha256:<digest>
+     # {"$imagepolicy": "flux-system:nanobot"}
+   ```
+
+   Without the marker nothing is updated; with it, Flux commits
+   `feat(nanobot): roll the image to ...` to `main` on the next build.
+
+7. Confirm the rollout and that the old registry path is now rejected:
+
+   ```sh
+   cluster-kubectl -n tenant-apps get deploy nanobot \
+     -o jsonpath='{.spec.template.spec.containers[0].image}{"\n"}'
+   cluster-kubectl -n tenant-apps get pods -l app.kubernetes.io/name=nanobot
+   ```
+
+   The admission prefix moved with the image: a pod still pointing at
+   `ghcr.io/smores56/nix-config/nanobot@sha256:...` is denied by
+   `tenant-images`, so the old digest cannot silently stay.
+
+8. Update the platform-owned prompt or model catalogue by editing
+   `clusters/homelab/platform/policy/nanobot/`. The `nanobot-policy` ConfigMap
+   has an exact name (admission pins it), so the running pod keeps the old files
+   until someone restarts it; that restart is the rollout record.
+
+   ```sh
+   kubectl -n tenant-apps rollout restart deploy/nanobot
    ```

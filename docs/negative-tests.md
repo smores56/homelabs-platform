@@ -433,7 +433,7 @@ policy code runs against scripted DNS answers and a loopback upstream.
 
 ### What runs automatically (CI job `policy checks`, static)
 
-`tests/policies/check.sh` — 329 assertions (recorded run, 2026-11-11):
+`tests/policies/check.sh` — 426 assertions (recorded run, 2026-11-13):
 the previous table in this document describes the #578 families; #582 adds:
 
 - `agent-identity` and `broker-runtime` are paired with bindings and select
@@ -453,14 +453,38 @@ the previous table in this document describes the #578 families; #582 adds:
   `except`; the tunnel reaches `tenant-apps/nanobot:8080` and nothing else;
 - the stage DAG includes `platform-broker` and the apply list names it.
 
+#616/#639 add:
+
+- `nanobot-policy` and `nanobot-policy-write` are paired with bindings and select
+  `tenant-apps`; the first pins the `nanobot-policy` volume, both subPath mounts
+  and `NANOBOT_CONFIG_DIR=/etc/nanobot`, the second keeps the ConfigMap writable
+  only by the platform reconciler;
+- the `tenant-images` prefix is the platform registry path
+  (`ghcr.io/smores56/homelabs-platform/nanobot@sha256:`);
+- `ImageRepository`/`ImagePolicy nanobot` order `^build-<n>$` numerically in
+  `flux-system`, and `ImageUpdateAutomation` pushes `main` of `homelabs-apps`
+  through the `homelabs-apps-write` Secret; the flux-system build holds no
+  Secret and the write contract records the setter marker;
+- `publish-nanobot.yml` exists, is `workflow_dispatch`-able, tags
+  `build-${GITHUB_RUN_NUMBER}` and writes the digest to the run summary;
+- the platform renders `nanobot-policy` into `tenant-apps` with exactly
+  `system.md` and `providers.yaml`, each byte-identical to its source under
+  `clusters/homelab/platform/policy/nanobot/`.
+
 ### What runs on demand (runtime, real API server)
 
-`tests/policies/check.sh --runtime` — `static+runtime: 477 passed, 0 failed`
-(recorded run, 2026-11-11, kube-apiserver v1.36.2, etcd 3.6.13). The new
+`tests/policies/check.sh --runtime` — `static+runtime: 544 passed, 0 failed`
+(recorded run, 2026-11-13, kube-apiserver v1.36.2, etcd 3.6.13). The new
 fixtures are admitted/denied by the real API server:
 
 - `agent-pod-wrong-sa.yaml` and `agent-pod-automount.yaml` → denied by
   `agent-identity`;
+- `tenant-pod-policy-missing.yaml`, `tenant-pod-policy-override.yaml` and
+  `tenant-pod-policy-env.yaml` → denied by `nanobot-policy`; every other
+  nanobot fixture carries the compliant policy mount so its denial stays
+  attributable to the policy under test;
+- a ConfigMap named `nanobot-policy` applied as
+  `tenant-apps-reconciler` → denied by `nanobot-policy-write`;
 - `broker-pod-no-gvisor.yaml` and `broker-pod-writable-root.yaml` → denied by
   `broker-runtime`; `broker-pod-good.yaml` → admitted;
 - `broker-pod-hostnetwork.yaml` now also satisfies `broker-runtime`, so its
