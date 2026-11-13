@@ -32,6 +32,10 @@ spec:
     # Only the workflow's own tags; a human-pushed tag elsewhere is ignored.
     pattern: '^build-(?P<run>[0-9]+)$'
     extract: '$run'
+  # The tenant admission policy accepts only `repo@sha256:<digest>`.
+  # Without digest reflection the setter has no digest to write and reports
+  # "no change", so the policy must publish it.
+  digestReflectionPolicy: Always
   policy:
     numerical:
       order: asc
