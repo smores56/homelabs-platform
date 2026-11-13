@@ -103,6 +103,51 @@ replaced by these jobs. `modules/nixos/cluster-data-apps.nix` disables that unit
 when the cutover option is on; until then both exist and the platform dump is
 the authoritative one once Immich serves from the cluster.
 
+## Per-tree restic jobs (cluster)
+
+The host's `restic-backups-r2` walks `/var/lib/data` as root and is still the R2
+owner. A cluster job cannot do that in one pod: `data-pvc-scope` lets a pod mount
+only PVCs named after its namespace, and the four shares are pre-bound to four
+claims in four namespaces. So the cluster side is **one job per tree**
+(SDLC #619), in the namespace that owns the claim:
+
+| Job | Namespace | Mounts | Repository |
+| --- | --- | --- | --- |
+| `restic-backup` / `restic-preflight` | `immich` | `immich-data`, read-only | `restic-backup/trees/immich` |
+| `restic-backup` / `restic-preflight` | `navidrome` | `navidrome-data`, read-only | `restic-backup/trees/navidrome` |
+| `restic-backup` / `restic-preflight` | `calibre` | `calibre-data`, read-only | `restic-backup/trees/calibre` |
+| `restic-backup` / `restic-preflight` | `graphiti` | `graphiti-data`, read-only | `restic-backup/trees/graphiti` |
+
+Same bucket as the host, one repository per tree under `trees/<tree>`: object
+storage has no per-prefix permission, so the prefix is what keeps one tree's
+`forget --prune` away from another tree's history. Retention is the host's
+(`--keep-daily 14 --keep-weekly 8 --keep-monthly 12`), and each job runs as uid
+1000 with the claim mounted read-only, so it can read exactly what the app can.
+
+Schedule `0 5 * * *` Europe/Berlin, bounded to 30 minutes (60 for Immich's 5 TiB
+share): the dumps are complete by 03:15 and the host's walk starts at 03:30, so
+05:00 keeps the two reads off the same virtiofs link. `concurrencyPolicy:
+Forbid`, `startingDeadlineSeconds: 900`.
+
+Excluded, because they change under the walk and their consistent copy is the
+dump: `immich`'s `postgres/` and `valkey/`, `graphiti`'s `falkordb/` and
+`memory/registry.sqlite*`. Everything else — the libraries, the
+`db-dumps/` directory and the small sidecar state — is snapshotted.
+
+`restic-preflight` is the gate: weekly, one attempt, it prints the tree's
+restore drill from `restic-contract`, walks the same paths the backup walks and
+fails on any file uid 1000 cannot read, then creates or reads the repository and
+checks 100 MiB of data. A failing preflight is why a tree stays on the host
+timer. **What remains host-side until a drill passes: all four trees today.** The
+host timer is not touched by this repository; removing a tree from it is a
+separate, gated change in nix-config, and the host keeps the LUKS local
+repository in every case.
+
+Missing pieces are visible rather than silent: no successful run for 26 hours
+raises `ResticBackupStale` through Prometheus and Alertmanager
+(`docs/observability.md`), which replaces the host's `cloudflare-email@` hook as
+the failure signal for a moved tree.
+
 ## Cutover order
 
 One app at a time, each verifiable on its own. Stop the native service before
@@ -240,6 +285,9 @@ Everything above that needs the cluster, the tunnel or a credential:
 - ESO creating `immich-db`, `neuralwatt-api-key` and `cloudflare-tunnel-token`
   after `docs/manual-steps.md` steps 8 and 12;
 - the four cutover copies; the wrapper's tap-forward cutover has no tunnel flip;
+- the four `restic-backup-sops` Secrets (docs/manual-steps.md step 24) and
+  the first `restic-preflight` run for each tree, which decides whether that
+  tree may leave the host's restic timer;
 - Cloudflare-side tunnel/DNS/Access (T7);
 - agent-facing calibre repoint and the memory wrapper cutover;
 - CNI enforcement of the NetworkPolicies (a bare API server only stores them).

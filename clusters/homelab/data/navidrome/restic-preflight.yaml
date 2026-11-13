@@ -1,0 +1,146 @@
+# The permission gate for the navidrome tree (SDLC #619). Weekly, and before a
+# tree may lose its host-side backup owner: it proves, in the same pod shape as
+# `restic-backup`, that (a) every file the backup would walk is readable as uid
+# 1000, (b) the bucket prefix accepts a write (it creates the repository on the
+# very first run) and (c) a bounded slice of the data reads back.
+#
+# A failure here is the signal to keep this tree on the host's restic timer
+# (`modules/nixos/restic-backup.nix` in nix-config). Nothing here deletes or
+# moves data; the host timer is retired in a separate, gated task.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: restic-preflight
+  namespace: navidrome
+  labels:
+    app.kubernetes.io/name: restic
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: data
+spec:
+  schedule: "0 12 * * 0"
+  timeZone: Europe/Berlin
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 3600
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      # One attempt: a partial read is a finding, not something to retry into
+      # a green run.
+      backoffLimit: 0
+      activeDeadlineSeconds: 3600
+      ttlSecondsAfterFinished: 604800
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: restic
+            app.kubernetes.io/part-of: homelabs
+            homelabs.dev/tier: data
+            homelabs.dev/managed-by: platform
+        spec:
+          serviceAccountName: data-workload
+          automountServiceAccountToken: false
+          restartPolicy: Never
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: preflight
+              image: docker.io/restic/restic:0.18.1@sha256:39d9072fb5651c80d75c7a811612eb60b4c06b32ffe87c2e9f3c7222e1797e76
+              command: ["/bin/sh", "-c"]
+              args:
+                - |
+                  set -eu
+                  # The drill the operator has to pass before this tree leaves the
+                  # host timer; it lives in the restic-contract ConfigMap, so the
+                  # instructions printed here and the documented ones are one file.
+                  printf '=== restore drill (restic-contract, key drill) ===\n'
+                  cat /etc/restic/drill
+                  printf '=== end drill ===\n'
+                  # 1. Read access. The walk prunes exactly what the backup
+                  # excludes, so a finding is a file the backup would fail on.
+                  find /data -xdev \
+                    -type f -print \
+                    2>/tmp/find.err >/tmp/files || true
+                  if [ -s /tmp/find.err ]; then
+                    printf 'the walk could not enter:\n'
+                    cat /tmp/find.err
+                    exit 1
+                  fi
+                  unreadable=$(while IFS= read -r path; do
+                    [ -r "$path" ] || printf '%s\n' "$path"
+                  done </tmp/files | head -20)
+                  if [ -n "$unreadable" ]; then
+                    printf 'unreadable as uid 1000:\n%s\n' "$unreadable"
+                    printf 'the navidrome tree stays on the host restic timer until this list is empty\n'
+                    exit 1
+                  fi
+                  printf 'read access: %s files readable as uid 1000\n' "$(wc -l </tmp/files)"
+                  # 2. Repository access: create it once, then read it back.
+                  restic cat config >/dev/null 2>&1 || restic init
+                  restic snapshots --last
+                  # 3. A metadata check plus a bounded 100 MiB data read.
+                  restic check
+                  restic check --read-data-subset=100M
+                  printf 'preflight: navidrome is ready to be the backup owner\n'
+              env:
+                - name: RESTIC_REPOSITORY
+                  value: s3:https://385f7d47e2e8438fbda5d6f76d760434.r2.cloudflarestorage.com/restic-backup/trees/navidrome
+                - name: AWS_DEFAULT_REGION
+                  value: auto
+                - name: AWS_ACCESS_KEY_ID
+                  valueFrom:
+                    secretKeyRef:
+                      name: restic-credentials
+                      key: AWS_ACCESS_KEY_ID
+                - name: AWS_SECRET_ACCESS_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: restic-credentials
+                      key: AWS_SECRET_ACCESS_KEY
+                - name: RESTIC_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: restic-credentials
+                      key: RESTIC_PASSWORD
+                - name: RESTIC_CACHE_DIR
+                  value: /tmp/restic-cache
+                - name: HOME
+                  value: /tmp
+                - name: TZ
+                  value: UTC
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 256Mi
+                limits:
+                  cpu: 500m
+                  memory: 1Gi
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
+              volumeMounts:
+                - name: data
+                  mountPath: /data
+                  readOnly: true
+                - name: contract
+                  mountPath: /etc/restic
+                  readOnly: true
+                - name: tmp
+                  mountPath: /tmp
+          volumes:
+            - name: data
+              persistentVolumeClaim:
+                claimName: navidrome-data
+                readOnly: true
+            - name: contract
+              configMap:
+                name: restic-contract
+            - name: tmp
+              emptyDir:
+                sizeLimit: 1Gi

@@ -346,17 +346,17 @@ APPS
 # Exact policy sets: an added flow has to be added to this assertion too, which
 # is what keeps "only the intended flows" reviewable.
 eq "$(jq -s -r 'map(select(.metadata.namespace == "immich") | .metadata.name) | sort | join(",")' "$network_json")" \
-  "allow-dns-egress,allow-same-namespace,default-deny,immich-http-from-ingress,immich-ml-public-https" \
-  "immich keeps only default-deny, DNS, same-namespace, ingress HTTP and model-download HTTPS"
+  "allow-dns-egress,allow-same-namespace,default-deny,immich-http-from-ingress,immich-ml-public-https,restic-egress" \
+  "immich keeps only default-deny, DNS, same-namespace, ingress HTTP, model-download HTTPS and restic egress"
 eq "$(jq -s -r 'map(select(.metadata.namespace == "navidrome") | .metadata.name) | sort | join(",")' "$network_json")" \
-  "allow-dns-egress,allow-same-namespace,default-deny,navidrome-http-from-ingress" \
-  "navidrome keeps only default-deny, DNS, same-namespace and ingress HTTP"
+  "allow-dns-egress,allow-same-namespace,default-deny,navidrome-http-from-ingress,restic-egress" \
+  "navidrome keeps only default-deny, DNS, same-namespace, ingress HTTP and restic egress"
 eq "$(jq -s -r 'map(select(.metadata.namespace == "calibre") | .metadata.name) | sort | join(",")' "$network_json")" \
-  "allow-dns-egress,allow-same-namespace,calibre-http-from-ingress,default-deny" \
-  "calibre keeps only default-deny, DNS, same-namespace and ingress HTTP"
+  "allow-dns-egress,allow-same-namespace,calibre-http-from-ingress,default-deny,restic-egress" \
+  "calibre keeps only default-deny, DNS, same-namespace, ingress HTTP and restic egress"
 eq "$(jq -s -r 'map(select(.metadata.namespace == "graphiti") | .metadata.name) | sort | join(",")' "$network_json")" \
-  "allow-dns-egress,allow-same-namespace,default-deny,graphiti-public-https,memory-mcp-nodeport-from-host" \
-  "graphiti keeps only default-deny, DNS, same-namespace, Neuralwatt HTTPS and the host tap"
+  "allow-dns-egress,allow-same-namespace,default-deny,graphiti-public-https,memory-mcp-nodeport-from-host,restic-egress" \
+  "graphiti keeps only default-deny, DNS, same-namespace, Neuralwatt HTTPS, the host tap and restic egress"
 
 eq "$(jq -r 'select(.metadata.namespace == "ingress" and .metadata.name == "egress-data-apps-only") | [.spec.egress[] | .to[0] | "\(.namespaceSelector.matchLabels["kubernetes.io/metadata.name"]):\(.podSelector.matchLabels["app.kubernetes.io/name"])"] | sort | join(",")' "$network_json")" \
   "calibre:calibre,immich:immich,navidrome:navidrome" \
@@ -424,6 +424,51 @@ done <<'DUMPS'
 immich:dump
 graphiti:rdb
 DUMPS
+
+# ------------------------------------------------- per-tree restic contract
+# One job per tree, in the namespace that owns the claim (#619). What makes a
+# per-tree job safe is asserted here: its own claim and nothing else, mounted
+# read-only, uid 1000, its own repository prefix under the shared bucket, and a
+# preflight that prints the drill which gates the host timer's retirement.
+account_id=$(sed -nE 's/^[[:space:]]*account_id[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' tofu/terraform.tfvars)
+while IFS=: read -r app deadline; do
+  cj="clusters/homelab/data/$app/restic-backup.yaml"
+  pre="clusters/homelab/data/$app/restic-preflight.yaml"
+  contract="clusters/homelab/data/$app/restic-contract.yaml"
+  eq "$(yq -r '[.spec.schedule, .spec.timeZone, .spec.concurrencyPolicy, .spec.jobTemplate.spec.activeDeadlineSeconds] | join(":")' "$cj")" \
+    "0 5 * * *:Europe/Berlin:Forbid:$deadline" "$app restic runs after the dumps, bounded and serial"
+  eq "$(yq -r '[.spec.jobTemplate.spec.template.spec.volumes[] | select(.persistentVolumeClaim) | (.persistentVolumeClaim.claimName + ":" + (.persistentVolumeClaim.readOnly | tostring))] | join(",")' "$cj")" \
+    "$app-data:true" "$app restic mounts only its own claim, read-only"
+  eq "$(yq -r '.spec.jobTemplate.spec.template.spec.securityContext.runAsUser' "$cj")" "1000" \
+    "$app restic runs as the share's uid"
+  eq "$(yq -r '[.spec.jobTemplate.spec.template.spec.containers[0].env[] | select(.valueFrom) | .name] | sort | join(",")' "$cj")" \
+    "AWS_ACCESS_KEY_ID,AWS_SECRET_ACCESS_KEY,RESTIC_PASSWORD" \
+    "$app restic takes its key and password from the projected Secret only"
+  repository="s3:https://$account_id.r2.cloudflarestorage.com/restic-backup/trees/$app"
+  eq "$(yq -r '.spec.jobTemplate.spec.template.spec.containers[0].env[] | select(.name == "RESTIC_REPOSITORY") | .value' "$cj")" \
+    "$repository" "$app restic writes its own prefix of the shared bucket"
+  eq "$(yq -r '.data.repository' "$contract")" "$repository" \
+    "$app contract and job name the same repository"
+  eq "$(yq -r '[.spec.schedule, .spec.timeZone, .spec.jobTemplate.spec.backoffLimit] | join(":")' "$pre")" \
+    "0 12 * * 0:Europe/Berlin:0" "$app preflight runs weekly and does not retry into a green run"
+  eq "$(yq -r '[.spec.jobTemplate.spec.template.spec.volumes[] | select(.configMap) | .configMap.name] | join(",")' "$pre")" \
+    "restic-contract" "$app preflight prints the drill from the contract ConfigMap"
+  eq "$(yq -r 'select(.kind == "ExternalSecret") | [.metadata.namespace, .spec.target.name, .spec.data[0].secretKey] | join(":")' \
+    "clusters/homelab/platform/secrets/eso/restic-backup-$app.yaml" | grep -v '^$')" \
+    "$app:restic-credentials:AWS_ACCESS_KEY_ID" "$app projects restic-credentials into its own namespace"
+done <<'TREES'
+immich:3600
+navidrome:1800
+calibre:1800
+graphiti:1800
+TREES
+if grep -ho 'docker.io/restic/restic:0.18.1@sha256:[0-9a-f]\{64\}' \
+  clusters/homelab/data/*/restic-backup.yaml clusters/homelab/data/*/restic-preflight.yaml |
+  grep -c . | grep -qx 8; then
+  ok "every restic job pins the image digest"
+else
+  bad "every restic job pins the image digest"
+fi
 
 # ------------------------------------------------- data workload manifest shape
 # Admission (data-workload-source) enforces the identity at runtime; this is the

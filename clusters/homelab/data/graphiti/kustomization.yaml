@@ -20,3 +20,6 @@ resources:
   - memory-mcp.yaml
   - memory-export-cronjob.yaml
   - dump-cronjob.yaml
+  - restic-contract.yaml
+  - restic-backup.yaml
+  - restic-preflight.yaml

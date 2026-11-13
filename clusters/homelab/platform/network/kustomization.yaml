@@ -11,4 +11,5 @@ resources:
   - tenant-broker.yaml
   - tenant-egress.yaml
   - data-flows.yaml
+  - data-backup-egress.yaml
   - agent-ingress.yaml

@@ -1038,3 +1038,84 @@ inbox. The cluster holds no age key.
    kubectl -n observability get networkpolicy cluster-digest-egress \
      -o jsonpath='{.spec.policyTypes}{"\n"}{.spec.ingress}{"\n"}'             # Egress,Ingress / nothing
    ```
+
+## 24. Give each tree its restic Secret, then run the drill
+
+Four trees now back themselves up from the cluster (`clusters/homelab/data/*/restic-backup.yaml`,
+SDLC #619): `immich`, `navidrome`, `calibre` and `graphiti`, each with its own
+CronJob, its own claim mounted read-only and its own repository at
+`s3:https://<account>.r2.cloudflarestorage.com/restic-backup/trees/<tree>`. The
+host's `restic-backups-r2.timer` keeps running and stays the owner of every tree
+until that tree's drill below passes; nothing in this repository stops it.
+
+1. Create one SOPS Secret per namespace. The R2 key pair is the host's existing
+   one (`r2-access-key-id` / `r2-secret-access-key` in nix-config's
+   `secrets/smortress.yaml`); `restic-password` is the password the host's
+   repository already uses, so the operator can read both repositories with the
+   same key. Encrypt the file with the operator's age key and never commit it,
+   then:
+
+   ```sh
+   for ns in immich navidrome calibre graphiti; do
+     kubectl -n "$ns" create secret generic restic-backup-sops \
+       --from-file=r2-access-key-id --from-file=r2-secret-access-key \
+       --from-file=restic-password
+   done
+   ```
+
+   `ExternalSecret` `restic-credentials` in each namespace projects it with the
+   key names the jobs read (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`,
+   `RESTIC_PASSWORD`). The `platform-secrets-eso` stage must be resumed first
+   (step 8), or the two CronJobs stay unschedulable on a missing Secret.
+
+2. Run the preflight for each tree. It proves read access as uid 1000, creates
+   the repository if it does not exist yet, then reads back a metadata check and
+   100 MiB of data:
+
+   ```sh
+   for ns in immich navidrome calibre graphiti; do
+     kubectl -n "$ns" create job --from=cronjob/restic-preflight "preflight-$(date +%s)"
+   done
+   kubectl -n immich get jobs -w        # then the other three namespaces
+   kubectl -n immich logs job/<name>
+   ```
+
+   A job that lists unreadable paths means that tree is not yet safe as uid 1000:
+   leave it on the host timer and fix the ownership on the share
+   (`sudo chown -R smores:users /var/lib/data/<tree>` from the host, which is the
+   uid 1000 mapping). Do not `chmod -R` a live database directory.
+
+3. Run one backup and confirm the snapshot exists:
+
+   ```sh
+   kubectl -n immich create job --from=cronjob/restic-backup "restic-$(date +%s)"
+   kubectl -n immich logs job/<name>
+   kubectl -n immich get cronjob restic-backup -o jsonpath='{.status.lastSuccessfulTime}{"\n"}'
+   ```
+
+4. Run the drill from a workstation. The exact commands are the `drill` key of
+   the tree's `restic-contract` ConfigMap, and the preflight prints the same text
+   on every run, so the two cannot disagree:
+
+   ```sh
+   kubectl -n immich get configmap restic-contract -o jsonpath='{.data.drill}{"\n"}'
+   ```
+
+   The drill passes when `restic snapshots --host cluster-<tree>` shows a
+   snapshot from the last night and the restored file opens. Only then does that
+   tree leave the host timer — a separate change in nix-config that removes one
+   tree from `restic-backups-r2`'s `paths`/`backupPrepareCommand`. A tree that
+   fails the drill stays host-side; the cluster job may keep running beside it,
+   since the two write different repositories.
+
+5. Re-pin the restic image when upgrading. The job pins the 0.18.1 manifest list;
+   the commands are the same as step 9:
+
+   ```sh
+   crane digest docker.io/restic/restic:0.18.1
+   ```
+
+The failure signal for a tree is the Alertmanager route in step 25
+(`ResticBackupStale` fires when no successful run has been recorded for 26 hours)
+— check `kubectl -n <ns> get jobs` and the Job's log before assuming the share is
+the problem.
