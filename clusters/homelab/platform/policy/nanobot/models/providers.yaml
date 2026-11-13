@@ -1,0 +1,37 @@
+# The only provider. Neuralwatt is reached through the broker, which injects the
+# API key; nothing in this file is or may become a credential. Ids and windows
+# are the upstream catalog values, mirrored from nix-config's providers.nix so
+# the agent and the human's tools agree.
+provider: neuralwatt
+# $BROKER_URL/neuralwatt is the logical host; /v1 is the upstream prefix.
+api_base: http://broker.broker.svc.cluster.local:8080/neuralwatt/v1
+models:
+  default: deepseek-v4.1-flash
+  catalog:
+    deepseek-v4.1-flash:
+      context_window: 1048576
+      max_output_tokens: 393216
+      vision: true
+      # No effort pinning: a token budget is the only knob.
+      reasoning: budget
+    qwen-3.8-27b:
+      context_window: 262144
+      max_output_tokens: 131072
+      vision: true
+      reasoning: budget
+    kimi-k3.1-pro:
+      context_window: 1048576
+      max_output_tokens: 1048576
+      vision: true
+      # Neuralwatt maps reasoning_effort per model for this one.
+      reasoning: effort
+      efforts:
+        off: none
+        minimal: low
+        low: low
+        medium: medium
+        high: high
+        xhigh: max
+        max: max
+# The former in-VM fallback (a local llama on the hypervisor) is not reachable
+# from the cluster, so an outage is an outage: stop, report, wait.

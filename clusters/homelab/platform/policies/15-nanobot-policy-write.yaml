@@ -1,0 +1,46 @@
+# The tenant reconciler holds configmaps create/update/delete. Without this, a
+# push to homelabs-apps could rewrite the platform ConfigMap and the next pod
+# start would render a different prompt. Only the platform reconciler (and a
+# human operator via system:masters) may write it.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: nanobot-policy-write
+  labels:
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: platform
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE", "DELETE"]
+        resources: ["configmaps"]
+  matchConditions:
+    # request.name is populated for CREATE, UPDATE and DELETE, so the guard does
+    # not have to reason about which of object/oldObject is null.
+    - name: platform-policy-configmap
+      expression: request.name == 'nanobot-policy'
+  validations:
+    - expression: >-
+        request.userInfo.username == 'system:serviceaccount:flux-system:kustomize-controller'
+        || request.userInfo.groups.exists(g, g == 'system:masters')
+      message: "nanobot-policy is platform-owned; the tenant must not write it"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: nanobot-policy-write
+  labels:
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: platform
+spec:
+  policyName: nanobot-policy-write
+  validationActions: [Deny]
+  matchResources:
+    namespaceSelector:
+      matchExpressions:
+        - key: homelabs.dev/tier
+          operator: In
+          values: ["tenant"]

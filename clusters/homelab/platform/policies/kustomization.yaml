@@ -18,3 +18,5 @@ resources:
   - 11-data-pvc-storage.yaml
   - 12-agent-identity.yaml
   - 13-broker-runtime.yaml
+  - 14-nanobot-policy.yaml
+  - 15-nanobot-policy-write.yaml

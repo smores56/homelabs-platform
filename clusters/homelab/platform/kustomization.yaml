@@ -21,4 +21,5 @@ resources:
   - kustomizations/data.yaml
   - kustomizations/ingress.yaml
   - kustomizations/observability.yaml
+  - kustomizations/nanobot-policy.yaml
   - kustomizations/tenants.yaml

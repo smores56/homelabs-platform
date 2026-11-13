@@ -1,0 +1,26 @@
+# Stage 6a. The agent's platform-owned policy tree: the system prompt and the
+# model catalogue, rendered as the `nanobot-policy` ConfigMap in tenant-apps.
+# It depends on the admission policy that pins the mount, so the ConfigMap and
+# its guard land together, and it precedes platform-tenants so a tenant
+# reconciler always finds the policy it must mount.
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: platform-nanobot-policy
+  namespace: flux-system
+  labels:
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: platform
+spec:
+  interval: 10m
+  retryInterval: 1m
+  timeout: 5m
+  prune: true
+  path: ./clusters/homelab/platform/policy
+  dependsOn:
+    - name: platform-namespaces
+    - name: platform-policies
+  sourceRef:
+    kind: GitRepository
+    name: flux-system
+  serviceAccountName: kustomize-controller
