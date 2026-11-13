@@ -1,6 +1,8 @@
 # Tenant images are digest-pinned and nanobot comes from exactly one
 # repository. A mutable tag lets whoever controls the registry swap the code
-# that runs with the tenant identity; the digest check removes that.
+# that runs with the tenant identity; the digest check removes that. A tag may
+# accompany the digest (`repo:build-5@sha256:...`), because that is the form
+# Flux image automation writes; the tag alone is never accepted.
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
 metadata:
@@ -25,7 +27,7 @@ spec:
   validations:
     - expression: >-
         variables.containers.all(c,
-          c.image.matches('^[A-Za-z0-9._/-]+(:[0-9]+)?@sha256:[a-f0-9]{64}$'))
+          c.image.matches('^[A-Za-z0-9._/-]+(:[A-Za-z0-9._-]+)?@sha256:[a-f0-9]{64}$'))
       message: "tenant images must be pinned by @sha256 digest"
     - expression: >-
         variables.containers.all(c,
@@ -35,7 +37,8 @@ spec:
         !has(object.metadata.labels)
         || !('app.kubernetes.io/name' in object.metadata.labels)
         || object.metadata.labels['app.kubernetes.io/name'] != 'nanobot'
-        || variables.containers.all(c, c.image.startsWith('ghcr.io/smores56/homelabs-platform/nanobot@sha256:'))
+        || variables.containers.all(c, c.image.startsWith('ghcr.io/smores56/homelabs-platform/nanobot:')
+          || c.image.startsWith('ghcr.io/smores56/homelabs-platform/nanobot@sha256:'))
       message: "nanobot pods must run ghcr.io/smores56/homelabs-platform/nanobot pinned by digest"
 ---
 apiVersion: admissionregistration.k8s.io/v1

@@ -23,7 +23,7 @@ data:
   url: ssh://git@ssh.github.com:443/smores56/homelabs-apps
   repository: smores56/homelabs-apps
   deployKeyScope: write
-  marker: '# {"$imagepolicy": "flux-system:nanobot:digest"}'
+  marker: '# {"$imagepolicy": "flux-system:nanobot"}'
   verify: |
     kubectl -n flux-system get gitrepository homelabs-apps -o jsonpath='{.status.conditions[?(@.type=="Ready")].message}'
     kubectl -n flux-system get imagepolicy nanobot -o jsonpath='{.status.latestRef.image}'
