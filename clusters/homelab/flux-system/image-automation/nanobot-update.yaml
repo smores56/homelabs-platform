@@ -30,7 +30,9 @@ spec:
         email: flux-image-automation@users.noreply.github.com
       # Conventional Commits, like every other change in the tenant repository.
       messageTemplate: |
-        feat(nanobot): roll the image to {{ .Changed.NewValue }}
+        feat(nanobot): roll the image to the latest build
+
+        {{ .Changed.Summary }}
     push:
       branch: main
   update:
