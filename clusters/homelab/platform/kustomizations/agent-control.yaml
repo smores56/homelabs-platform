@@ -1,5 +1,5 @@
 # Stage 5b. The capability the agent gets instead of an API route: one service,
-# one identity, nine routes. It depends on the identity (module 5a's stage
+# one identity, ten routes. It depends on the identity (module 5a's stage
 # chain), the admission policies that force gVisor and the digest pin, and the
 # network default-deny plus the broker pair, so no agent pod can reach it before
 # its egress path exists.

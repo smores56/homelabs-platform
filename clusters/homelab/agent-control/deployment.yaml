@@ -1,9 +1,9 @@
 # The agent's only window into the cluster. It runs in `tenant-apps` because the
 # broker reaches it there, it holds a token (the one thing nanobot never gets),
-# and its RBAC is the whole capability: nine routes over one read-only view plus
-# a pod-template patch on deployments/nanobot. `tenant-gvisor` and
-# `tenant-images` apply here, so gVisor and the digest pin are admission-enforced
-# as well as declared.
+# and its RBAC is the whole capability: ten routes over one read-only view plus
+# a pod-template patch on deployments/nanobot and one Actions dispatch.
+# `tenant-gvisor` and `tenant-images` apply here, so gVisor and the digest pin
+# are admission-enforced as well as declared.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -65,6 +65,11 @@ spec:
               value: "1"
             - name: TMPDIR
               value: /tmp
+            # The dispatch token is a file, never an env value: BUILD_TOKEN_FILE
+            # names it, and a missing Secret leaves the file absent rather than
+            # blocking the pod (the volume and the Secret are both optional).
+            - name: BUILD_TOKEN_FILE
+              value: /run/build/token
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
@@ -77,7 +82,7 @@ spec:
             limits:
               cpu: 200m
               memory: 192Mi
-          # TCP probes on purpose: the HTTP surface stays exactly the nine
+          # TCP probes on purpose: the HTTP surface stays exactly the ten
           # routes, so there is no token-free /healthz to probe or abuse.
           startupProbe:
             tcpSocket:
@@ -98,12 +103,25 @@ spec:
             - name: source
               mountPath: /app
               readOnly: true
+            - name: build-token
+              mountPath: /run/build
+              readOnly: true
             - name: tmp
               mountPath: /tmp
       volumes:
         - name: source
           configMap:
             name: agent-control-source
+        # Optional on purpose: the pod starts without the Secret and
+        # `POST /self/build` answers 503 until an operator creates it
+        # (docs/manual-steps.md step 33). Only the one key is mounted.
+        - name: build-token
+          secret:
+            secretName: agent-control-build
+            optional: true
+            items:
+              - key: token
+                path: token
         - name: tmp
           emptyDir: {}
       terminationGracePeriodSeconds: 15

@@ -9,12 +9,22 @@ service would not be allowed to make.
 
 from __future__ import annotations
 
+import contextlib
+import http.client
+import http.server
 import importlib.util
 import inspect
+import io
+import json
+import os
 import pathlib
 import sys
+import tempfile
+import threading
+import time
 import unittest
 from datetime import datetime, timezone
+from unittest import mock
 
 SOURCE = (
     pathlib.Path(__file__).resolve().parents[2]
@@ -183,7 +193,7 @@ def control_with(responses: dict[str, object] | None = None) -> tuple:
 
 
 class RouteTest(unittest.TestCase):
-    """The allowlist is exact: nine paths, their methods, nothing else."""
+    """The allowlist is exact: ten paths, their methods, nothing else."""
 
     def test_every_documented_path_is_routable(self) -> None:
         for method, path in [
@@ -191,6 +201,7 @@ class RouteTest(unittest.TestCase):
             ("GET", "/self/logs"),
             ("GET", "/self/events"),
             ("POST", "/self/restart"),
+            ("POST", "/self/build"),
             ("GET", "/cluster/pods"),
             ("GET", "/cluster/events"),
             ("GET", "/cluster/nodes"),
@@ -203,6 +214,8 @@ class RouteTest(unittest.TestCase):
 
     def test_wrong_method_is_rejected(self) -> None:
         self.assertEqual(agent_control.resolve_route("GET", "/self/restart").status, 405)
+        self.assertEqual(agent_control.resolve_route("GET", "/self/build").status, 405)
+        self.assertEqual(agent_control.resolve_route("PUT", "/self/build").status, 405)
         self.assertEqual(agent_control.resolve_route("POST", "/self/status").status, 405)
         self.assertEqual(agent_control.resolve_route("DELETE", "/cluster/pods").status, 405)
 
@@ -218,6 +231,8 @@ class RouteTest(unittest.TestCase):
             "/cluster/pods/nanobot",
             "/cluster/pods/",
             "/cluster/Pods",
+            "/self/build/",
+            "/repos/smores56/homelabs-platform/actions/workflows/publish-nanobot.yml/dispatches",
             "/self/logs/",
             "/self",
             "/secrets",
@@ -570,6 +585,225 @@ class SizeTest(unittest.TestCase):
         )
         self.assertEqual(len(kept), agent_control.MAX_EVENTS)
         self.assertEqual(kept[0]["lastTimestamp"], "2026-11-13T00:02:19Z")
+
+
+class _StaticCallers:
+    """The handler's audit lookup, resolved without an API client."""
+
+    def resolve(self, address: str) -> str:
+        return "broker/test"
+
+
+class _FakeGitHub(http.server.BaseHTTPRequestHandler):
+    """A loopback stand-in for api.github.com that records every request.
+
+    Every method is recorded, not just POST: a route that reached another
+    endpoint would show up as an extra entry and fail the path assertions.
+    """
+
+    protocol_version = "HTTP/1.1"
+    requests: list[dict] = []
+    response_status = 204
+
+    def _handle(self) -> None:
+        length = int(self.headers.get("Content-Length") or 0)
+        body = self.rfile.read(length)
+        type(self).requests.append(
+            {
+                "method": self.command,
+                "path": self.path,
+                "body": body,
+                "headers": {key.lower(): value for key, value in self.headers.items()},
+            }
+        )
+        self.send_response(type(self).response_status)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    do_GET = _handle
+    do_POST = _handle
+
+    def log_message(self, fmt: str, *args: object) -> None:
+        pass
+
+
+class _FakeGitHubServer:
+    def __init__(self, status: int = 204) -> None:
+        self.handler = type(
+            "FakeGitHubHandler", (_FakeGitHub,), {"requests": [], "response_status": status}
+        )
+        self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), self.handler)
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+
+    @property
+    def base_url(self) -> str:
+        host, port = self.server.server_address[:2]
+        return f"http://{host}:{port}"
+
+    @property
+    def requests(self) -> list[dict]:
+        return self.handler.requests
+
+    def close(self) -> None:
+        self.server.shutdown()
+        self.server.server_close()
+
+
+def _start_service(control: object) -> http.server.ThreadingHTTPServer:
+    """The real Handler on a loopback port, so the audit and status path run."""
+    handler = type(
+        "ServiceHandler",
+        (agent_control.Handler,),
+        {"control": control, "callers": _StaticCallers()},
+    )
+    server = agent_control.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server
+
+
+def _http_call(
+    server: http.server.ThreadingHTTPServer, method: str, path: str
+) -> tuple[int, dict]:
+    host, port = server.server_address[:2]
+    connection = http.client.HTTPConnection(host, port, timeout=10)
+    try:
+        connection.request(method, path)
+        response = connection.getresponse()
+        body = response.read()
+        status = response.status
+    finally:
+        connection.close()
+    return status, json.loads(body.decode("utf-8"))
+
+
+class BuildTest(unittest.TestCase):
+    """`POST /self/build`: one outbound request, to one constant path."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.github = _FakeGitHubServer()
+        self.addCleanup(self.github.close)
+        self.token = pathlib.Path(self.tmp.name) / "token"
+        self.token.write_text("ghs_testtoken\n", encoding="utf-8")
+        env = mock.patch.dict(
+            os.environ,
+            {"BUILD_TOKEN_FILE": str(self.token), "GITHUB_API_BASE": self.github.base_url},
+        )
+        env.start()
+        self.addCleanup(env.stop)
+        self.service = _start_service(agent_control.Control(FakeClient()))
+        self.addCleanup(self._stop_service)
+
+    def _stop_service(self) -> None:
+        self.service.shutdown()
+        self.service.server_close()
+
+    def call(self, method: str = "POST", path: str = "/self/build") -> tuple[int, dict]:
+        return _http_call(self.service, method, path)
+
+    def test_get_is_method_not_allowed_and_dispatches_nothing(self) -> None:
+        status, payload = self.call("GET")
+        self.assertEqual(status, 405)
+        self.assertEqual(payload["error"], "method not allowed")
+        self.assertEqual(self.github.requests, [])
+
+    def test_dispatch_sends_exactly_the_contract(self) -> None:
+        logs = io.StringIO()
+        with contextlib.redirect_stdout(logs):
+            status, payload = self.call()
+            deadline = time.monotonic() + 5.0
+            while "level=audit" not in logs.getvalue() and time.monotonic() < deadline:
+                time.sleep(0.01)
+        self.assertEqual(status, 202, payload)
+        self.assertEqual(payload["ref"], "main")
+        self.assertEqual(payload["workflow"], "publish-nanobot.yml")
+        self.assertEqual(len(self.github.requests), 1)
+        seen = self.github.requests[0]
+        self.assertEqual(seen["method"], "POST")
+        self.assertEqual(
+            seen["path"],
+            "/repos/smores56/homelabs-platform/actions/workflows/publish-nanobot.yml/dispatches",
+        )
+        self.assertEqual(json.loads(seen["body"]), {"ref": "main"})
+        self.assertEqual(seen["headers"]["authorization"], "Bearer ghs_testtoken")
+        self.assertEqual(seen["headers"]["accept"], "application/vnd.github+json")
+        self.assertEqual(seen["headers"]["x-github-api-version"], "2022-11-28")
+        self.assertEqual(seen["headers"]["content-type"], "application/json")
+        audit = logs.getvalue()
+        self.assertIn("path=/self/build", audit)
+        self.assertIn("status=202", audit)
+        self.assertNotIn("ghs_testtoken", audit)
+        self.assertNotIn("Bearer", audit)
+
+    def test_missing_token_file_is_503(self) -> None:
+        self.token.unlink()
+        status, payload = self.call()
+        self.assertEqual(status, 503)
+        self.assertEqual(payload["error"], "build_unavailable")
+        self.assertEqual(self.github.requests, [])
+
+    def test_empty_token_file_is_503(self) -> None:
+        self.token.write_text("  \n", encoding="utf-8")
+        status, payload = self.call()
+        self.assertEqual(status, 503)
+        self.assertEqual(payload["error"], "build_unavailable")
+        self.assertEqual(self.github.requests, [])
+
+    def test_upstream_failure_is_502_with_the_github_status(self) -> None:
+        self.github.handler.response_status = 500
+        status, payload = self.call()
+        self.assertEqual(status, 502)
+        self.assertEqual(payload["error"], "upstream")
+        self.assertEqual(payload["upstreamStatus"], 500)
+        self.assertEqual(len(self.github.requests), 1)
+
+    def test_redirect_is_not_followed_to_another_path(self) -> None:
+        self.github.handler.response_status = 302
+        status, payload = self.call()
+        self.assertEqual(status, 502)
+        self.assertEqual(payload["upstreamStatus"], 302)
+        self.assertEqual(len(self.github.requests), 1)
+
+    def test_no_other_github_path_is_reachable_through_any_route(self) -> None:
+        for method, path in [
+            ("GET", "/self/status"),
+            ("GET", "/self/logs"),
+            ("GET", "/self/events"),
+            ("POST", "/self/restart"),
+            ("POST", "/self/build"),
+            ("GET", "/cluster/pods"),
+            ("GET", "/cluster/events"),
+            ("GET", "/cluster/nodes"),
+            ("GET", "/cluster/workloads"),
+            ("GET", "/cluster/flux"),
+        ]:
+            _http_call(self.service, method, path)
+        self.assertEqual(
+            [request["path"] for request in self.github.requests],
+            [agent_control.BUILD_DISPATCH_PATH],
+        )
+
+
+class BuildConfigTest(unittest.TestCase):
+    def test_defaults_are_the_documented_ones(self) -> None:
+        with mock.patch.dict(os.environ):
+            for key in ("BUILD_TOKEN_FILE", "GITHUB_API_BASE"):
+                os.environ.pop(key, None)
+            client = agent_control.GitHubClient()
+        self.assertEqual(client.token_file, "/run/secrets/build-token")
+        self.assertEqual(client.base_url, "https://api.github.com")
+        self.assertEqual(
+            agent_control.BUILD_DISPATCH_PATH,
+            "/repos/smores56/homelabs-platform/actions/workflows/publish-nanobot.yml/dispatches",
+        )
+
+    def test_missing_token_file_raises_build_unavailable(self) -> None:
+        client = agent_control.GitHubClient(
+            token_file=str(pathlib.Path(tempfile.mkdtemp()) / "absent")
+        )
+        with self.assertRaises(agent_control.BuildUnavailable):
+            client.dispatch()
 
 
 if __name__ == "__main__":

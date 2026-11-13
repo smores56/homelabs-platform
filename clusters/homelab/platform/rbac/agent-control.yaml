@@ -1,6 +1,6 @@
 # The agent-control identity. It is the only ServiceAccount in `tenant-apps`
 # besides nanobot that must mount a token — its whole purpose is to talk to the
-# API — and the privileges are capped at what the service's nine routes do.
+# API — and the privileges are capped at what the service's ten routes do.
 #
 # Absent on purpose: Secrets and ConfigMaps (no credentials, ever), pods/exec,
 # attach, portforward and proxy (no code execution or traffic interception),

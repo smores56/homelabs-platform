@@ -164,6 +164,10 @@ POST /repos/smores56/homelabs-platform/actions/workflows/publish-nanobot.yml/dis
 - retry: a second dispatch is a new run number, which the `numerical` policy
   orders above the previous one; duplicate builds are harmless
 
+`POST /self/build` is the agent's only trigger for this workflow: there is no
+other route, no push path and no credential the tenant can use to start a
+build, and the dispatch ref is the constant `main`.
+
 ### Memory MCP from `BROKER_URL`
 
 `images/nanobot/render.py` attaches nanobot's `memory` MCP server whenever the

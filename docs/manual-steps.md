@@ -1250,7 +1250,9 @@ tenant-side ingress policy above is absent. No credential is involved: the
 The agent's cluster API capability is applied by Flux (stage
 `platform-agent-control`, source `clusters/homelab/agent-control`); nothing here
 creates it. This step is the post-apply proof that what runs is the reviewed
-capability: nine routes, no Secrets, one write, and no second API client.
+capability: ten routes, no Secrets, one pod-template write, one Actions
+dispatch, and no second API client. The dispatch token is step 33; without it
+the build route answers `503` and every other route is unaffected.
 
 The image is `python@sha256:…` — the same base digest the broker's Dockerfile
 pins, with no tag (a tag plus digest still counts as a tagged image, and
@@ -1743,3 +1745,83 @@ wrapper means the projected value differs from the one the wrapper reads; a
 Rotation: rewrite `memory-mcp-token-sops` (step 12), let ESO refresh the graphiti
 Secret and restart the wrapper, then repeat this step so the broker holds the
 new value.
+
+## 33. Create the build dispatch token for `POST /self/build`
+
+`agent-control` starts `publish-nanobot.yml` through the Actions API
+(`docs/flux.md`, "Dispatch contract"). The credential is a file, not an env
+value: the Deployment mounts the `agent-control-build` Secret at `/run/build`
+and reads `BUILD_TOKEN_FILE=/run/build/token` on every dispatch. The volume is
+`optional: true`, so the pod runs without the Secret and `POST /self/build`
+answers `503 {"error": "build_unavailable"}` until this step lands; no other
+route is affected.
+
+1. Mint the credential. Either a fine-grained personal access token on
+   `smores56/homelabs-platform` only with **Repository permissions → Actions:
+   Read and write** (nothing else), or a GitHub App installation token for an
+   app installed on that one repository with Actions write. It must not reach
+   any other repository: the endpoint only dispatches `publish-nanobot.yml` on
+   `main` here, and `Actions: write` there is all it can do.
+
+2. Create the Secret with the single key `token`. The value is typed into a
+   `read` so it never reaches the shell history, the process list or a
+   transcript:
+
+   ```sh
+   umask 077
+   tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+   read -rs BUILD_TOKEN            # paste the token; nothing is echoed
+   printf '%s' "$BUILD_TOKEN" >"$tmp/token"
+   unset BUILD_TOKEN
+   kubectl -n tenant-apps create secret generic agent-control-build \
+     --from-file=token="$tmp/token" --dry-run=client -o yaml | kubectl apply -f -
+   ```
+
+   Verify the file is non-empty without printing it:
+
+   ```sh
+   kubectl -n tenant-apps get secret agent-control-build \
+     -o jsonpath='{.data.token}' | base64 -d | wc -c    # non-zero
+   ```
+
+3. Restart the Deployment so both replicas mount the file:
+
+   ```sh
+   kubectl -n tenant-apps rollout restart deployment/agent-control
+   kubectl -n tenant-apps rollout status deployment/agent-control --timeout=120s
+   ```
+
+4. Exercise the route. A port-forward travels the kubelet and shows up as
+   `caller=127.0.0.1`; the broker's `self` host is the normal caller:
+
+   ```sh
+   kubectl -n tenant-apps port-forward svc/agent-control 18081:8081 &
+   curl -s -o /dev/null -w '%{http_code}\n' -X POST localhost:18081/self/build  # 202
+   curl -s -o /dev/null -w '%{http_code}\n' localhost:18081/self/build          # 405
+   gh run list --workflow publish-nanobot.yml --limit 1
+   ```
+
+   `202` means GitHub accepted the dispatch; a run appears within seconds and
+   its summary carries `build-<run_number>` and the digest. The audit line
+   for the request is `level=audit method=POST path=/self/build status=202 …`;
+   no token, header or body is ever logged.
+
+Diagnosis:
+
+- `503 {"error": "build_unavailable"}` — the file is absent or empty: the
+  Secret does not exist, its key is not `token`, or the rollout happened before
+  the Secret was created. Re-run steps 2–3.
+- `502 {"error": "upstream", "upstreamStatus": 401}` (or `403`) — the token is
+  expired/revoked or lacks `Actions: write` on this repository.
+- `502` with `upstreamStatus: 404` — the token cannot see the repository, or
+  the workflow file is no longer named `publish-nanobot.yml` on `main`.
+- `502` with no `upstreamStatus` — the pod could not reach `api.github.com`;
+  check `kubectl -n tenant-apps logs deploy/agent-control` for the audit line
+  and the tenant's public egress (`docs/tenancy.md`).
+
+Rotation: mint a replacement token, replace the Secret with the same
+`--from-file=token=…` command from step 2 (an idempotent `apply` of the
+client-side manifest), then `kubectl -n tenant-apps rollout restart
+deployment/agent-control`. The service re-reads the file on every dispatch, but
+the restart is what proves both replicas hold the new value. Revoke the old
+token in GitHub after the rollout completes.
