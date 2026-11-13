@@ -1,13 +1,18 @@
-# The broker has no third-party dependency: the image is the stdlib and the
-# package under ./broker. Replace the base tag with `python:3.13-slim@sha256:...`
-# when the broker image is published (docs/manual-steps.md, broker image step).
-FROM python:3.13-slim
+# The broker's runtime is the stdlib plus `cryptography` (RS256 signing for
+# GitHub App JWTs, imported lazily so the unit suite still runs on the stdlib).
+# The base image is digest-pinned; bump it deliberately (docs/manual-steps.md,
+# broker image step).
+FROM python:3.13-slim@sha256:e48f59cdba69a3cbd9ed2cf0f348d90d45a8d350d98134cf1070bc106ee9ed90
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
 WORKDIR /app
 COPY broker /app/broker
+
+# Installed before dropping privileges: pip writes to /usr/local, which the
+# unprivileged runtime uid cannot.
+RUN pip install --no-cache-dir 'cryptography==44.0.0'
 
 # The pod already runs as 65532; the image does not depend on it.
 USER 65532:65532

@@ -1,8 +1,10 @@
 # The cluster tunnel is the only ingress path for the agent. Cloudflare Access
 # authenticates the owner and maki's service token; this rule admits the
-# connector to the tenant pod on the one port it serves. The tenant side of the
-# pair (ingress from `ingress` to `nanobot`) is in homelabs-apps, because the
-# tenant's default-deny lives there; both are needed.
+# connector to the tenant pod on the one port it serves: the WebUI/websocket
+# listener (8765). The gateway's health listener (8080) is pod-local only.
+# Both halves live here: the tenant cannot write NetworkPolicies, so the
+# namespace-side allow (also kept in homelabs-apps as the reviewed contract)
+# must be applied by the platform.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -26,4 +28,31 @@ spec:
               app.kubernetes.io/name: nanobot
       ports:
         - protocol: TCP
-          port: 8080
+          port: 8765
+
+---
+# The tenant can never widen its own isolation, so the inbound half of the
+# tunnel pair is platform-owned too. The copy in homelabs-apps' networkpolicy
+# contract must match this object.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-tunnel-ingress
+  namespace: tenant-apps
+  labels:
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: tenant
+spec:
+  podSelector: {}
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: cloudflared
+      ports:
+        - protocol: TCP
+          port: 8765

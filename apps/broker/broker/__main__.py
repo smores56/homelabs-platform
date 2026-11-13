@@ -1,8 +1,10 @@
 """Entrypoint: `python -m broker <enrollment.json>`.
 
-Secrets are files under `BROKER_SECRETS_DIR` (default `/run/secrets`, the
-projected Secret mount). A missing file aborts startup: the broker would
-otherwise forward a request without its credential, which is a silent downgrade.
+Static secrets are files under `BROKER_SECRETS_DIR` (default `/run/secrets`, the
+projected Secret mount); a missing file aborts startup. GitHub App enrollments
+need only the app's private key at start — installation tokens are minted on
+demand. A failure to mint is a 503 for that request, never a forwarded request
+without its credential.
 """
 
 from __future__ import annotations
@@ -11,7 +13,9 @@ import logging
 import os
 import sys
 
-from .config import ConfigError, load_config, load_secrets
+from .config import ConfigError, load_app_signing, load_config, load_secrets
+from .credentials import AppCredentials, StaticCredentials
+from .github_app import GithubAppTokens
 from .server import main
 
 
@@ -21,13 +25,27 @@ def run(argv: list[str] | None = None) -> int:
         print("usage: python -m broker <enrollment.json>", file=sys.stderr)
         return 2
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    directory = os.environ.get("BROKER_SECRETS_DIR", "/run/secrets")
     try:
         config = load_config(argv[0])
-        secrets = load_secrets(config.hosts, os.environ.get("BROKER_SECRETS_DIR", "/run/secrets"))
+        secrets = load_secrets(config.hosts, directory)
+        signing = load_app_signing(config, directory)
+        if signing is not None:
+            tokens = GithubAppTokens(signing.app_id, signing.private_key)
+            # Sign once now: a bad PEM or a missing `cryptography` must fail the
+            # pod, not every later request with a 503 behind a green /healthz.
+            try:
+                tokens.jwt()
+            except Exception as exc:
+                print(f"broker: github-app key cannot sign ({type(exc).__name__})", file=sys.stderr)
+                return 2
+            credentials = AppCredentials(secrets, tokens, signing.installations)
+        else:
+            credentials = StaticCredentials(secrets)
     except ConfigError as exc:
         print(f"broker: {exc}", file=sys.stderr)
         return 2
-    return main(config, secrets)
+    return main(config, credentials)
 
 
 if __name__ == "__main__":

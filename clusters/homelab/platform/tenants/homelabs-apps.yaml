@@ -13,8 +13,10 @@ spec:
   interval: 10m
   # Read-only deploy key, created by hand as the homelabs-apps-auth Secret in
   # tenant-apps (docs/manual-steps.md, step 7). Same namespace as this object:
-  # the controller runs with --no-cross-namespace-refs.
-  url: ssh://git@github.com/smores56/homelabs-apps
+  # the controller runs with --no-cross-namespace-refs. GitHub's SSH endpoint on
+  # 443: the cluster guest forwards only 80/443 out of the tap, so the default
+  # ssh://github.com:22 never connects.
+  url: ssh://git@ssh.github.com:443/smores56/homelabs-apps
   ref:
     branch: main
   secretRef:

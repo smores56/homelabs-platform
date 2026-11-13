@@ -14,10 +14,12 @@ import socket
 import ssl
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Callable, Mapping
+from typing import Callable
 from urllib.parse import quote
 
 from .config import HEADER_NAME, Config, Enrollment
+from .credentials import Credentials, StaticCredentials
+from .github_app import CredentialUnavailable
 from .policy import Denied, PinnedAddress, check_redirect, resolve_pinned, split_target
 from .redact import redact, redact_header
 
@@ -125,14 +127,12 @@ def build_outbound_headers(
 @dataclass
 class Broker:
     config: Config
-    secrets: Mapping[str, str]
+    credentials: Credentials
     resolver: Resolver = socket.getaddrinfo
     connector: Connector = connect_pinned
 
     def credential(self, enrollment: Enrollment) -> str:
-        if not enrollment.secret_name:
-            return ""
-        return self.secrets.get(enrollment.secret_name, "")
+        return self.credentials.value(enrollment)
 
     def handle(self, handler: BaseHTTPRequestHandler) -> None:
         method = handler.command.upper()
@@ -168,6 +168,11 @@ class Broker:
         except Denied as denial:
             status = self._deny(handler, denial, logical)
             outcome = "denied"
+        except CredentialUnavailable as exc:
+            # Never forward without the credential: a minting failure is a 503.
+            LOG.warning("broker credential unavailable logical=%s class=%s", logical, type(exc).__name__)
+            status = self._deny(handler, Denied("credential_unavailable", status=503), logical)
+            outcome = "denied"
         except (OSError, http.client.HTTPException, ssl.SSLError) as exc:
             # The exception text can name the pinned address; log its class only.
             status = self._deny(handler, Denied("upstream_unreachable", status=502), logical)
@@ -190,7 +195,7 @@ class Broker:
                 )
 
     def _safe_path(self, path: str, logical: str) -> str:
-        return redact(path, dict(self.secrets), label=logical)
+        return redact(path, self.credentials.values(), label=logical)
 
     def _health(self, handler: BaseHTTPRequestHandler) -> int:
         handler.send_response_only(200)
@@ -267,7 +272,7 @@ class Broker:
         method: str,
         upstream: http.client.HTTPResponse,
     ) -> tuple[int, int]:
-        secrets = dict(self.secrets)
+        secrets = self.credentials.values()
         label = enrollment.name
         upstream_headers = upstream.getheaders()
         if 300 <= upstream.status < 400:
@@ -330,7 +335,7 @@ class Broker:
 
     def _deny(self, handler: BaseHTTPRequestHandler, denial: Denied, logical: str) -> int:
         text = f"broker: {denial.reason}\n".encode()
-        text = redact(text.decode(), dict(self.secrets), label=logical).encode()
+        text = redact(text.decode(), self.credentials.values(), label=logical).encode()
         try:
             handler.send_response_only(denial.status)
             handler.send_header("Content-Type", "text/plain; charset=utf-8")
@@ -376,8 +381,8 @@ def make_server(broker: Broker, host: str | None = None, port: int | None = None
     return server
 
 
-def main(config: Config, secrets: Mapping[str, str]) -> int:
-    server = make_server(Broker(config=config, secrets=secrets))
+def main(config: Config, credentials: Credentials) -> int:
+    server = make_server(Broker(config=config, credentials=credentials))
     LOG.info("broker listening on %s:%d hosts=%s", config.listen_host, config.listen_port, ",".join(sorted(config.hosts)))
     try:
         server.serve_forever()
