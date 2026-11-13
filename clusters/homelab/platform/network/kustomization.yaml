@@ -3,10 +3,14 @@ kind: Kustomization
 
 # Stage 4: network isolation. Namespace labels already exist (stage 1), and the
 # selects here are label-based, so this can run beside the admission stage.
+# `tenant-egress.yaml` is the tenant's direct public path; `tenant-broker.yaml`
+# keeps the broker reachable on its one port.
 resources:
   - default-deny.yaml
   - dns-egress.yaml
   - tenant-broker.yaml
+  - tenant-egress.yaml
   - data-flows.yaml
+  - data-backup-egress.yaml
   - agent-ingress.yaml
   - webhook-flows.yaml

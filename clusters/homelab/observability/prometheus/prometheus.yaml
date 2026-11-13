@@ -7,6 +7,18 @@ global:
   scrape_timeout: 10s
   evaluation_interval: 30s
 
+# Alert rules live in rules.yaml, mounted beside this file.
+rule_files:
+  - /etc/prometheus/rules/rules.yaml
+
+# Alerts are pushed to the in-namespace Alertmanager, which routes them to the
+# mail relay. `alertmanager` is a cluster-local Service: nothing outside the
+# namespace can reach it, and this is the only writer.
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["alertmanager.observability.svc.cluster.local:9093"]
+
 scrape_configs:
   - job_name: prometheus
     static_configs:

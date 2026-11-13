@@ -1,0 +1,44 @@
+# Where an alert goes (SDLC #620). One route, one receiver, no receiver escalation:
+# a wrong route that silently drops an alert is the failure this whole stage
+# exists to prevent, so the default receiver is the mail path and nothing is
+# nested under a matcher.
+#
+# The receiver is the `mailrelay` Deployment, not SMTP: the host's `cloudflare-email`
+# sender is a thin POST to the Cloudflare Email Service API, and the shim in
+# `observability/mailrelay/` speaks exactly that. `send_resolved: true` closes the
+# loop, so a backup that recovers sends a second mail instead of leaving the
+# failure standing.
+#
+# `group_by` keeps one mail per alert family (`alertname`, `namespace`), and a
+# tree alert carries its `cronjob` label inside the body. `repeat_interval` is
+# 12h: an unresolved backup gap re-reminds twice a day, which is enough for a
+# nightly job and not enough to become noise.
+global:
+  # A resolved alert that never had a firing one is not worth a mail, and the
+  # default 5m resolution window matches the evaluation interval of the rules.
+  resolve_timeout: 5m
+
+route:
+  receiver: mail
+  group_by: ["alertname", "namespace"]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 12h
+
+receivers:
+  - name: mail
+    webhook_configs:
+      # Alertmanager posts here and retries on a 5xx; `max_alerts: 0` sends the
+      # whole batch, so a night with three failing trees is one mail that lists
+      # all three rather than a truncation.
+      - url: http://mailrelay.observability.svc.cluster.local:8080/alert
+        send_resolved: true
+        max_alerts: 0
+
+inhibit_rules:
+  # If the exporter cannot read the API, every data-tier metric is stale for a
+  # reason that has nothing to do with the app: one alert for the cause beats
+  # one per workload.
+  - source_matchers: ['alertname = "StatusExporterFailing"']
+    target_matchers: ['alertname =~ "DataWorkloadNotReady|ResticBackupStale|ResticPreflightStale"']
+    equal: []

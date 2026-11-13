@@ -1,0 +1,65 @@
+# The credential and restore contract for the immich tree, recorded as data
+# rather than prose. No value is here: `restic-credentials` is projected by ESO
+# from `restic-backup-sops`, a SOPS+age Secret in this namespace (created by
+# hand, docs/manual-steps.md step 28), because no age key exists in this
+# repository.
+#
+# The R2 key is scoped to the `restic-backup` bucket and nothing else, and it is
+# the same key the host's restic job uses: object storage does not offer a
+# per-prefix grant, so the prefix in `repository` is what keeps one tree's
+# prune away from another's history. Rotating it is one Secret per namespace
+# plus the host's `r2-access-key-id`, and the next nightly run picks it up.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: restic-contract
+  namespace: immich
+  labels:
+    app.kubernetes.io/name: restic
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: data
+data:
+  tree: immich
+  repository: s3:https://385f7d47e2e8438fbda5d6f76d760434.r2.cloudflarestorage.com/restic-backup/trees/immich
+  secretName: restic-credentials
+  sopsSecretName: restic-backup-sops
+  keys: AWS_ACCESS_KEY_ID,AWS_SECRET_ACCESS_KEY,RESTIC_PASSWORD
+  source: >-
+    restic-backup-immich.yaml, SOPS-encrypted with the operator's key, then
+    `kubectl -n immich create secret generic restic-backup-sops
+    --from-file=r2-access-key-id --from-file=r2-secret-access-key
+    --from-file=restic-password`. r2-access-key-id and r2-secret-access-key are
+    the host's existing R2 key (nix-config sops placeholder r2-access-key-id);
+    restic-password is the repository password the host already has.
+  schedule: >-
+    restic-backup 0 5 * * * Europe/Berlin (dumps done 03:15, host walk 03:30-03:45);
+    restic-preflight 0 12 * * 0 Europe/Berlin.
+  scope: >-
+    The `restic-backup` bucket, path `trees/immich`. Object storage has no
+    per-prefix permission, so this is a naming contract, not a grant: the key can
+    read every tree. The host's repository at the bucket root is never touched.
+  contains: >-
+    the photo library, Immich's database dump and the machine-learning cache
+  dump: >-
+    db-dumps/immich.dump (pg_dump -Fc, 02:45)
+  drill: |-
+    Restore drill (run from a workstation with the R2 key and the password; it
+    neither touches the cluster nor the share):
+
+      export AWS_ACCESS_KEY_ID=... AWS_SECRET_ACCESS_KEY=... AWS_DEFAULT_REGION=auto
+      export RESTIC_REPOSITORY=s3:https://385f7d47e2e8438fbda5d6f76d760434.r2.cloudflarestorage.com/restic-backup/trees/immich
+      export RESTIC_PASSWORD="$(kubectl -n immich get secret restic-credentials -o jsonpath='{.data.RESTIC_PASSWORD}' | base64 -d)"
+      restic snapshots --host cluster-immich
+      restic restore latest --host cluster-immich --target /tmp/drill --include /data
+      pg_restore --list /tmp/drill/data/db-dumps/immich.dump | head
+      rm -rf /tmp/drill
+
+    The drill passes when the newest snapshot is from the last night and the
+    listed file opens. Only then is the host timer for /var/lib/data/immich retired
+    (nix-config modules/nixos/restic-backup.nix, a separate gated task).
+  hostTree: /var/lib/data/immich
+  hostOwner: >-
+    nix-config's restic-backups-r2.service until the drill above passes; it keeps
+    the local LUKS repository in all cases.
+  verify: >-
+    restic snapshots --host cluster-immich --json | jq -r '.[-1].time'

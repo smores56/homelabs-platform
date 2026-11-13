@@ -1,24 +1,45 @@
 name: tofu-apply
 
+# Manual dispatch only (SDLC #622). This workflow used to apply on every push to
+# main, which meant a merge could rewrite DNS, Access applications or the
+# tunnel's ingress rules with no human between the commit and the API. There is
+# no `push` trigger here, and the apply step is a saved plan, never auto-approved.
+#
+# Two gates, in order:
+#   1. the dispatch input `apply` (default false), which turns the run into a
+#      plan-only run, and the `cloudflare` environment's protection rules;
+#   2. `plan -detailed-exitcode`: a plan that fails stops the job, and a plan
+#      with no changes skips the apply step.
+#
+# The intended sequence is: dispatch with `apply: false`, read the plan in the
+# job summary (a `-/+` on an Access application or on the wildcard record means
+# stop), then dispatch again with `apply: true`. The second run re-plans against
+# the same state and applies that fresh plan file, so a stale plan is never
+# applied. docs/manual-steps.md step 14 has the operator procedure.
+
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
+    inputs:
+      apply:
+        description: "Apply the plan. Leave false to review the plan only."
+        type: boolean
+        default: false
 
 permissions: read-all
 
+# One writer at a time: a plan and an apply must not interleave on the state.
 concurrency:
   group: tofu
   cancel-in-progress: false
 
 jobs:
   apply:
-    name: apply (cloudflare)
+    name: plan and apply (cloudflare)
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    # Only a push to main may apply, and only from the environment that is
-    # itself restricted to main: a dispatch or branch run cannot reach the token.
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    # Only main may touch the zone, and only through the environment that holds
+    # the token; a branch run cannot reach it even if dispatched.
+    if: github.ref == 'refs/heads/main'
     environment: cloudflare
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
@@ -28,20 +49,63 @@ jobs:
         run: |
           scripts/install-ci-tools.sh "$RUNNER_TEMP/bin"
           echo "$RUNNER_TEMP/bin" >>"$GITHUB_PATH"
-      - name: apply
+      - name: init (R2 state backend)
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_STATE_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_STATE_SECRET_ACCESS_KEY }}
         run: |
           if [[ -z ${CLOUDFLARE_API_TOKEN:-} ]]; then
-            echo "::error::CLOUDFLARE_API_TOKEN absent; cannot apply"
+            echo "::error::CLOUDFLARE_API_TOKEN absent; cannot plan"
             exit 1
           fi
-          # State is operator-owned and never in git (docs/cloudflare.md). A
-          # runner with an empty local state would try to create every object
-          # that already exists, so refuse until a backend block lands.
-          if ! grep -qE '^[[:space:]]*backend[[:space:]]+"' tofu/*.tf; then
-            echo "::error::no remote state backend in tofu/; apply manually (docs/cloudflare.md, 'Applying')"
+          if [[ -z ${AWS_ACCESS_KEY_ID:-} || -z ${AWS_SECRET_ACCESS_KEY:-} ]]; then
+            echo "::error::R2_STATE_ACCESS_KEY_ID/R2_STATE_SECRET_ACCESS_KEY absent; the state backend is unreachable"
             exit 1
           fi
-          tofu -chdir=tofu init -input=false
-          tofu -chdir=tofu apply -input=false -auto-approve -no-color
+          export AWS_DEFAULT_REGION=auto
+          tofu -chdir=tofu init -input=false -no-color
+      - name: plan (-detailed-exitcode)
+        id: plan
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_STATE_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_STATE_SECRET_ACCESS_KEY }}
+        # 0 = no changes, 1 = error, 2 = changes. Only 0 and 2 may continue.
+        run: |
+          set -o pipefail
+          export AWS_DEFAULT_REGION=auto
+          status=0
+          # pipefail matters: without it `tee` would mask a failed plan as exit 0
+          # (no changes) and the apply step would be skipped instead of stopped.
+          tofu -chdir=tofu plan -input=false -lock=false -no-color \
+            -detailed-exitcode -out=tfplan | tee plan.txt || status=$?
+          {
+            echo '## plan'
+            echo
+            echo '```'
+            tail -n 200 plan.txt
+            echo '```'
+          } >>"$GITHUB_STEP_SUMMARY"
+          case "$status" in
+            0) echo "changes=false" >>"$GITHUB_OUTPUT"
+               echo "::notice::plan is empty" ;;
+            2) echo "changes=true" >>"$GITHUB_OUTPUT"
+               echo "::notice::plan has changes; review the summary" ;;
+            *) echo "::error::tofu plan failed (exit $status)"
+               exit 1 ;;
+          esac
+      - name: apply (saved plan, reviewed)
+        if: inputs.apply == true && steps.plan.outputs.changes == 'true'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_STATE_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_STATE_SECRET_ACCESS_KEY }}
+        # The plan file was produced seconds ago by the step above, against the
+        # same state, so what the reviewer read in the summary is what runs.
+        run: |
+          export AWS_DEFAULT_REGION=auto
+          tofu -chdir=tofu apply -input=false -no-color tfplan
+      - name: explain the skip
+        if: inputs.apply == true && steps.plan.outputs.changes != 'true'
+        run: echo "::notice::apply requested but the plan is empty; nothing to do"

@@ -1,0 +1,38 @@
+# The credential contract for the mail path, recorded as data rather than prose.
+# No value is here: `mailrelay-token` is projected by ESO from
+# `alertmanager-mail-sops`, a SOPS+age Secret in the observability namespace
+# (created by hand, docs/manual-steps.md step 29), because no age key exists in
+# this repository.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mailrelay-contract
+  labels:
+    app.kubernetes.io/name: mailrelay
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: observability
+data:
+  secretName: mailrelay-token
+  sopsSecretName: alertmanager-mail-sops
+  key: token
+  sender: alerts@send.sammohr.dev
+  recipient: sam@sammohr.dev
+  scope: >-
+    A Cloudflare API token with Email Sending: Edit on the account, used from
+    the same onboarding as the host's `cloudflare-email` sender. The from
+    address must be on the onboarded sending domain (`send.sammohr.dev`) and the
+    recipient must be verified there; Cloudflare accepts the API call and
+    reports `success: false` otherwise, which the relay turns into a 502 so
+    Alertmanager retries and the failure is visible in its log.
+  source: >-
+    Create the token in the dashboard, then
+    `kubectl -n observability create secret generic alertmanager-mail-sops
+    --from-literal=token=<token>`. Encrypt the file with the operator's age key
+    if it is kept as a manifest; never commit it.
+  rotate: >-
+    Mint the replacement, replace the Secret, wait for the ESO refresh (1h) or
+    delete `mailrelay-token` so it is recreated, then revoke the old token. The
+    next POST uses the new value; there is nothing to restart.
+  verify: >-
+    kubectl -n observability get secret mailrelay-token -o
+    jsonpath='{.data.token}' | base64 -d | grep -c . # expect 1

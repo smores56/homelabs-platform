@@ -1,8 +1,14 @@
 # The MCP wrapper that fronts Graphiti: bearer auth, project groups, the typed
 # registry and the reconciler. It moved off smortress so the host can retire its
-# whole memory stack; the host's `memory-forward` unit is the only path in —
-# loopback 8182 -> this Service's NodePort — and `memory.sammohr.dev` stays on the
-# host tunnel, so nothing here is published to Cloudflare.
+# whole memory stack.
+#
+# Two paths in, and both are deliberate (SDLC #617):
+#   - the host's `memory-forward` unit: loopback 8182 -> this Service's NodePort,
+#     which keeps maki's and the agent's local convention working;
+#   - the cluster tunnel: `memory.sammohr.dev` is in `local.cluster_ingress`
+#     (tofu/cluster.tf) and points at this Service's cluster-local port, admitted
+#     by `memory-mcp-from-ingress`. The host route is kept until the cluster
+#     route answers 200 through Access, then retired in the host lane.
 #
 # The registry is a single-writer SQLite file on the graphiti share: one replica,
 # Recreate (a rolling update would run two reconcilers against it), and the

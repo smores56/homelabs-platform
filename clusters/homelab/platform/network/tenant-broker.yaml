@@ -1,6 +1,8 @@
-# Agents reach the network only through the broker, and the broker accepts
-# connections only from the tenant tier. Both directions are stated so neither
-# side depends on the other's file being applied first.
+# The broker path, kept beside the tenant's direct public egress: a call that
+# needs a credential injected or an address policy enforced still goes through
+# the broker, and the broker accepts connections only from the tenant tier.
+# Both directions are stated so neither side depends on the other's file being
+# applied first.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:

@@ -7,7 +7,14 @@ resources:
   - claim.yaml
   - deployment.yaml
   - service.yaml
+# The rules are their own ConfigMap so a rule edit rolls the pod without
+# touching the scrape config, and so `promtool`-style review of one file is
+# possible. Prometheus reads rule files only at (re)load, and the renamed volume
+# plus the Recreate strategy is the reload.
 configMapGenerator:
   - name: prometheus-config
     files:
       - prometheus.yaml
+  - name: prometheus-rules
+    files:
+      - rules.yaml

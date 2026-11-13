@@ -5,10 +5,11 @@
 #   ./scripts/tofu-cloudflare.sh plan
 #   ./scripts/tofu-cloudflare.sh apply
 #
-# Every zone identifier comes from tofu/terraform.tfvars. Only the credential is
-# environment-provided, and this script is the only place that fetches it:
-# override the encrypted file with CLOUDFLARE_SECRETS_FILE, or set
-# CLOUDFLARE_API_TOKEN yourself to skip SOPS entirely.
+# Every zone identifier comes from tofu/terraform.tfvars. Two credentials are
+# environment-provided and this script is the only place that fetches them:
+# the provider token (CLOUDFLARE_API_TOKEN) and the R2 pair for the state
+# backend (AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY). Override the encrypted
+# file with CLOUDFLARE_SECRETS_FILE, or export them yourself to skip SOPS.
 set -euo pipefail
 
 root=$(git rev-parse --show-toplevel)
@@ -33,5 +34,20 @@ if [[ -z ${CLOUDFLARE_API_TOKEN:-} ]]; then
   CLOUDFLARE_API_TOKEN=$(sops -d --extract '["cloudflare-api-token"]' "$secrets_file")
   export CLOUDFLARE_API_TOKEN
 fi
+
+# The state lives in R2 (tofu/backend.tf). Without the pair, `init` cannot reach
+# it and every command below would fail with a confusing 403, so fetch it the
+# same way as the token. The host's restic job uses the same key names.
+if [[ -z ${AWS_ACCESS_KEY_ID:-} || -z ${AWS_SECRET_ACCESS_KEY:-} ]]; then
+  [[ -r $secrets_file ]] || {
+    printf 'tofu-cloudflare: cannot read %s; set CLOUDFLARE_SECRETS_FILE\n' "$secrets_file" >&2
+    exit 1
+  }
+  AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-$(sops -d --extract '["r2-access-key-id"]' "$secrets_file")}
+  AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-$(sops -d --extract '["r2-secret-access-key"]' "$secrets_file")}
+  export AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY
+fi
+# R2 has no region; the backend and the SDK still want one.
+export AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION:-auto}
 
 exec tofu -chdir="$root/tofu" "$@"

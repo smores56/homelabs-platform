@@ -396,6 +396,25 @@ eq "$(jq -r 'select(.metadata.namespace == "tenant-apps" and .metadata.name == "
   "broker:8080" "tenant egress is broker-only on 8080"
 eq "$(jq -r 'select(.metadata.namespace == "broker" and .metadata.name == "ingress-tenant-only") | [.spec.ingress[0].from[0].namespaceSelector.matchLabels["homelabs.dev/tier"], .spec.ingress[0].ports[0].port] | join(":")' "$network_json")" \
   "tenant:8080" "broker ingress accepts tenants on 8080"
+
+# The tenant's direct public path (#625). The `except` lists are the contract:
+# every non-global range is denied on both families, every TCP/UDP port is
+# admitted, and the policy cannot widen without this block changing.
+tenant_public='select(.metadata.namespace == "tenant-apps" and .metadata.name == "egress-public")'
+eq "$(jq -r "$tenant_public | [(.spec.podSelector | length | tostring), (.spec.policyTypes | join(\",\"))] | join(\":\")" "$network_json")" \
+  "0:Egress" "tenant public egress applies to the whole namespace, outbound only"
+eq "$(jq -r "$tenant_public | .spec.egress[0].to[0].ipBlock | [.cidr, (.except | sort | join(\",\"))] | join(\":\")" "$network_json")" \
+  "0.0.0.0/0:10.0.0.0/8,100.64.0.0/10,127.0.0.0/8,169.254.0.0/16,172.16.0.0/12,192.168.0.0/16" \
+  "tenant public egress goes to global unicast IPv4 only"
+eq "$(jq -r "$tenant_public | .spec.egress[1].to[0].ipBlock | [.cidr, (.except | sort | join(\",\"))] | join(\":\")" "$network_json")" \
+  "::/0:::1/128,fc00::/7,fe80::/10" "tenant public egress goes to global unicast IPv6 only"
+eq "$(jq -r "$tenant_public | [.spec.egress[] | (.ports | map(.protocol) | sort | join(\"+\")) + \"@\" + ([.ports[] | select(has(\"port\"))] | length | tostring)] | join(\",\")" "$network_json")" \
+  "TCP+UDP@0,TCP+UDP@0" "tenant public egress admits every TCP and UDP port and no other protocol"
+# The broker is still reachable, and the tenant has no other flow: an added
+# policy has to be added to this set, which is what keeps the egress reviewable.
+eq "$(jq -s -r 'map(select(.metadata.namespace == "tenant-apps") | .metadata.name) | sort | join(",")' "$network_json")" \
+  "allow-dns-egress,allow-tunnel-ingress,allow-webhook-ingress,default-deny,egress-broker-only,egress-public" \
+  "tenant-apps holds exactly the DNS, tunnel, broker and public-egress allows"
 while IFS=: read -r app port; do
   eq "$(jq -r --arg ns "$app" --arg name "$app-http-from-ingress" \
     'select(.metadata.namespace == $ns and .metadata.name == $name) | [.spec.ingress[0].from[0].namespaceSelector.matchLabels["kubernetes.io/metadata.name"], .spec.ingress[0].from[0].podSelector.matchLabels["app.kubernetes.io/name"], .spec.ingress[0].ports[0].port] | join(":")' "$network_json")" \
@@ -409,27 +428,34 @@ APPS
 # Exact policy sets: an added flow has to be added to this assertion too, which
 # is what keeps "only the intended flows" reviewable.
 eq "$(jq -s -r 'map(select(.metadata.namespace == "immich") | .metadata.name) | sort | join(",")' "$network_json")" \
-  "allow-dns-egress,allow-same-namespace,default-deny,immich-http-from-ingress,immich-ml-public-https" \
-  "immich keeps only default-deny, DNS, same-namespace, ingress HTTP and model-download HTTPS"
+  "allow-dns-egress,allow-same-namespace,default-deny,immich-http-from-ingress,immich-ml-public-https,restic-egress" \
+  "immich keeps only default-deny, DNS, same-namespace, ingress HTTP, model-download HTTPS and restic egress"
 eq "$(jq -s -r 'map(select(.metadata.namespace == "navidrome") | .metadata.name) | sort | join(",")' "$network_json")" \
-  "allow-dns-egress,allow-same-namespace,default-deny,navidrome-http-from-ingress" \
-  "navidrome keeps only default-deny, DNS, same-namespace and ingress HTTP"
+  "allow-dns-egress,allow-same-namespace,default-deny,navidrome-http-from-ingress,restic-egress" \
+  "navidrome keeps only default-deny, DNS, same-namespace, ingress HTTP and restic egress"
 eq "$(jq -s -r 'map(select(.metadata.namespace == "calibre") | .metadata.name) | sort | join(",")' "$network_json")" \
-  "allow-dns-egress,allow-same-namespace,calibre-http-from-ingress,default-deny" \
-  "calibre keeps only default-deny, DNS, same-namespace and ingress HTTP"
+  "allow-dns-egress,allow-same-namespace,calibre-http-from-ingress,default-deny,restic-egress" \
+  "calibre keeps only default-deny, DNS, same-namespace, ingress HTTP and restic egress"
 eq "$(jq -s -r 'map(select(.metadata.namespace == "graphiti") | .metadata.name) | sort | join(",")' "$network_json")" \
-  "allow-dns-egress,allow-same-namespace,default-deny,graphiti-public-https,memory-mcp-nodeport-from-host" \
-  "graphiti keeps only default-deny, DNS, same-namespace, Neuralwatt HTTPS and the host tap"
+  "allow-dns-egress,allow-same-namespace,default-deny,graphiti-public-https,memory-mcp-from-ingress,memory-mcp-nodeport-from-host,restic-egress" \
+  "graphiti keeps only default-deny, DNS, same-namespace, Neuralwatt HTTPS, the tunnel and host-tap paths to the wrapper, and restic egress"
 
 eq "$(jq -r 'select(.metadata.namespace == "ingress" and .metadata.name == "egress-data-apps-only") | [.spec.egress[] | .to[0] | "\(.namespaceSelector.matchLabels["kubernetes.io/metadata.name"]):\(.podSelector.matchLabels["app.kubernetes.io/name"])"] | sort | join(",")' "$network_json")" \
-  "calibre:calibre,immich:immich,navidrome:navidrome" \
-  "the ingress namespace reaches the three published app Services and nothing else"
+  "calibre:calibre,graphiti:memory-mcp,immich:immich,navidrome:navidrome" \
+  "the ingress namespace reaches the four published app Services and nothing else"
 eq "$(jq -r 'select(.metadata.namespace == "ingress" and .metadata.name == "egress-tunnel-edge") | [.spec.podSelector.matchLabels["app.kubernetes.io/name"], (.spec.egress[0].ports | map("\(.protocol):\(.port)") | sort | join(","))] | join(":")' "$network_json")" \
   "cloudflared:TCP:443,TCP:7844,UDP:7844" "cloudflared reaches the Cloudflare edge on 443 and the tunnel's 7844"
 eq "$(jq -r 'select(.metadata.namespace == "ingress" and .metadata.name == "egress-agent") | [.spec.egress[0].to[0].namespaceSelector.matchLabels["kubernetes.io/metadata.name"], .spec.egress[0].to[0].podSelector.matchLabels["app.kubernetes.io/name"], .spec.egress[0].ports[0].port] | join(":")' "$network_json")" \
   "tenant-apps:nanobot:8765" "the tunnel reaches only the nanobot pod on the WebUI port"
 eq "$(jq -r 'select(.metadata.namespace == "tenant-apps" and .metadata.name == "allow-tunnel-ingress") | [.spec.ingress[0].from[0].namespaceSelector.matchLabels["kubernetes.io/metadata.name"], .spec.ingress[0].from[0].podSelector.matchLabels["app.kubernetes.io/name"], .spec.ingress[0].ports[0].port] | join(":")' "$network_json")" \
   "ingress:cloudflared:8765" "the tenant admits only the tunnel on the WebUI port"
+
+# The memory cutover (SDLC #617): the cluster tunnel is the new path in, and the
+# host tap's NodePort path stays until the host route is retired elsewhere.
+eq "$(jq -r 'select(.metadata.namespace == "graphiti" and .metadata.name == "memory-mcp-from-ingress") | [.spec.ingress[0].from[0].namespaceSelector.matchLabels["kubernetes.io/metadata.name"], .spec.ingress[0].from[0].podSelector.matchLabels["app.kubernetes.io/name"], .spec.ingress[0].ports[0].port] | join(":")' "$network_json")" \
+  "ingress:cloudflared:8182" "the tunnel reaches the memory wrapper on its MCP port"
+eq "$(jq -r 'select(.metadata.namespace == "graphiti" and .metadata.name == "memory-mcp-nodeport-from-host") | [(.spec.ingress[0].from | map(.ipBlock.cidr) | sort | join(",")), (.spec.ingress[0].ports[0].port | tostring)] | join(":")' "$network_json")" \
+  "10.77.1.1/32,10.77.1.2/32:8182" "the host tap path to the wrapper is untouched"
 
 # ------------------------------------------------------- data storage contract
 storage_dir=clusters/homelab/platform/storage
@@ -487,6 +513,51 @@ done <<'DUMPS'
 immich:dump
 graphiti:rdb
 DUMPS
+
+# ------------------------------------------------- per-tree restic contract
+# One job per tree, in the namespace that owns the claim (#619). What makes a
+# per-tree job safe is asserted here: its own claim and nothing else, mounted
+# read-only, uid 1000, its own repository prefix under the shared bucket, and a
+# preflight that prints the drill which gates the host timer's retirement.
+account_id=$(sed -nE 's/^[[:space:]]*account_id[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' tofu/terraform.tfvars)
+while IFS=: read -r app deadline; do
+  cj="clusters/homelab/data/$app/restic-backup.yaml"
+  pre="clusters/homelab/data/$app/restic-preflight.yaml"
+  contract="clusters/homelab/data/$app/restic-contract.yaml"
+  eq "$(yq -r '[.spec.schedule, .spec.timeZone, .spec.concurrencyPolicy, .spec.jobTemplate.spec.activeDeadlineSeconds] | join(":")' "$cj")" \
+    "0 5 * * *:Europe/Berlin:Forbid:$deadline" "$app restic runs after the dumps, bounded and serial"
+  eq "$(yq -r '[.spec.jobTemplate.spec.template.spec.volumes[] | select(.persistentVolumeClaim) | (.persistentVolumeClaim.claimName + ":" + (.persistentVolumeClaim.readOnly | tostring))] | join(",")' "$cj")" \
+    "$app-data:true" "$app restic mounts only its own claim, read-only"
+  eq "$(yq -r '.spec.jobTemplate.spec.template.spec.securityContext.runAsUser' "$cj")" "1000" \
+    "$app restic runs as the share's uid"
+  eq "$(yq -r '[.spec.jobTemplate.spec.template.spec.containers[0].env[] | select(.valueFrom) | .name] | sort | join(",")' "$cj")" \
+    "AWS_ACCESS_KEY_ID,AWS_SECRET_ACCESS_KEY,RESTIC_PASSWORD" \
+    "$app restic takes its key and password from the projected Secret only"
+  repository="s3:https://$account_id.r2.cloudflarestorage.com/restic-backup/trees/$app"
+  eq "$(yq -r '.spec.jobTemplate.spec.template.spec.containers[0].env[] | select(.name == "RESTIC_REPOSITORY") | .value' "$cj")" \
+    "$repository" "$app restic writes its own prefix of the shared bucket"
+  eq "$(yq -r '.data.repository' "$contract")" "$repository" \
+    "$app contract and job name the same repository"
+  eq "$(yq -r '[.spec.schedule, .spec.timeZone, .spec.jobTemplate.spec.backoffLimit] | join(":")' "$pre")" \
+    "0 12 * * 0:Europe/Berlin:0" "$app preflight runs weekly and does not retry into a green run"
+  eq "$(yq -r '[.spec.jobTemplate.spec.template.spec.volumes[] | select(.configMap) | .configMap.name] | join(",")' "$pre")" \
+    "restic-contract" "$app preflight prints the drill from the contract ConfigMap"
+  eq "$(yq -r 'select(.kind == "ExternalSecret") | [.metadata.namespace, .spec.target.name, .spec.data[0].secretKey] | join(":")' \
+    "clusters/homelab/platform/secrets/eso/restic-backup-$app.yaml" | grep -v '^$')" \
+    "$app:restic-credentials:AWS_ACCESS_KEY_ID" "$app projects restic-credentials into its own namespace"
+done <<'TREES'
+immich:3600
+navidrome:1800
+calibre:1800
+graphiti:1800
+TREES
+if grep -ho 'docker.io/restic/restic:0.18.1@sha256:[0-9a-f]\{64\}' \
+  clusters/homelab/data/*/restic-backup.yaml clusters/homelab/data/*/restic-preflight.yaml |
+  grep -c . | grep -qx 8; then
+  ok "every restic job pins the image digest"
+else
+  bad "every restic job pins the image digest"
+fi
 
 # ------------------------------------------------- data workload manifest shape
 # Admission (data-workload-source) enforces the identity at runtime; this is the

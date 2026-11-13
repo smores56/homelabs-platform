@@ -77,23 +77,45 @@ the state does not match the config.
 
 ## State
 
-State is operator-owned and never committed. It lives in the operator's
-checkout after the move (`tofu/terraform.tfstate`, gitignored) or in a directory
-of their choosing; the old nix-config apply path kept it in
-`/var/lib/cloudflare-tofu`. `docs/manual-steps.md` step 14 moves it.
+State is **remote** and never committed: `tofu/backend.tf` points the S3 backend
+at this account's R2 endpoint, in the private `homelabs-tofu-state` bucket under
+`cloudflare/terraform.tfstate` (SDLC #622). Before that move it was an
+operator-local file, so a lost checkout lost the only mapping between the config
+and the live objects — the bucket is what makes CI and the operator plan against
+the same state.
 
-There is deliberately no `backend` block, so:
+Two credentials reach it, both from the environment and neither in git:
 
-- `tofu init -backend=false` + `tofu validate` (CI) work without credentials;
-- `tofu-apply.yml` refuses to apply until a backend exists, because a runner
-  with empty state would try to create objects that already exist;
-- `tofu-plan.yml` still plans (state-free) as a syntax and diff smoke test and
-  says so in its log.
+| Variable | What it is | Where CI gets it |
+| --- | --- | --- |
+| `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | the R2 key pair, scoped to `homelabs-tofu-state` | `cloudflare` environment secrets `R2_STATE_ACCESS_KEY_ID` / `R2_STATE_SECRET_ACCESS_KEY` |
+| `CLOUDFLARE_API_TOKEN` | the zone token | `cloudflare` environment secret |
 
-Provisioning the backend is a human step: create a private R2 bucket, add a
-`backend "s3" {}` block plus `-backend-config` values from the `cloudflare`
-environment, migrate with `tofu init -migrate-state`, then the Actions apply
-becomes authoritative. Until then the manual apply below is the only one.
+Locally, `scripts/tofu-cloudflare.sh` decrypts both from nix-config's
+`secrets/smortress.yaml` (`cloudflare-api-token`, `r2-access-key-id`,
+`r2-secret-access-key`) unless they are already exported. `AWS_DEFAULT_REGION`
+is set to `auto`, because R2 has no regions.
+
+State contents are object ids and attribute values — no token, no secret. R2
+encrypts objects at rest, and there is no client-side state encryption because
+there is no key to hold for it; the bucket's access is the control.
+
+What the backend means for the workflows:
+
+- `ci.yml` runs `tofu init -backend=false` + `tofu validate`, so PRs need no
+  credential and no bucket;
+- `tofu-apply.yml` is `workflow_dispatch` only. It inits against R2, runs
+  `plan -detailed-exitcode -out=tfplan`, publishes the plan to the job summary
+  and applies that saved plan only when the dispatch asked for it — never
+  `-auto-approve`, and never on push;
+- `tofu-plan.yml` is a read-only drift check on main and says in its log when
+  the credentials are absent.
+
+The one-time move from the local file to R2 is `docs/manual-steps.md` step 14:
+back up the file, `init -migrate-state`, compare `tofu state list` before and
+after, then delete the local copy. Do not run `init` with an empty or partial
+state against this config: the first plan would propose creating every object
+that already exists.
 
 ## Applying
 
@@ -109,15 +131,18 @@ The account, apex, alert address and both tunnel ids come from the committed
 cluster host set is not a variable either — it follows `local.cluster_ingress`
 in `tofu/cluster.tf`.
 
-The provider credential is the only environment input, and the script is the
-one place that fetches it: SOPS decrypts `secrets/smortress.yaml` from the
-nix-config checkout (override the path with `CLOUDFLARE_SECRETS_FILE`), and a
-preset `CLOUDFLARE_API_TOKEN` skips SOPS entirely. Nothing else needs exporting.
+Two credentials are environment inputs, and the script is the one place that
+fetches them: SOPS decrypts `secrets/smortress.yaml` from the nix-config
+checkout (override the path with `CLOUDFLARE_SECRETS_FILE`) for the zone token
+and the R2 state pair, and preset variables skip SOPS entirely.
 
-The repository's state file is authoritative, and the script refuses to run
-while `/var/lib/cloudflare-tofu` exists: a second state directory there plans a
+The R2 state is authoritative, and the script refuses to run while
+`/var/lib/cloudflare-tofu` exists: a second state directory there plans a
 whole-zone create that Cloudflare rejects object by object. Remove it, or set
-`CLOUDFLARE_IGNORE_LEGACY_TOFU_DIR=1` if you know it is empty.
+`CLOUDFLARE_IGNORE_LEGACY_TOFU_DIR=1` if you know it is empty. A stale
+`tofu/terraform.tfstate` in a checkout is equally dangerous for the opposite
+reason — after the migration it is an orphan copy, so delete it rather than
+letting a later `init` offer to copy it back.
 
 No variable carries a tunnel secret, and none is a credential.
 

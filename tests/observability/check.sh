@@ -131,10 +131,10 @@ eq "$(yq -r '.analytics.reporting_enabled' "$loki_config")" "false" \
 eq "$(yq -r '.spec.template.spec.containers[0].env[] | select(.name == "LOKI_GATEWAY_TOKEN") | .valueFrom.secretKeyRef.name' \
   clusters/homelab/observability/loki-gateway/deployment.yaml)" \
   "loki-gateway-token" "gateway reads the ESO-generated token Secret"
-eq "$(yq -r '.spec.target.name' clusters/homelab/observability/loki-gateway/eso/externalsecret.yaml)" \
+eq "$(yq -r '.spec.target.name' clusters/homelab/observability/eso/externalsecret.yaml)" \
   "loki-gateway-token" "ExternalSecret targets the loki-gateway-token Secret"
 eq "$(yq -r '.spec.dataFrom[0].sourceRef.generatorRef.kind' \
-  clusters/homelab/observability/loki-gateway/eso/externalsecret.yaml)" \
+  clusters/homelab/observability/eso/externalsecret.yaml)" \
   "Password" "token comes from an ESO Password generator"
 # Vector writes with its own tenant header, so it holds no credential at all.
 eq "$(grep -c 'LOKI_GATEWAY_TOKEN' clusters/homelab/observability/vector/daemonset.yaml)" "0" \
@@ -147,9 +147,9 @@ eq "$(grep -rc 'secretName\|secretKeyRef' clusters/homelab/observability/vector/
 # ClusterRoleBinding can grant it. Everything else stays namespaced.
 exporter_dir=clusters/homelab/observability/status-exporter
 eq "$(yq -r '.rules | map(.resources | join("+")) | join(" ")' "$exporter_dir/clusterrole.yaml")" \
-  "pods deployments+statefulsets" "status exporter reads only pods and workload kinds"
+  "pods deployments+statefulsets cronjobs" "status exporter reads only pods, workload kinds and cronjobs"
 eq "$(yq -r '.rules | map(.verbs | join("+")) | join(" ")' "$exporter_dir/clusterrole.yaml")" \
-  "get+list+watch get+list" "status exporter verbs are read-only and exact"
+  "get+list+watch get+list get+list" "status exporter verbs are read-only and exact"
 eq "$(yq -r '.rules | map(.resources | join("+")) | join(" ")' "$exporter_dir/clusterrole-nodes.yaml")" \
   "nodes" "the cluster-scoped read is nodes and nothing else"
 eq "$(yq -r '.roleRef.kind + ":" + .roleRef.name' "$exporter_dir/clusterrolebinding.yaml")" \
@@ -215,7 +215,7 @@ jq '[.[] | select(.kind == "NetworkPolicy" and .metadata.namespace == "observabi
 eq "$(jq -r '[.[] | select(.metadata.name == "default-deny") | (.spec.policyTypes | sort | join(","))] | join(",")' \
   "$network_json")" "Egress,Ingress" "observability is default-deny in both directions"
 eq "$(jq -r '[.[] | .metadata.name] | sort | join(",")' "$network_json")" \
-  "allow-dns-egress,default-deny,kubernetes-api-egress,loki-gateway-egress-loki,loki-gateway-from-broker,loki-ingress,prometheus-egress-scrape,status-exporter-from-broker,status-exporter-from-prometheus,vector-egress-loki,vector-ingress-prometheus" \
+  "alertmanager-from-prometheus,alertmanager-to-mailrelay,allow-dns-egress,default-deny,kubernetes-api-egress,loki-gateway-egress-loki,loki-gateway-from-broker,loki-ingress,mailrelay-egress-public,mailrelay-from-alertmanager,prometheus-egress-scrape,prometheus-to-alertmanager,status-exporter-from-broker,status-exporter-from-prometheus,vector-egress-loki,vector-ingress-prometheus" \
   "the observability namespace holds exactly the reviewed policy set"
 eq "$(jq -r '.[] | select(.metadata.name == "allow-dns-egress") | .spec.egress[0].to[0].namespaceSelector.matchLabels["kubernetes.io/metadata.name"]' \
   "$network_json")" "kube-system" "observability DNS egress targets kube-system only"
@@ -239,12 +239,62 @@ eq "$(jq -r '.[] | select(.metadata.name == "loki-gateway-from-broker") | [.spec
 eq "$(jq -r '.[] | select(.metadata.name == "kubernetes-api-egress") | [(.spec.podSelector.matchExpressions[0].values | sort | join("+")), ([(.spec.egress[] | .to[] as $t | .ports[] | "\($t.ipBlock.cidr):\(.port)")] | sort | join(","))] | join(":")' \
   "$network_json")" "prometheus+status-exporter+vector:10.43.0.0/16:443,10.43.0.0/16:6443,10.77.1.0/30:443,10.77.1.0/30:6443" \
   "API egress covers the service range and the node address on 443 and 6443"
-if jq -r '.[] | select(.metadata.name != "allow-dns-egress") | .spec.egress[]? | .to[]? | .ipBlock.cidr // empty' \
+# The mail relay is the one pod with public egress (SDLC #620), and its rule is
+# pinned: Cloudflare on 443, every non-global range excluded.
+eq "$(jq -r '.[] | select(.metadata.name == "mailrelay-egress-public") | [.spec.podSelector.matchLabels["app.kubernetes.io/name"], .spec.egress[0].to[0].ipBlock.cidr, (.spec.egress[0].to[0].ipBlock.except | sort | join(",")), ([.spec.egress[0].ports[].port] | map(tostring) | join(","))] | join(":")' \
+  "$network_json")" \
+  "mailrelay:0.0.0.0/0:10.0.0.0/8,100.64.0.0/10,127.0.0.0/8,169.254.0.0/16,172.16.0.0/12,192.168.0.0/16:443" \
+  "only the mail relay reaches the public internet, only on 443, only global unicast"
+if jq -r '.[] | select(.metadata.name != "allow-dns-egress" and .metadata.name != "mailrelay-egress-public") | .spec.egress[]? | .to[]? | .ipBlock.cidr // empty' \
   "$network_json" | grep -qx '0.0.0.0/0'; then
-  bad "an observability policy allows public egress"
+  bad "an observability policy other than the mail relay allows public egress"
 else
-  ok "no observability pod reaches the public internet"
+  ok "no other observability pod reaches the public internet"
 fi
+eq "$(jq -r '.[] | select(.metadata.name == "prometheus-to-alertmanager") | [.spec.egress[0].to[0].podSelector.matchLabels["app.kubernetes.io/name"], (.spec.egress[0].ports[0].port | tostring)] | join(":")' \
+  "$network_json")" "alertmanager:9093" "Prometheus pushes alerts to Alertmanager and nothing else"
+eq "$(jq -r '.[] | select(.metadata.name == "alertmanager-to-mailrelay") | [.spec.egress[0].to[0].podSelector.matchLabels["app.kubernetes.io/name"], (.spec.egress[0].ports[0].port | tostring)] | join(":")' \
+  "$network_json")" "mailrelay:8080" "Alertmanager's only egress is the mail relay"
+
+# ------------------------------------------------------------------- alerting
+# The alerting path is two files of consequence: the route, and the rules that
+# feed it. A route that is not the default receiver silently drops alerts, so the
+# default receiver is asserted rather than any matcher deeper in the tree.
+alertmanager_dir=clusters/homelab/observability/alertmanager
+eq "$(yq -r '.route.receiver' "$alertmanager_dir/alertmanager.yaml")" "mail" \
+  "every alert that does not match a child route goes to mail"
+eq "$(yq -r '.receivers | length' "$alertmanager_dir/alertmanager.yaml")" "1" \
+  "there is exactly one receiver"
+eq "$(yq -r '.receivers[0].webhook_configs[0].url' "$alertmanager_dir/alertmanager.yaml")" \
+  "http://mailrelay.observability.svc.cluster.local:8080/alert" \
+  "the receiver posts to the in-namespace mail relay"
+eq "$(yq -r '.receivers[0].webhook_configs[0].send_resolved' "$alertmanager_dir/alertmanager.yaml")" \
+  "true" "a resolved alert closes the loop"
+if grep -q 'smtp_' "$alertmanager_dir/alertmanager.yaml"; then
+  bad "Alertmanager holds no SMTP credential"
+else
+  ok "Alertmanager holds no SMTP credential"
+fi
+rules=clusters/homelab/observability/prometheus/rules.yaml
+for expr in 'up == 0' 'homelabs_data_workload_ready == 0' \
+  'homelabs_data_cronjob_last_successful_timestamp_seconds{cronjob="restic-backup"} > 26 * 3600' \
+  'homelabs_data_cronjob_last_successful_timestamp_seconds{cronjob="restic-preflight"} > 8 * 24 * 3600'; do
+  if yq -r '.groups[].rules[].expr' "$rules" | tr -s ' ' | grep -Fq -- "$expr"; then
+    ok "alert rule present: $expr"
+  else
+    bad "alert rule missing: $expr"
+  fi
+done
+eq "$(yq -r '[.groups[].rules[] | select(.labels.severity == "critical") | .alert] | join(",")' "$rules")" \
+  "ResticBackupStale" "exactly the backup gap is critical"
+eq "$(yq -r '.rule_files[0]' clusters/homelab/observability/prometheus/prometheus.yaml)" \
+  "/etc/prometheus/rules/rules.yaml" "Prometheus loads the rule file it is given"
+eq "$(yq -r '.alerting.alertmanagers[0].static_configs[0].targets[0]' clusters/homelab/observability/prometheus/prometheus.yaml)" \
+  "alertmanager.observability.svc.cluster.local:9093" "Prometheus alerts the in-namespace Alertmanager"
+eq "$(yq -r '.spec.target.name' clusters/homelab/observability/eso/alertmanager-mail.yaml)" \
+  "mailrelay-token" "the mail token is projected under the name the relay mounts"
+eq "$(yq -r '.spec.data[0].remoteRef.key' clusters/homelab/observability/eso/alertmanager-mail.yaml)" \
+  "alertmanager-mail-sops" "the mail token comes from the SOPS Secret, never a manifest"
 if jq -e '.[] | select(.spec.egress[]? | (.to // []) == [])' "$network_json" >/dev/null; then
   bad "an observability egress rule omits its destination"
 else

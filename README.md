@@ -52,7 +52,8 @@ tests/digest/check.sh                    # digest builder fixtures and manifest 
 
 CI (`.github/workflows/ci.yml`) runs the same checks with pinned tool versions;
 `.github/workflows/tofu-plan.yml` and `tofu-apply.yml` own the `cloudflare`
-environment and run only on `main` or by manual dispatch.
+environment. `tofu-plan` is a read-only drift check on `main`; `tofu-apply` is
+`workflow_dispatch` only and applies a reviewed plan (SDLC #622).
 
 ## Ownership
 

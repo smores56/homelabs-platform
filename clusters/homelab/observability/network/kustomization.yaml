@@ -6,6 +6,8 @@ kind: Kustomization
 # API access, and the two broker paths. The digest's own egress and its two
 # `*-from-digest` ingress policies live with the digest stage
 # (clusters/homelab/platform/digest/), which is applied after this one.
+# `alerting-flows.yaml` is the Prometheus -> Alertmanager -> mail relay path, and
+# the relay's 443 egress is the namespace's only public one.
 resources:
   - default-deny.yaml
   - dns-egress.yaml
@@ -16,3 +18,4 @@ resources:
   - broker-to-loki-gateway.yaml
   - status-exporter-from-broker.yaml
   - broker-to-status-exporter.yaml
+  - alerting-flows.yaml

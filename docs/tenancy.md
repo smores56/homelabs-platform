@@ -38,12 +38,12 @@ applied by the first stage (`docs/flux.md`).
 | Tier | Admission policy | Egress | Ingress |
 | --- | --- | --- | --- |
 | `platform` | exempt from `no-host-access` | unrestricted | unrestricted |
-| `tenant` | gVisor, digest-pinned images, scratch PVC only, no `sops-age`, no reconciler SA, `agent-identity` | broker only, plus DNS; the k3s API (443/6443) for `agent-control` only | the cluster tunnel on 8080 (`nanobot` only); the broker on 8081 (`agent-control` only) |
+| `tenant` | gVisor, digest-pinned images, scratch PVC only, no `sops-age`, no reconciler SA, `agent-identity` | DNS, the broker on 8080, direct TCP/UDP to global unicast (every non-global range excluded), the k3s API (443/6443) for `agent-control` only | the cluster tunnel on 8080 (`nanobot` only); the broker on 8081 (`agent-control` only) |
 | `broker` | `no-host-access`, `broker-runtime` | public TCP 443 (global unicast only), DNS, `loki-gateway` 3100 and `status-exporter` 9101 | `tenant` tier on 8080 |
 | `webhook` | `no-host-access`, `webhook-runtime` | DNS, `tenant-apps/nanobot` 8765 only | the cluster tunnel on 8080 |
 | `data` (each of `immich`, `navidrome`, `calibre`, `graphiti`) | `no-host-access`, `data-workload-source`, `data-pvc-scope`, `data-pvc-storage` | same namespace, DNS; HTTPS for `immich-machine-learning` and `graphiti` | same namespace, `ingress` on the app's port |
-| `ingress` | none beyond PSA | the four data apps on their ports, `tenant-apps/nanobot` 8080, Cloudflare edge 443, DNS | none |
-| `observability` | exempt from `no-host-access` | DNS, the k3s API range on 443 (Vector, Prometheus, exporter), Loki and the annotated scrape targets; no public egress | default-deny; Vector/Loki/gateway wiring, Prometheus scrapes, and the broker paths only |
+| `ingress` | none beyond PSA | the four data apps and `graphiti/memory-mcp` on their ports, `tenant-apps/nanobot` 8080, Cloudflare edge 443, DNS | none |
+| `observability` | exempt from `no-host-access` | DNS, the k3s API range on 443 (Vector, Prometheus, exporter), Loki and the annotated scrape targets, Prometheus → Alertmanager, Alertmanager → mail relay; the mail relay alone reaches 443 on global unicast | default-deny; Vector/Loki/gateway wiring, Prometheus scrapes, the broker paths, and the alerting chain |
 
 ## Admission policy
 
@@ -149,23 +149,51 @@ post-apply verification.
 
 | Namespace | default-deny | Allowed |
 | --- | --- | --- |
-| `tenant-apps` | both directions | DNS to `kube-system`; TCP 8080 to `broker` tier; TCP 8081 from the `broker` namespace (`agent-control` only); TCP 443/6443 to the k3s API range (`agent-control` only); ingress from `ingress/cloudflared` on 8080 (nanobot only) |
+| `tenant-apps` | both directions | DNS to `kube-system`; TCP 8080 to `broker` tier; direct TCP/UDP to global unicast (`0.0.0.0/0` and `::/0` with every non-global range in `except`); TCP 8081 from the `broker` namespace (`agent-control` only); TCP 443/6443 to the k3s API range (`agent-control` only); ingress from `ingress/cloudflared` on 8080 (nanobot only) |
 | `broker` | both directions | DNS; ingress from `tenant` tier on 8080; egress TCP 443 to global unicast only (every non-global range excluded), TCP 3100 to `loki-gateway`, 9101 to `status-exporter` in `observability` and 8081 to `tenant-apps/agent-control` |
 | `immich` | both directions | DNS; same-namespace any port; TCP 2283 from `ingress`; HTTPS from the machine-learning pod for model weights |
 | `navidrome` | both directions | DNS; same-namespace any port; TCP 4533 from `ingress` |
 | `calibre` | both directions | DNS; same-namespace any port; TCP 8083 from `ingress` |
-| `graphiti` | both directions | DNS; same-namespace any port; TCP 8182 from the host tap addresses only (the memory wrapper's NodePort, never the tunnel); HTTPS from the graphiti pod to the Neuralwatt API |
+| `graphiti` | both directions | DNS; same-namespace any port; TCP 8182 from the host tap addresses (the memory wrapper's NodePort) and from `ingress/cloudflared` (the cluster tunnel, SDLC #617); HTTPS from the graphiti pod to the Neuralwatt API; TCP 443 to R2 for the restic job |
 | `ingress` | both directions | DNS; the three published app Services on their ports; `tenant-apps/nanobot` on 8080; TCP 443 to the Cloudflare edge (`cloudflared` only) |
 
 Adding an app flow means adding a policy with its exact port and namespace
 selector. Nothing matches all namespaces, and a missing allow fails closed.
 
+### The tenant's public egress
+
+`egress-public` (`platform/network/tenant-egress.yaml`) gives the tenant a direct
+path out: every TCP and UDP port to global unicast, with `10/8`, `172.16/12`,
+`192.168/16`, `169.254/16`, `100.64/10` and `127/8` excluded from IPv4 and
+`fc00::/7`, `fe80::/10` and `::1/128` from IPv6. The exclusions are what keep a
+public destination from being rewritten into the pod or service network, the
+tap, the host's LAN, the cloud metadata address or loopback. The broker rule
+stays: anything that needs a credential injected, a name allowlist or a
+response redaction still goes through it.
+
+Deliberately absent: no proxy, no rate limit, no bandwidth cap, no per-destination
+allowlist, no kill switch, and no content inspection. This is an address filter,
+not DLP — a byte that leaves the tenant through this rule is not recorded except
+as a flow. There is no DNS query log either: CoreDNS logging is not enabled, and
+the same rule admits DoH/DoT to a public resolver, so even a future log would be
+best-effort and bypassable, never an audit trail. Two layers bound it in practice: the host's tap firewall
+(`modules/nixos/cluster-vm.nix` in nix-config) admits only TCP 80/443, 7844, DNS
+and NTP out of the guest, and that file is owned by the host lane; until it is
+widened, only those ports actually reach the internet. Neither layer is
+something the tenant can change.
+
+The tenant repository keeps a mirrored copy of its NetworkPolicies as the
+reviewed contract (`homelabs-apps`, `deploy/`). That copy must carry the same
+two `ipBlock` entries; `tests/policies/check.sh` asserts the platform side only,
+because the tenant repository is not readable from this one.
+
 `observability` is default-deny in both directions too, with one file per flow in
 `clusters/homelab/observability/network/`: Vector to Loki 3100, the gateway to
 Loki 3100 (Loki accepts ingress from exactly those two pods), Prometheus to the
 annotated targets, the broker to the gateway and the exporter, the cluster digest
-to those two (stated in the digest stage), and the k3s API range on 443 for the
-three API clients. No observability pod has public egress. `platform` is the one
+to those two (stated in the digest stage), the k3s API range on 443 for the three
+API clients, and Prometheus → Alertmanager → mail relay. Only the mail relay has
+public egress, and only on 443 (`docs/observability.md`). `platform` is the one
 namespace still without a default-deny: it holds the CronJobs and the reconciler
 pods, which are platform-tier by label and already cluster-wide.
 
@@ -219,7 +247,8 @@ The tenant repository is reconciled by `tenant-apps-reconciler` with
   requirement, the PVC naming rule, the nanobot registry rule and its scratch
   claim;
 - images are digest-pinned; PVCs are named `<app.kubernetes.io/name>-*`;
-- egress goes to the broker only, so new upstream calls need a broker route, not
-  a NetworkPolicy change;
+- egress is the broker on 8080, DNS, and direct TCP/UDP to global unicast; a
+  call that needs a broker credential still needs a broker route, and nothing
+  else in the cluster is reachable from the tenant;
 - secrets come from `sops-age`-decrypted files or ESO generators, never from a
   float in git.

@@ -107,6 +107,10 @@ Expect `CLOUDFLARE_API_TOKEN`. An environment with no secret is why
 `tofu-plan.yml` logs `CLOUDFLARE_API_TOKEN absent; skipping plan` instead of
 failing; `tofu-apply.yml` fails loudly in that state.
 
+The state backend's R2 pair is a second pair of environment secrets
+(`R2_STATE_ACCESS_KEY_ID`, `R2_STATE_SECRET_ACCESS_KEY`); step 14 creates the
+bucket and sets both, and `tofu-plan.yml` skips with a notice until they exist.
+
 ## 3. Scope the Cloudflare API token
 
 Create the token in the Cloudflare dashboard under My Profile → API Tokens →
@@ -616,6 +620,79 @@ files over the state.
 Adopting an account whose state was lost needs imports instead: `<zone_id>/<record_id>`
 for records and `accounts/<account_id>/<app_id>` for applications, listed from
 `/zones/<zone>/dns_records` and `/accounts/<account>/access/apps`.
+
+### Moving the state into R2 (SDLC #622)
+
+The config now carries a `backend "s3" {}` block pointed at R2
+(`tofu/backend.tf`), so the operator's local file has to become that bucket's
+object. This is the destructive-looking step: an `init` against an empty bucket
+and a local file that was forgotten would plan a create for every object that
+already exists. Do it in this order and read the `state list` diff.
+
+1. Create the bucket and its key. In the Cloudflare dashboard: R2 → **Create
+   bucket** → `homelabs-tofu-state` (private, default location), then R2 → **Manage
+   API tokens** → **Create API token** → *Object Read & Write* on that bucket
+   only. Store the pair in the `cloudflare` environment:
+
+   ```sh
+   gh secret set R2_STATE_ACCESS_KEY_ID --env cloudflare --body "<access key id>"
+   gh secret set R2_STATE_SECRET_ACCESS_KEY --env cloudflare --body "<secret access key>"
+   ```
+
+2. Back up the local state and record what it holds, before touching anything:
+
+   ```sh
+   cd ~/src/homelabs-platform
+   cp tofu/terraform.tfstate "tofu/terraform.tfstate.pre-r2-$(date +%F)"
+   ./scripts/tofu-cloudflare.sh state pull > "/var/backups/tofu-state-$(date +%F).json" 2>/dev/null \
+     || tofu -chdir=tofu state pull > "/var/backups/tofu-state-$(date +%F).json"
+   ./scripts/tofu-cloudflare.sh state list | sort > /tmp/tofu-state-before.txt
+   wc -l /tmp/tofu-state-before.txt        # record the number
+   ```
+
+   Keep both copies off the checkout: the JSON is the object graph, the `.pre-r2`
+   file is what `-migrate-state` reads.
+
+3. Migrate. `init` asks whether to copy the existing state into the new backend:
+
+   ```sh
+   ./scripts/tofu-cloudflare.sh init -migrate-state
+   ```
+
+   Answer **yes**. The script supplies the R2 pair from SOPS; `AWS_DEFAULT_REGION`
+   is forced to `auto`. A `403` here means the token is not scoped to the bucket;
+   an `AccessDenied` on `HeadBucket` means the bucket name in `tofu/backend.tf`
+   does not exist yet.
+
+4. Prove the state moved unchanged:
+
+   ```sh
+   ./scripts/tofu-cloudflare.sh state list | sort > /tmp/tofu-state-after.txt
+   diff -u /tmp/tofu-state-before.txt /tmp/tofu-state-after.txt   # empty
+   ./scripts/tofu-cloudflare.sh plan -no-color | tail -20          # no changes
+   ```
+
+   A non-empty diff or a plan that proposes a create means the migration did not
+   carry the state: restore `tofu/terraform.tfstate` from step 2 and do not
+   continue.
+
+5. Remove the local copies so nothing can plan from them, then confirm CI reads
+   the same state. Dispatch `tofu-apply` with `apply` left false and check that
+   its plan is empty:
+
+   ```sh
+   rm tofu/terraform.tfstate tofu/terraform.tfstate.backup
+   gh workflow run tofu-apply --repo smores56/homelabs-platform
+   gh run watch --repo smores56/homelabs-platform
+   ```
+
+   The workflow's summary shows the plan. From here on, an apply is
+   `workflow_dispatch` with `apply: true` after a reviewed plan-only run — never a
+   push. `tofu-plan.yml` on main is the drift check.
+
+6. Rollback, if the bucket has to be abandoned: `tofu init -migrate-state` with
+   `backend.tf` reverted to the local default copies the object back into
+   `tofu/terraform.tfstate`. Do that before deleting the bucket, not after.
 
 ## 15. Create the cluster tunnel
 
@@ -1310,3 +1387,172 @@ construction: there is no Access login for GitHub.
    Both fail before the agent sees anything. The receiver has no rate limit of
    its own; a body over 1 MiB is refused with `413` and repeats within 6 h are
    acknowledged without a second enqueue.
+## 28. Give each tree its restic Secret, then run the drill
+
+Four trees now back themselves up from the cluster (`clusters/homelab/data/*/restic-backup.yaml`,
+SDLC #619): `immich`, `navidrome`, `calibre` and `graphiti`, each with its own
+CronJob, its own claim mounted read-only and its own repository at
+`s3:https://<account>.r2.cloudflarestorage.com/restic-backup/trees/<tree>`. The
+host's `restic-backups-r2.timer` keeps running and stays the owner of every tree
+until that tree's drill below passes; nothing in this repository stops it.
+
+1. Create one SOPS Secret per namespace. The R2 key pair is the host's existing
+   one (`r2-access-key-id` / `r2-secret-access-key` in nix-config's
+   `secrets/smortress.yaml`); `restic-password` is the password the host's
+   repository already uses, so the operator can read both repositories with the
+   same key. Encrypt the file with the operator's age key and never commit it,
+   then:
+
+   ```sh
+   for ns in immich navidrome calibre graphiti; do
+     kubectl -n "$ns" create secret generic restic-backup-sops \
+       --from-file=r2-access-key-id --from-file=r2-secret-access-key \
+       --from-file=restic-password
+   done
+   ```
+
+   `ExternalSecret` `restic-credentials` in each namespace projects it with the
+   key names the jobs read (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`,
+   `RESTIC_PASSWORD`). The `platform-secrets-eso` stage must be resumed first
+   (step 8), or the two CronJobs stay unschedulable on a missing Secret.
+
+2. Run the preflight for each tree. It proves read access as uid 1000, creates
+   the repository if it does not exist yet, then reads back a metadata check and
+   100 MiB of data:
+
+   ```sh
+   for ns in immich navidrome calibre graphiti; do
+     kubectl -n "$ns" create job --from=cronjob/restic-preflight "preflight-$(date +%s)"
+   done
+   kubectl -n immich get jobs -w        # then the other three namespaces
+   kubectl -n immich logs job/<name>
+   ```
+
+   A job that lists unreadable paths means that tree is not yet safe as uid 1000:
+   leave it on the host timer and fix the ownership on the share
+   (`sudo chown -R smores:users /var/lib/data/<tree>` from the host, which is the
+   uid 1000 mapping). Do not `chmod -R` a live database directory.
+
+3. Run one backup and confirm the snapshot exists:
+
+   ```sh
+   kubectl -n immich create job --from=cronjob/restic-backup "restic-$(date +%s)"
+   kubectl -n immich logs job/<name>
+   kubectl -n immich get cronjob restic-backup -o jsonpath='{.status.lastSuccessfulTime}{"\n"}'
+   ```
+
+4. Run the drill from a workstation. The exact commands are the `drill` key of
+   the tree's `restic-contract` ConfigMap, and the preflight prints the same text
+   on every run, so the two cannot disagree:
+
+   ```sh
+   kubectl -n immich get configmap restic-contract -o jsonpath='{.data.drill}{"\n"}'
+   ```
+
+   The drill passes when `restic snapshots --host cluster-<tree>` shows a
+   snapshot from the last night and the restored file opens. Only then does that
+   tree leave the host timer — a separate change in nix-config that removes one
+   tree from `restic-backups-r2`'s `paths`/`backupPrepareCommand`. A tree that
+   fails the drill stays host-side; the cluster job may keep running beside it,
+   since the two write different repositories.
+
+5. Re-pin the restic image when upgrading. The job pins the 0.18.1 manifest list;
+   the commands are the same as step 9:
+
+   ```sh
+   crane digest docker.io/restic/restic:0.18.1
+   ```
+
+The failure signal for a tree is the Alertmanager route in step 29
+(`ResticBackupStale` fires when no successful run has been recorded for 26 hours)
+— check `kubectl -n <ns> get jobs` and the Job's log before assuming the share is
+the problem.
+
+## 29. Create the Alertmanager mail token and send a test alert
+
+Cluster alerts go Prometheus → Alertmanager → `mailrelay` → Cloudflare's Email
+Service API (`clusters/homelab/observability/alertmanager/` and `mailrelay/`).
+The relay needs one credential; the sender, recipient and account tag are in the
+Deployment as identifiers.
+
+1. Mint a Cloudflare API token with **Email Sending: Edit** on the account, on the
+   same onboarding as the host's `cloudflare-email` sender (the from address must
+   be on `send.sammohr.dev`, and the recipient must be verified there). Store it:
+
+   ```sh
+   kubectl -n observability create secret generic alertmanager-mail-sops \
+     --from-literal=token=<token>
+   ```
+
+   Do not commit that file. `ExternalSecret` `mailrelay-token` projects it, and the
+   `platform-observability-secrets` stage must be resumed first (step 8).
+
+2. Confirm the whole chain before trusting it:
+
+   ```sh
+   kubectl -n observability get deploy alertmanager mailrelay
+   kubectl -n observability port-forward svc/alertmanager 9093:9093 &
+   curl -s -XPOST localhost:9093/api/v2/alerts -H 'Content-Type: application/json' -d '[{
+     "labels": {"alertname": "MailPathTest", "severity": "warning", "namespace": "observability"},
+     "annotations": {"summary": "manual test of the alert path"}}]'
+   kubectl -n observability logs deploy/mailrelay --tail=20
+   ```
+
+   The relay log shows `"POST /alert HTTP/1.1" 200`; a 502 means Cloudflare
+   rejected the call (bad token, unverified recipient, wrong from domain) and the
+   response body names which. The test alert resolves after
+   `global.resolve_timeout` (5m) and sends a second, resolved mail.
+
+3. Only after the test mail arrives may a moved unit lose its `cloudflare-email@`
+   hook. Host-only units keep it: there is no host → cluster ingest yet.
+
+4. Rotating the token is: replace `alertmanager-mail-sops`, wait for the 1h ESO
+   refresh (or delete `mailrelay-token`), then revoke the old token. The relay
+   reads the mounted file per delivery, so nothing restarts.
+
+## 30. Cut `memory.sammohr.dev` over to the cluster tunnel
+
+The wrapper runs in `graphiti`; its route is now platform config
+(`memory = "http://memory-mcp.graphiti.svc.cluster.local:8182"` in
+`tofu/cluster.tf`), and the platform admits the tunnel in
+`memory-mcp-from-ingress`. This step is the gate before the host side loses its
+copy; deleting `memory-forward` itself is the nix-config lane's change, only
+after this passes.
+
+1. Apply the zone: `./scripts/tofu-cloudflare.sh plan` must show exactly one new
+   DNS record for `memory`, a proxied CNAME to the cluster tunnel, and the cluster
+   tunnel's ingress list gaining the
+   `memory.sammohr.dev -> http://memory-mcp.graphiti.svc.cluster.local:8182` rule.
+   The host tunnel's own `memory` rule lives in nix-config (`web-proxy.nix`), not
+   here, so it is removed in the host lane's commit — until then it is simply
+   unreachable, because the DNS record now points at the other tunnel.
+
+2. Apply the network half and confirm the flow exists:
+
+   ```sh
+   cluster-kubectl -n graphiti get networkpolicy memory-mcp-from-ingress
+   cluster-kubectl -n graphiti get networkpolicy memory-mcp-nodeport-from-host   # kept
+   ```
+
+3. Probe through Access with a service token (the same token maki uses):
+
+   ```sh
+   curl -sS -o /dev/null -w '%{http_code}\n' \
+     -H "CF-Access-Client-Id: $ACCESS_CLIENT_ID" \
+     -H "CF-Access-Client-Secret: $ACCESS_CLIENT_SECRET" \
+     https://memory.sammohr.dev/health          # expect 200
+   ```
+
+   A 403 with the Cloudflare error page means the Access application does not
+   admit the token; a 502 means the tunnel has no healthy origin (check
+   `cluster-kubectl -n graphiti get endpoints memory-mcp`); a 404 means the
+   ingress rule was not applied.
+
+4. Only after the 200: repoint the host clients (`maki`'s shim and the memory
+   CLI) at `https://memory.sammohr.dev/mcp` and delete `memory-forward.nix` in
+   nix-config. Until then both paths run, and `memory-forward` keeps loopback
+   working.
+
+5. Rollback before step 4 is removing `memory` from `local.cluster_ingress` (or
+   pinning `cluster_hosts` without it) and re-adding the host tunnel route; the
+   wrapper and its data are untouched by that.

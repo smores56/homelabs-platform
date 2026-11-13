@@ -14,3 +14,6 @@ resources:
   - services.yaml
   - ingress.yaml
   - dump-cronjob.yaml
+  - restic-contract.yaml
+  - restic-backup.yaml
+  - restic-preflight.yaml

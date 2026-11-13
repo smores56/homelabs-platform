@@ -8,9 +8,10 @@ namespace: graphiti
 # which ESO projects from the SOPS contract (platform/secrets/eso).
 #
 # The MCP wrapper (auth, project groups, reconciler) also runs here since the
-# cutover: its clients reach it from the host only (tap NodePort), and
-# memory.sammohr.dev stays on the host tunnel, so this namespace publishes no
-# hostname.
+# cutover. Its clients reach it two ways: the host's tap NodePort (kept until the
+# host forwarder is retired) and, since SDLC #617, the cluster tunnel via
+# `memory.sammohr.dev`. The route is Cloudflare-side (tofu/cluster.tf), so this
+# namespace still publishes no Ingress object of its own.
 resources:
   - storage.yaml
   - configmap.yaml
@@ -20,3 +21,6 @@ resources:
   - memory-mcp.yaml
   - memory-export-cronjob.yaml
   - dump-cronjob.yaml
+  - restic-contract.yaml
+  - restic-backup.yaml
+  - restic-preflight.yaml
