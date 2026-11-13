@@ -35,8 +35,8 @@ spec:
         !has(object.metadata.labels)
         || !('app.kubernetes.io/name' in object.metadata.labels)
         || object.metadata.labels['app.kubernetes.io/name'] != 'nanobot'
-        || variables.containers.all(c, c.image.startsWith('ghcr.io/smores56/homelabs-apps/nanobot@sha256:'))
-      message: "nanobot pods must run ghcr.io/smores56/homelabs-apps/nanobot pinned by digest"
+        || variables.containers.all(c, c.image.startsWith('ghcr.io/smores56/nix-config/nanobot@sha256:'))
+      message: "nanobot pods must run ghcr.io/smores56/nix-config/nanobot pinned by digest"
 ---
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicyBinding

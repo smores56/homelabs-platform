@@ -6,7 +6,7 @@ tenant-pod-good.yaml	tenant-apps	allow	-	-
 tenant-pod-no-gvisor.yaml	tenant-apps	deny	tenant-gvisor	spec.runtimeClassName to gvisor
 tenant-pod-image-tag.yaml	tenant-apps	deny	tenant-images	pinned by @sha256 digest
 tenant-pod-image-no-digest.yaml	tenant-apps	deny	tenant-images	pinned by @sha256 digest
-tenant-pod-image-foreign.yaml	tenant-apps	deny	tenant-images	must run ghcr.io/smores56/homelabs-apps/nanobot pinned by digest
+tenant-pod-image-foreign.yaml	tenant-apps	deny	tenant-images	must run ghcr.io/smores56/nix-config/nanobot pinned by digest
 tenant-pod-hostpath.yaml	tenant-apps	deny	no-host-access	hostPath volumes are not allowed
 tenant-pod-hostnetwork.yaml	tenant-apps	deny	no-host-access	hostNetwork is not allowed
 tenant-pod-privileged.yaml	tenant-apps	deny	no-host-access	privileged containers are not allowed

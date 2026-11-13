@@ -19,7 +19,7 @@ spec:
       type: RuntimeDefault
   containers:
     - name: nanobot
-      image: ghcr.io/smores56/homelabs-apps/nanobot@sha256:0000000000000000000000000000000000000000000000000000000000000000
+      image: ghcr.io/smores56/nix-config/nanobot@sha256:0000000000000000000000000000000000000000000000000000000000000000
       securityContext:
         allowPrivilegeEscalation: false
         readOnlyRootFilesystem: true
