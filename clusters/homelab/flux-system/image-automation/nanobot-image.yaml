@@ -36,6 +36,8 @@ spec:
   # Without digest reflection the setter has no digest to write and reports
   # "no change", so the policy must publish it.
   digestReflectionPolicy: Always
+  # The CRD requires an interval whenever digest reflection is enabled.
+  interval: 5m
   policy:
     numerical:
       order: asc
