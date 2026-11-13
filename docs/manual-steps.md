@@ -400,14 +400,19 @@ Then materialise the Secrets (SOPS contract names: `*-sops`; the broker's
 
 ```sh
 kubectl -n graphiti create secret generic neuralwatt-api-key-sops \
-  --from-file=api-key=<(sops -d neuralwatt-api-key.yaml | yq -r .key)
+  --from-file=api-key=<(sops -d neuralwatt-api-key.yaml | yq -r .key | tr -d '\n')
 kubectl -n ingress create secret generic cloudflare-tunnel-token-sops \
-  --from-file=tunnel-token=<(sops -d cloudflare-tunnel-token.yaml | yq -r .token)
+  --from-file=tunnel-token=<(sops -d cloudflare-tunnel-token.yaml | yq -r .token | tr -d '\n')
 kubectl -n calibre create secret generic opdshelf-admin-password-sops \
-  --from-file=password=<(sops -d opdshelf-admin-password.yaml | yq -r .password)
+  --from-file=password=<(sops -d opdshelf-admin-password.yaml | yq -r .password | tr -d '\n')
 kubectl -n graphiti create secret generic memory-mcp-token-sops \
-  --from-file=memory-mcp-token=<(sops -d memory-mcp-token.yaml | yq -r .token)
+  --from-file=memory-mcp-token=<(sops -d memory-mcp-token.yaml | yq -r .token | tr -d '\n')
 ```
+
+`tr -d '\n'` is load-bearing: `yq -r` ends its output with a newline and
+`--from-file` stores it verbatim, which makes an `Authorization` header or a
+Basic-auth password invalid. The graphiti renderer also strips line endings
+defensively.
 
 Resume the ESO stage (step 8) and confirm the projections, which is what the
 Deployments actually read:
@@ -875,7 +880,7 @@ the script refuses a classic `ghp_` token at start.
    ```sh
    sops -e -i github-backup-read-pat.yaml
    kubectl -n platform create secret generic github-backup-read-pat-sops \
-     --from-file=token=<(sops -d github-backup-read-pat.yaml | yq -r .token)
+     --from-file=token=<(sops -d github-backup-read-pat.yaml | yq -r .token | tr -d '\n')
    ```
 
 3. Resume the ESO stage (step 8) if it is not already running, then verify the

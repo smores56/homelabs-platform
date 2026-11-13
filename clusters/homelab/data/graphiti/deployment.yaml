@@ -48,11 +48,16 @@ spec:
           args:
             - |
               set -eu
+              # `kubectl create secret --from-file=<(yq -r .key)` keeps yq's
+              # trailing newline, and a header value cannot contain one. Strip
+              # line endings here so the rendered config is valid whatever the
+              # Secret holds.
+              key=$(printf '%s' "$NEURALWATT_API_KEY" | tr -d '\r\n')
               # The key is provider-minted and may contain any punctuation, so no
               # sed delimiter is safe; shell pattern substitution treats the value
               # as literal text.
               while IFS= read -r line || [ -n "$line" ]; do
-                printf '%s\n' "${line//__NEURALWATT_API_KEY__/$NEURALWATT_API_KEY}"
+                printf '%s\n' "${line//__NEURALWATT_API_KEY__/$key}"
               done < /tmpl/config.yaml.tmpl > /etc/graphiti/config.yaml
           securityContext:
             allowPrivilegeEscalation: false
