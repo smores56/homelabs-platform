@@ -10,7 +10,7 @@ from __future__ import annotations
 from typing import Mapping, Protocol
 
 from .config import Enrollment
-from .github_app import GithubAppTokens
+from .github_app import CredentialUnavailable, GithubAppTokens
 
 
 class Credentials(Protocol):
@@ -49,9 +49,10 @@ class AppCredentials:
         scope = enrollment.app
         if scope is None:
             return self._static.value(enrollment)
-        return self._tokens.token(
-            self._installations[scope.installation], scope.repositories, dict(scope.permissions)
-        )
+        installation = self._installations.get(scope.installation)
+        if installation is None:
+            raise CredentialUnavailable(f"github-app: no id for {scope.installation}")
+        return self._tokens.token(installation, scope.repositories, dict(scope.permissions))
 
     def values(self) -> dict[str, str]:
         merged = self._static.values()

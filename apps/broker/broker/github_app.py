@@ -69,7 +69,10 @@ def _post(url: str, jwt: str, body: Mapping[str, object]) -> tuple[int, object]:
         with urllib.request.urlopen(request, timeout=15) as response:
             return response.status, json.loads(response.read() or b"{}")
     except urllib.error.HTTPError as exc:
-        return exc.code, {}
+        try:
+            return exc.code, json.loads(exc.read() or b"{}")
+        except (OSError, ValueError):
+            return exc.code, {}
     except (OSError, ValueError):
         return 0, {}
 
@@ -121,13 +124,16 @@ class GithubAppTokens:
             f"{API}/app/installations/{installation}/access_tokens", self.jwt(), body
         )
         if status not in (200, 201) or not isinstance(reply, dict):
-            raise CredentialUnavailable(f"github-app: installation {installation} token request failed ({status})")
+            message = str(reply.get("message", ""))[:120] if isinstance(reply, dict) else ""
+            raise CredentialUnavailable(
+                f"github-app: installation {installation} token request failed ({status}) {message}".rstrip()
+            )
         token = reply.get("token")
         expires = reply.get("expires_at")
         if not isinstance(token, str) or not token or not isinstance(expires, str):
             raise CredentialUnavailable(f"github-app: installation {installation} returned no token")
         try:
-            expires_at = datetime.strptime(expires, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc).timestamp()
+            expires_at = datetime.fromisoformat(expires.replace("Z", "+00:00")).timestamp()
         except ValueError:
             raise CredentialUnavailable(f"github-app: installation {installation} returned a bad expiry") from None
         with self._lock:

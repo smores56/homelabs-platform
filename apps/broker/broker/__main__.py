@@ -31,11 +31,15 @@ def run(argv: list[str] | None = None) -> int:
         secrets = load_secrets(config.hosts, directory)
         signing = load_app_signing(config, directory)
         if signing is not None:
-            credentials = AppCredentials(
-                secrets,
-                GithubAppTokens(signing.app_id, signing.private_key),
-                signing.installations,
-            )
+            tokens = GithubAppTokens(signing.app_id, signing.private_key)
+            # Sign once now: a bad PEM or a missing `cryptography` must fail the
+            # pod, not every later request with a 503 behind a green /healthz.
+            try:
+                tokens.jwt()
+            except Exception as exc:
+                print(f"broker: github-app key cannot sign ({type(exc).__name__})", file=sys.stderr)
+                return 2
+            credentials = AppCredentials(secrets, tokens, signing.installations)
         else:
             credentials = StaticCredentials(secrets)
     except ConfigError as exc:

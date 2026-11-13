@@ -274,7 +274,7 @@ until that image is published and pinned (its `docs/manual-steps.md`, step 3).
 ## 10. Create the broker credential Secret
 
 The broker is platform-owned (`clusters/homelab/broker/`); this step supplies
-seven files, none of which enters git. Static enrollments name three of them
+six files, none of which enters git. Static enrollments name three of them
 (`keys` in `clusters/homelab/broker/sops-contract.yaml`); the GitHub App
 enrollments add the app id, the private key and one installation id per
 installation (`app_keys`). **Step 1 must be finished first.**
@@ -313,16 +313,21 @@ credential. Verify the three credential classes:
 
 ```sh
 sudo cluster-kubectl -n broker exec deploy/broker -- python -c '
-import urllib.request
+import urllib.error, urllib.request
 for path in ("healthz", "loki/loki/api/v1/labels", "github-platform/rate_limit"):
-    r = urllib.request.urlopen(f"http://127.0.0.1:8080/{path}")
-    print(path, r.status, r.read(200))
+    try:
+        r = urllib.request.urlopen(f"http://127.0.0.1:8080/{path}")
+        print(path, r.status, r.read(120))
+    except urllib.error.HTTPError as exc:
+        print(path, exc.code, exc.read(120))
 '
 ```
 
 Expected: `200`; `200` with the Loki gateway's `{"status":"success"...}`; and
-`200` with the installation's rate limit. A `401` on `rate_limit` means the app
-id, private key or installation id is wrong.
+`200` with the installation's rate limit. A `503` (`credential_unavailable`) on
+`rate_limit` means the app id, private key or installation id is wrong: the
+broker refuses rather than forwarding without a credential, so a 401 never
+comes from here.
 
 Rotation: generate a new key in the app settings, delete the Secret, repeat this
 step (credentials are read once at start). `github-installation-id` is shared by
@@ -591,8 +596,11 @@ Replace the `image:` line with
 `ghcr.io/smores56/homelabs-platform/broker@sha256:<digest>`, delete the
 `PLACEHOLDER DIGEST` comment, and run `scripts/kustomize-build-all.sh` and
 `tests/policies/check.sh` before pushing. The Dockerfile's base tag
-(`python:3.13-slim`) should be replaced with its digest in the same change. The
-image installs one pinned dependency, `cryptography==44.0.0` (RS256 JWT
+(`python:3.13-slim`) should be replaced with its digest in the same change. Normally `.github/workflows/publish-broker.yml` does all of this on a push to
+`main` that touches `apps/broker/**` (or on manual dispatch): it builds, pushes
+`sha-<first 12 of the commit>`, and prints both the tag and the digest in the
+run summary. Use the manual commands above only when Actions is unavailable.
+The image installs one pinned dependency, `cryptography==44.0.0` (RS256 JWT
 signing); bump it deliberately with the image digest.
 
 Verify: `kubectl -n broker get pods` shows two `Running` replicas on

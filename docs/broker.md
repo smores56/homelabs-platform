@@ -59,7 +59,7 @@ GitHub App enrollments name the app id, private key and installation id files
 instead, and the broker mints a short-lived, scoped installation token for
 each request's logical host (see "GitHub App identity" below).
 
-| Logical host | Real endpoint | Injection | Secret key | Private allowed |
+| Logical host | Real endpoint | Injection | Credential | Private allowed |
 | --- | --- | --- | --- | --- |
 | `neuralwatt` | `https://api.neuralwatt.com:443` | `Authorization: Bearer` | `neuralwatt-api-key` | no |
 | `github-apps` | `https://github.com:443` | `Authorization: Basic x-access-token:<token>` | app: `homelabs-apps`, `contents: write` | no |
@@ -291,7 +291,7 @@ Live-gated (need the cluster, the real tokens and the operator):
 
 - publishing the broker image and replacing the digest placeholder;
 - creating `broker-credentials` from SOPS (manual steps);
-- the broker's first real call to each logical host (GitHub push, fork PR,
+- the broker's first real call to each logical host (GitHub push, platform PR,
   Neuralwatt, TinyFish, Loki);
 - tunnel/Access routing and the `nanobot.sammohr.dev` retirement;
 - NetworkPolicy and gVisor enforcement (no CNI/kubelet on the test bench).

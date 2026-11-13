@@ -1,8 +1,9 @@
 # GitHub Packages accepts only a classic PAT or this workflow's GITHUB_TOKEN —
 # never a GitHub App installation token. So the package credential is
-# `packages: write` on the job token; the agent uses its app identity only to
-# trigger or read the run (Actions: read/write), and never holds a package
-# credential. Publishing links the package to this repository, which is what
+# `packages: write` on the job token, and the app never holds one. The app has
+# only actions:read and no enrollment mints an actions scope, so the digest in
+# the summary is transcribed by a human (or by a future Actions: read
+# enrollment). Publishing links the package to this repository, which is what
 # lets the cluster pull it by digest.
 name: publish-broker
 
@@ -30,15 +31,17 @@ jobs:
       - name: Build, push, and print the digest
         env:
           IMAGE: ghcr.io/smores56/homelabs-platform/broker
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           tag="sha-${GITHUB_SHA::12}"
-          printf '%s' "${{ github.token }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
           docker build \
             --label "org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}" \
             -t "$IMAGE:$tag" apps/broker
           docker push "$IMAGE:$tag"
           digest=$(docker inspect --format '{{index .RepoDigests 0}}' "$IMAGE:$tag" | cut -d@ -f2)
+          [[ $digest =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "no digest in RepoDigests"; exit 1; }
           {
             echo "### Broker image"
             echo
