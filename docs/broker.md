@@ -74,8 +74,11 @@ each request's logical host (see "GitHub App identity" below).
 | `github-platform` | `https://api.github.com:443` | `Authorization: Bearer` | app: `homelabs-platform`, `contents: write`, `pull_requests: write` | no |
 | `github-agent-push` | `https://github.com:443` | `Authorization: Basic x-access-token:<token>` | app: `nix-config`, `kanbei`, `contents: write`, `workflows: write` | no |
 | `github-agent` | `https://api.github.com:443` | `Authorization: Bearer` | app: `nix-config`, `kanbei`, `contents: read`, `pull_requests: write` | no |
+| `github-sdlc-git` | `https://github.com:443` | `Authorization: Basic x-access-token:<token>` | app: `sdlc`, `contents: write` | no |
+| `github-sdlc` | `https://api.github.com:443` | `Authorization: Bearer` | app: `sdlc`, `issues: write`, `metadata: read` | no |
 | `tinyfish` | `https://api.search.tinyfish.ai:443` | `X-Api-Key: <token>` | `tinyfish-api-key` | no |
 | `loki` | `http://loki-gateway.observability.svc.cluster.local:3100` | `Authorization: Bearer`, fixed `X-Scope-OrgID: data` | `loki-gateway-token` | yes |
+| `memory` | `http://memory-mcp.graphiti.svc.cluster.local:8182` | `Authorization: Bearer` | `memory-mcp-token` (optional) | yes |
 | `notify` | `https://notify.invalid:443` (placeholder) | `Authorization: Bearer` | `notify-token` | no |
 | `self` | `http://agent-control.tenant-apps.svc.cluster.local:8081` | none | — | yes |
 | `status` | `http://status-exporter.observability.svc.cluster.local:9101` | none (metrics text) | — | yes |
@@ -113,6 +116,28 @@ the workflow file, so without the permission the agent cannot land a CI change i
 proposed. It is not a wider reach into the repositories: the same rulesets bound
 it, and a workflow change still needs a reviewed pull request on `main`.
 
+`github-sdlc-git` and `github-sdlc` (SDLC #629) are that pair for the personal
+work registry `smores56/sdlc`: git transport on `github.com`, REST on
+`api.github.com`, both scoped to that one repository so the agent can clone,
+push an `agent/*` branch and open the registry PR. The git half holds
+`contents: write`; the API half holds `issues: write` and `metadata: read`,
+because the registry edits issues and nothing else, and GitHub requires
+`metadata: read` on every installation token. `sdlc` must be in the app
+installation before these hosts work (docs/manual-steps.md step 1, item 2): a
+repository named here but absent from the installation fails the whole host with
+a 422.
+
+`memory` (SDLC #631) is the graphiti memory wrapper
+(`memory-mcp.graphiti.svc.cluster.local:8182`), the same MCP endpoint
+`memory.sammohr.dev` fronts, reached in-cluster instead of through the tunnel.
+It is plain HTTP with `allow_private: true` — the documented private exception —
+and injects `Authorization: Bearer <memory-mcp-token>`. The value is the one the
+wrapper already uses, projected from the graphiti Secret into
+`broker-credentials` by docs/manual-steps.md step 32. The enrollment sets
+`optional_secret`, so until that file exists the host answers
+`credential_unavailable` (503) and the rest of the broker is unaffected; a
+request is never forwarded without the credential.
+
 Every repository named on a host goes into a single token request, so one name
 that is not in the app installation fails the whole host with a 422. Add a
 repository only after confirming it is in the installation.
@@ -135,11 +160,11 @@ broker forwards whatever paths agent-control serves; the service, its RBAC and
 its own ingress policy are owned by the agent-control change. The namespace
 boundary is the caller authentication, exactly as for the rest of the broker.
 
-The private enrollments (`loki`, `status`) are the only exception to the TLS
-rule: they never leave the cluster network and their credentials are already
-cluster-local. A credentialed enrollment over plain HTTP is otherwise rejected
-at load time. `self` carries no credential, so the exception does not apply to
-it.
+The private enrollments (`loki`, `memory`, `status`) are the only exception to
+the TLS rule: they never leave the cluster network and their credentials are
+already cluster-local. A credentialed enrollment over plain HTTP is otherwise
+rejected at load time. `self` carries no credential, so the exception does not
+apply to it.
 
 ## Per-host request predicates
 
@@ -268,9 +293,11 @@ redirect refusal, no credential stripping, no redaction.
   non-global IPv4 range in `except`, and the IPv6 equivalents), plus TCP 3100
   to `loki-gateway` and 9101 to `status-exporter` (`observability/network/`),
   plus TCP 8081 to `tenant-apps` for the `self` host
-  (`broker/egress-agent-control.yaml`). The broker namespace is an egress
-  allowlist: an unlisted destination is dropped by the CNI before the broker's
-  own check sees it.
+  (`broker/egress-agent-control.yaml`) and 8182 to `graphiti/memory-mcp` for the
+  `memory` host (`broker/egress-memory.yaml`, paired with
+  `platform/network/data-flows.yaml`'s `memory-mcp-from-broker`). The broker
+  namespace is an egress allowlist: an unlisted destination is dropped by the
+  CNI before the broker's own check sees it.
 - `broker` ingress: tenant tier on 8080 only (`platform/network/tenant-broker.yaml`).
 - DNS: `kube-system` on 53 (`platform/network/dns-egress.yaml`).
 - Tunnel: `ingress/cloudflared` to `tenant-apps/nanobot` on 8080 only
@@ -426,7 +453,8 @@ Live-gated (need the cluster, the real tokens and the operator):
 - publishing the broker image and replacing the digest placeholder;
 - creating `broker-credentials` from SOPS (manual steps);
 - the broker's first real call to each logical host (GitHub push, platform PR,
-  Neuralwatt, TinyFish, Loki, notify, agent-control);
+  the `sdlc` registry push/issues, Neuralwatt, TinyFish, Loki, memory, notify,
+  agent-control);
 - the notify provider decision and endpoint (the enrollment is a placeholder);
 - agent-control's Service, RBAC and tenant-side ingress
   (`tenant-apps` -> port 8081);

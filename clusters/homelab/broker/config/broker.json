@@ -99,6 +99,40 @@
         "kind": "bearer"
       }
     },
+    "github-sdlc-git": {
+      "scheme": "https",
+      "host": "github.com",
+      "port": 443,
+      "allow_private": false,
+      "github_app": {
+        "installation": "github-installation-id",
+        "repositories": ["sdlc"],
+        "permissions": {
+          "contents": "write"
+        }
+      },
+      "inject": {
+        "kind": "basic",
+        "username": "x-access-token"
+      }
+    },
+    "github-sdlc": {
+      "scheme": "https",
+      "host": "api.github.com",
+      "port": 443,
+      "allow_private": false,
+      "github_app": {
+        "installation": "github-installation-id",
+        "repositories": ["sdlc"],
+        "permissions": {
+          "issues": "write",
+          "metadata": "read"
+        }
+      },
+      "inject": {
+        "kind": "bearer"
+      }
+    },
     "tinyfish": {
       "scheme": "https",
       "host": "api.search.tinyfish.ai",
@@ -135,6 +169,17 @@
       },
       "headers": {
         "X-Scope-OrgID": "data"
+      }
+    },
+    "memory": {
+      "scheme": "http",
+      "host": "memory-mcp.graphiti.svc.cluster.local",
+      "port": 8182,
+      "allow_private": true,
+      "secret": "memory-mcp-token",
+      "optional_secret": true,
+      "inject": {
+        "kind": "bearer"
       }
     },
     "self": {
