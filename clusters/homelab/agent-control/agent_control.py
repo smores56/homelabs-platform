@@ -3,18 +3,20 @@
 
 The agent (nanobot) runs without a service-account token and has no API route
 (docs/tenancy.md). This process is the only thing that talks to the Kubernetes
-API on its behalf, and it answers nine fixed questions — the agent's own state,
-its logs, its events, a pod-template restart, and a read-only view of pods,
-events, nodes, workload metadata and Flux Kustomizations. There is no path
-parameter, no proxy and no generic forwarding: a route is a constant in ROUTES,
-and the API paths below are built from constants or from names the API itself
-returned.
+API on its behalf, and it answers ten fixed questions — the agent's own state,
+its logs, its events, a pod-template restart, a dispatch of the trusted image
+workflow, and a read-only view of pods, events, nodes, workload metadata and
+Flux Kustomizations. There is no path parameter, no proxy and no generic
+forwarding: a route is a constant in ROUTES, and the API paths below are built
+from constants or from names the API itself returned.
 
 The identity is deliberately narrow: a Role in `tenant-apps` for its own pods'
 logs/events and one `patch` on `deployments/nanobot`, plus a read-only
 ClusterRole for the cluster picture. Secrets and ConfigMaps are refused twice —
 absent from the RBAC and rejected by `api_path_allowed` before a request is
-built.
+built. The one outbound call outside the cluster is a GitHub Actions dispatch
+to a constant repository/workflow path, with a token read from a mounted file
+and never logged.
 
 Standard library only: the image is a stock python slim, there is no build step,
 and the ConfigMap is generated from this file by kustomize.
@@ -48,6 +50,18 @@ MAX_TAIL = 500
 MAX_EVENTS = 120
 RESTART_ANNOTATION = "homelabs.dev/restart-requested-at"
 
+# The one outbound GitHub call. Repository, workflow and ref are constants: a
+# request cannot name another workflow, another ref or another endpoint.
+GITHUB_API_BASE = "https://api.github.com"
+GITHUB_API_VERSION = "2022-11-28"
+BUILD_REPO = "smores56/homelabs-platform"
+BUILD_WORKFLOW = "publish-nanobot.yml"
+BUILD_REF = "main"
+BUILD_TOKEN_FILE = "/run/secrets/build-token"
+BUILD_DISPATCH_PATH = (
+    f"/repos/{BUILD_REPO}/actions/workflows/{BUILD_WORKFLOW}/dispatches"
+)
+
 # The response may only carry these labels: everything else on a pod is either
 # noise or an operator's private bookkeeping.
 POD_LABELS = ("app.kubernetes.io/name", "homelabs.dev/managed-by")
@@ -60,6 +74,7 @@ ROUTES: dict[str, frozenset[str]] = {
     "/self/logs": frozenset({"GET"}),
     "/self/events": frozenset({"GET"}),
     "/self/restart": frozenset({"POST"}),
+    "/self/build": frozenset({"POST"}),
     "/cluster/pods": frozenset({"GET"}),
     "/cluster/events": frozenset({"GET"}),
     "/cluster/nodes": frozenset({"GET"}),
@@ -68,12 +83,14 @@ ROUTES: dict[str, frozenset[str]] = {
 }
 
 # Route -> (Control method, success status). The restart is 202: the API server
-# accepted the patch, the new pod is not there yet.
+# accepted the patch, the new pod is not there yet. The build is 202 for the same
+# reason: GitHub accepted the dispatch, the run has not started.
 HANDLERS: dict[str, tuple[str, int]] = {
     "/self/status": ("self_status", 200),
     "/self/logs": ("self_logs", 200),
     "/self/events": ("self_events", 200),
     "/self/restart": ("self_restart", 202),
+    "/self/build": ("self_build", 202),
     "/cluster/pods": ("cluster_pods", 200),
     "/cluster/events": ("cluster_events", 200),
     "/cluster/nodes": ("cluster_nodes", 200),
@@ -98,6 +115,14 @@ _SAFE_SEGMENT = re.compile(r"^[A-Za-z0-9]([-A-Za-z0-9.]*[A-Za-z0-9])?$")
 
 class ApiError(Exception):
     """An upstream API failure; the handler answers 502 and audits the status."""
+
+    def __init__(self, message: str, upstream_status: int | None = None) -> None:
+        super().__init__(message)
+        self.upstream_status = upstream_status
+
+
+class BuildUnavailable(Exception):
+    """No dispatch token on disk: the handler answers 503, nothing is sent."""
 
 
 class ForbiddenPath(Exception):
@@ -420,14 +445,74 @@ class KubernetesClient:
         return json.loads(raw.decode("utf-8"))
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Refuse a redirect instead of following it to a second path."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ANN001
+        return None
+
+
+class GitHubClient:
+    """The service's only outbound call: dispatch the trusted image workflow.
+
+    The path, body and headers are constants; the token comes from a file so a
+    Secret can be mounted and rotated without the value ever reaching argv, the
+    environment or a log line. The file is read per dispatch, and a missing or
+    empty file raises BuildUnavailable before any request is built.
+    """
+
+    def __init__(self, token_file: str | None = None, base_url: str | None = None,
+                 timeout: float = 10.0) -> None:
+        self.token_file = token_file or os.environ.get("BUILD_TOKEN_FILE", BUILD_TOKEN_FILE)
+        self.base_url = (
+            base_url or os.environ.get("GITHUB_API_BASE", GITHUB_API_BASE)
+        ).rstrip("/")
+        self.timeout = timeout
+        self.opener = urllib.request.build_opener(_NoRedirect)
+
+    def _token(self) -> str:
+        try:
+            with open(self.token_file, encoding="utf-8") as handle:
+                token = handle.read().strip()
+        except OSError as exc:
+            raise BuildUnavailable(type(exc).__name__) from exc
+        if not token:
+            raise BuildUnavailable("empty token file")
+        return token
+
+    def dispatch(self) -> int:
+        """POST {"ref": "main"} and return GitHub's answer (204 on success)."""
+        headers = {
+            "Authorization": f"Bearer {self._token()}",
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": GITHUB_API_VERSION,
+            "Content-Type": "application/json",
+        }
+        request = urllib.request.Request(
+            self.base_url + BUILD_DISPATCH_PATH,
+            data=json.dumps({"ref": BUILD_REF}).encode("utf-8"),
+            method="POST",
+            headers=headers,
+        )
+        try:
+            with self.opener.open(request, timeout=self.timeout) as response:
+                return int(response.status)
+        except urllib.error.HTTPError as exc:
+            # Status only: the path is a constant and the response is not logged.
+            raise ApiError("dispatch rejected", upstream_status=exc.code) from exc
+        except (urllib.error.URLError, OSError, ValueError) as exc:
+            raise ApiError(f"dispatch failed: {type(exc).__name__}") from exc
+
+
 class Control:
-    """The nine answers, each built from constants and API-returned names."""
+    """The ten answers, each built from constants and API-returned names."""
 
     def __init__(self, client: Any, namespace: str = AGENT_NAMESPACE,
-                 deployment: str = AGENT_DEPLOYMENT) -> None:
+                 deployment: str = AGENT_DEPLOYMENT, build: Any = None) -> None:
         self.client = client
         self.namespace = namespace
         self.deployment_name = deployment
+        self.build = build if build is not None else GitHubClient()
 
     # -- paths are built here, never from a request parameter ----------------
     def _deployment_path(self) -> str:
@@ -516,6 +601,17 @@ class Control:
             "deployment": f"{self.namespace}/{self.deployment_name}",
             "annotation": RESTART_ANNOTATION,
             "value": stamp,
+        }
+
+    # -- build --------------------------------------------------------------
+    def self_build(self) -> dict:
+        """Dispatch the trusted image workflow; the token never leaves the client."""
+        upstream = self.build.dispatch()
+        return {
+            "repository": BUILD_REPO,
+            "workflow": BUILD_WORKFLOW,
+            "ref": BUILD_REF,
+            "upstreamStatus": upstream,
         }
 
     # -- cluster (read-only) -------------------------------------------------
@@ -615,9 +711,14 @@ class Handler(BaseHTTPRequestHandler):
                     result = getattr(self.control, name)()
                 status = success
                 payload = dict(result)
+        except BuildUnavailable:
+            status = 503
+            payload = {"error": "build_unavailable"}
         except ApiError as exc:
             status = 502
             payload = {"error": "upstream", "detail": str(exc)}
+            if exc.upstream_status is not None:
+                payload["upstreamStatus"] = exc.upstream_status
         except ForbiddenPath:
             # Only reachable through a bug: the client refused its own path.
             status = 500

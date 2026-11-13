@@ -292,7 +292,7 @@ eq "${control_image#python}" "$base_digest" \
   "agent-control runs the broker's pinned python base"
 eq "$(jq -r '.[] | select(.kind == "Service" and .metadata.name == "agent-control") | [.metadata.namespace, .spec.type, .spec.ports[0].port, .spec.ports[0].targetPort] | join(":")' "$work/control.json")" \
   "tenant-apps:ClusterIP:8081:http" "agent-control is a ClusterIP Service on 8081"
-# The HTTP surface is the nine routes in ROUTES. A TCP probe means no health
+# The HTTP surface is the ten routes in ROUTES. A TCP probe means no health
 # route can become a tenth, token-free endpoint.
 eq "$(jq -r "$control_pod | .containers[0] | [(.startupProbe.tcpSocket.port // \"none\"), (.readinessProbe.tcpSocket.port // \"none\"), (.livenessProbe.tcpSocket.port // \"none\")] | join(\",\")" "$work/control.json")" \
   "http,http,http" "agent-control probes are TCP sockets, not HTTP routes"
