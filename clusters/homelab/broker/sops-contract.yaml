@@ -18,7 +18,7 @@ data:
   keys: >-
     neuralwatt-api-key,tinyfish-api-key,loki-gateway-token
   app_keys: >-
-    github-app-id,github-app-private-key,github-apps-installation-id,github-platform-installation-id
+    github-app-id,github-app-private-key,github-installation-id
   source: >-
     broker-credentials.yaml, SOPS-encrypted with the flux-system age recipient;
     decrypt with `sops -d` and pipe each key into the Secret. Never commit the

@@ -19,7 +19,7 @@
       "port": 443,
       "allow_private": false,
       "github_app": {
-        "installation": "github-apps-installation-id",
+        "installation": "github-installation-id",
         "repositories": ["homelabs-apps"],
         "permissions": {
           "contents": "write"
@@ -36,7 +36,7 @@
       "port": 443,
       "allow_private": false,
       "github_app": {
-        "installation": "github-platform-installation-id",
+        "installation": "github-installation-id",
         "repositories": ["homelabs-platform"],
         "permissions": {
           "contents": "write"
@@ -53,7 +53,7 @@
       "port": 443,
       "allow_private": false,
       "github_app": {
-        "installation": "github-platform-installation-id",
+        "installation": "github-installation-id",
         "repositories": ["homelabs-platform"],
         "permissions": {
           "contents": "read",

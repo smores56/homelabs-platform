@@ -252,13 +252,15 @@ read` on the two repositories and is not the agent's identity.
 
 ### GitHub App identity
 
-The broker holds `smores56-homelabs-agent`'s private key and mints installation
+The broker holds `homelabs-agent`'s private key and mints installation
 tokens on demand (`apps/broker/broker/github_app.py`): an RS256 JWT
 (`iat` −60 s, `exp` +540 s, `iss` = app id) is exchanged at
 `POST /app/installations/{id}/access_tokens` with the enrollment's
 `repositories` and `permissions` subset. Tokens live one hour; the broker
 reuses one until 5 minutes before expiry, keyed by installation, repositories
-and permissions, and includes the live tokens in its redaction set. A minting
+and permissions, and includes the live tokens in its redaction set. One
+installation covers both repositories; the split between the three GitHub
+logical hosts is the requested scope, not a separate install. A minting
 failure is a `503` for that request — never a forward without a credential.
 
 The app's permissions are app-wide, so the per-host split above is enforced by

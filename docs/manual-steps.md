@@ -4,7 +4,7 @@ Everything here needs a human: account creation, 2FA, token issuance, and the
 one-time GitHub settings that `gh api` is allowed to change but an agent must
 not. Record the date and who ran it when it is done.
 
-## 1. Create the `smores56-homelabs-agent` GitHub App
+## 1. Create the `homelabs-agent` GitHub App
 
 The agent's GitHub identity is an app, not a user: installation tokens are
 short-lived, scoped per request by the broker, and revocable from the app's
@@ -18,8 +18,8 @@ gone; the remaining controls are that no repository-level secrets exist (only
 main-gated environment secrets), and the ruleset in item 3.
 
 1. Create the app at https://github.com/settings/apps/new:
-   - Name: `smores56-homelabs-agent` (its actor becomes
-     `smores56-homelabs-agent[bot]`).
+   - Name: `homelabs-agent` (its actor becomes
+     `homelabs-agent[bot]`).
    - Homepage: `https://github.com/smores56/homelabs-platform`.
    - Webhook: **inactive** (the broker polls; there is no endpoint for GitHub
      to deliver to, and the tunnel admits nothing from GitHub).
@@ -43,10 +43,12 @@ main-gated environment secrets), and the ruleset in item 3.
    - Where can this app be installed: **Only on this account**.
 2. Record the **App ID** from the app's settings page, generate a **private
    key** (downloads a `.pem`; keep it in the password manager), then install the
-   app on `smores56/homelabs-apps` and `smores56/homelabs-platform`. Record each
-   **installation ID** from the install URL (`/installations/<id>`). The app id,
-   key and installation ids reach the broker only as files (step 10); nothing is
-   committed.
+   app once on the `smores56` account with **both** `homelabs-apps` and
+   `homelabs-platform` selected (an installation is per account, not per
+   repository: one ID covers both, and the broker narrows each minted token to
+   one repository). Record the **installation ID** from the install URL
+   (`/installations/<id>`). The app id, key and installation id reach the broker
+   only as files (step 10); nothing is committed.
 3. Contain the identity to `agent/*`: Settings -> Rules -> Rulesets -> New
    branch ruleset:
    - Target: include by pattern `~ALL`, exclude by pattern `agent/*`.
@@ -133,7 +135,7 @@ to an environment that exists.
 
 Run the commands from `docs/runbook.md` section "Branch protection on main".
 They require the same admin token; `enforce_admins` is false so the owner can
-still push a bootstrap commit, while `smores56-homelabs-agent[bot]` and every
+still push a bootstrap commit, while `homelabs-agent[bot]` and every
 other identity are bound by PR review and the required checks.
 
 After applying, confirm the app cannot push to `main` (expected: `protected
@@ -266,8 +268,7 @@ TF=$(cat /run/secrets/tinyfish-api-key)
 LOKI=$(sudo cluster-kubectl -n observability get secret loki-gateway-token \
   -o jsonpath='{.data.password}' | base64 -d)
 read -rp 'App ID (digits): ' APP_ID
-read -rp 'homelabs-apps installation ID: ' APPS_INST
-read -rp 'homelabs-platform installation ID: ' PLATFORM_INST
+read -rp 'installation ID: ' INSTALL
 read -rsp 'private key path: ' KEY_PATH; echo
 
 # No value reaches the command line or a transcript.
@@ -277,10 +278,9 @@ printf '%s\n' "$NW" > "$tmp/neuralwatt-api-key"
 printf '%s\n' "$TF" > "$tmp/tinyfish-api-key"
 printf '%s\n' "$LOKI" > "$tmp/loki-gateway-token"
 printf '%s\n' "$APP_ID" > "$tmp/github-app-id"
-printf '%s\n' "$APPS_INST" > "$tmp/github-apps-installation-id"
-printf '%s\n' "$PLATFORM_INST" > "$tmp/github-platform-installation-id"
+printf '%s\n' "$INSTALL" > "$tmp/github-installation-id"
 install -m 0600 "$KEY_PATH" "$tmp/github-app-private-key"
-unset NW TF LOKI APP_ID APPS_INST PLATFORM_INST
+unset NW TF LOKI APP_ID INSTALL
 
 sudo cluster-kubectl -n broker create secret generic broker-credentials \
   --from-file="$tmp"
@@ -305,8 +305,8 @@ Expected: `200`; `200` with the Loki gateway's `{"status":"success"...}`; and
 id, private key or installation id is wrong.
 
 Rotation: generate a new key in the app settings, delete the Secret, repeat this
-step (credentials are read once at start). `github-platform-installation-id` is
-shared by the git-transport and REST enrollments.
+step (credentials are read once at start). `github-installation-id` is shared by
+all three GitHub enrollments; their difference is the minted scope.
 
 ## 11. Rotate the Loki gateway token
 
