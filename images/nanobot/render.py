@@ -40,6 +40,32 @@ def integer(spec: dict, key: str, label: str) -> int:
     return value
 
 
+def memory_mcp_url(broker_url: str) -> str:
+    """The memory MCP endpoint behind the broker's `memory` logical host."""
+    if not isinstance(broker_url, str) or not broker_url.startswith(("http://", "https://")):
+        fail(f"BROKER_URL must be an http(s) URL, got {broker_url!r}")
+    return f"{broker_url.rstrip('/')}/memory/mcp"
+
+
+def apply_memory_mcp(config: dict, broker_url: str | None) -> dict:
+    """Attach the memory MCP server to `config` when BROKER_URL is set.
+
+    The broker injects the graphiti bearer for the `memory` logical host, so no
+    credential is written here or mounted into the pod. An entry the operator
+    already declared wins: this only fills an absent slot. No I/O and no
+    environment reads, so it is unit-tested without nanobot installed.
+    """
+    if not broker_url:
+        return config
+    url = memory_mcp_url(broker_url)
+    servers = config.setdefault("tools", {}).setdefault("mcp_servers", {})
+    servers.setdefault(
+        "memory",
+        {"type": "streamableHttp", "url": url, "enabled_tools": ["*"]},
+    )
+    return config
+
+
 def main() -> int:
     config_dir = Path(os.environ.get("NANOBOT_CONFIG_DIR", "/etc/nanobot"))
     home = Path(os.environ.get("HOME", "/data/home"))
@@ -112,6 +138,8 @@ def main() -> int:
             "context_window_tokens": integer(spec, "context_window", model_id),
             "max_tokens": integer(spec, "max_output_tokens", model_id),
         }
+    # The memory MCP rides the broker, so the pod still holds no credential.
+    apply_memory_mcp(config, os.environ.get("BROKER_URL", "").strip())
     config_path.write_text(json.dumps(config, indent=2) + "\n")
 
     workspace = home / ".nanobot" / "workspace"
@@ -195,9 +223,11 @@ def main() -> int:
     (cron_dst / "jobs.json").write_text(json.dumps({"version": 1, "jobs": jobs}, indent=2) + "\n")
 
     skill_count = len(list(skills_dst.glob("*/SKILL.md")))
+    memory = config.get("tools", {}).get("mcp_servers", {}).get("memory")
     print(
         f"nanobot-render: provider={provider} model={default} "
-        f"skills={skill_count} cron={len(jobs)}"
+        f"skills={skill_count} cron={len(jobs)} "
+        f"memory={memory.get('url') if isinstance(memory, dict) else 'off'}"
     )
     return 0
 
