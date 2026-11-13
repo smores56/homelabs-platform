@@ -197,11 +197,26 @@ The tenant GitRepository reads a private repository from `tenant-apps`.
 ```sh
 flux create secret git homelabs-apps-auth \
   --namespace=tenant-apps \
-  --url=ssh://git@github.com/smores56/homelabs-apps
+  --url=ssh://git@ssh.github.com:443/smores56/homelabs-apps
 ```
 
 Take the printed public key, add it to `smores56/homelabs-apps` → Settings →
-Deploy keys → **Allow write access: off**, then verify:
+Deploy keys → **Allow write access: off**.
+
+The URL is GitHub's SSH-over-443 endpoint because the cluster guest forwards only
+80/443 out of the tap. An existing Secret created against `github.com` needs the
+443 host key added (the identity is unchanged):
+
+```sh
+sudo cluster-kubectl -n tenant-apps get secret homelabs-apps-auth \
+  -o jsonpath='{.data.known_hosts}' | base64 -d > /tmp/kh
+ssh-keyscan -p 443 ssh.github.com 2>/dev/null >> /tmp/kh
+sudo cluster-kubectl -n tenant-apps patch secret homelabs-apps-auth --type merge \
+  -p "{\"data\":{\"known_hosts\":\"$(base64 -w0 /tmp/kh)\"}}"
+rm -f /tmp/kh
+```
+
+Then verify:
 
 ```sh
 flux -n tenant-apps get gitrepository homelabs-apps -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}'

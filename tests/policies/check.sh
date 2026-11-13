@@ -718,6 +718,9 @@ eq "$(jq -r '[.[] | select(.kind == "Kustomization")][0].spec.path' <<<"$sync_js
   "./clusters/homelab" "root Kustomization path is the cluster directory"
 
 tenant_json=$(json_of clusters/homelab/platform/tenants/homelabs-apps.yaml)
+eq "$(jq -r '[.[] | select(.kind == "GitRepository")][0].spec.url' <<<"$tenant_json")" \
+  "ssh://git@ssh.github.com:443/smores56/homelabs-apps" \
+  "tenant source uses GitHub SSH on 443 (the tap forwards only 80/443)"
 eq "$(jq -r '[.[] | select(.kind == "Kustomization")][0].spec.serviceAccountName' <<<"$tenant_json")" \
   "tenant-apps-reconciler" "tenant Kustomization uses the tenant service account"
 eq "$(jq -r '[.[] | select(.kind == "Kustomization")][0].spec.decryption.secretRef.name' <<<"$tenant_json")" \
