@@ -16,7 +16,8 @@ nanobot forked from `homelabs-platform` cannot be the owner's own account
    - `smores56/homelabs-platform`: **read** (Metadata read + Contents read).
    - `smores56/homelabs-apps`: **write** (contents read/write, pull requests
      read/write).
-3. Fork and PR contract on the platform repo:
+3. Fork and PR contract on the platform repo. Create the fork **as the machine
+   user** (`gh repo fork` while authenticated as it, or the web UI):
    - If GitHub accepts `POST /repos/smores56/homelabs-platform/forks` for a
      read-only collaborator, keep read access: the fork is the only place the
      account can push, and `docs/negative-tests.md` tests that boundary.
@@ -36,10 +37,11 @@ nanobot forked from `homelabs-platform` cannot be the owner's own account
      `github-platform` (REST on `api.github.com`, bearer) uses it for fork and
      PR calls.
    - `github-fork-token`: fine-grained PAT, repository access
-     `smores56-nanobot/homelabs-platform` (the fork), permission **Contents:
-     read and write**, expiry 90 days. Logical host `github-fork` (git push to
-     the fork, basic) uses it. A fine-grained PAT covers one repository owner,
-     so the fork and the upstream cannot share one.
+     `smores56-nanobot/homelabs-platform` (the fork; create it before this
+     token), permission **Contents: read and write**, expiry 90 days. Logical
+     host `github-fork` (git push to the fork, basic) uses it. A fine-grained
+     PAT covers one repository owner, so the fork and the upstream cannot share
+     one.
    - `github-backup-read-pat` (not a broker host): fine-grained PAT owned by
      the operator, resource owner `smores56`, repository access exactly
      `homelabs-platform` and `homelabs-apps`, permission **Contents: read**
@@ -243,46 +245,69 @@ until that image is published and pinned (its `docs/manual-steps.md`, step 3).
 ## 10. Create the broker credential Secret
 
 The broker is platform-owned (`clusters/homelab/broker/`); this step supplies
-its five credential files. They never enter git or either repository. Write
-them into one SOPS file, encrypted to the flux-system age recipient, then
-materialise the Secret. The key names are the contract: the enrollment names
+its six credential files. They never enter git or either repository. The
+enrollment (`clusters/homelab/broker/config/broker.json`) names them:
 `neuralwatt-api-key`, `github-apps-token`, `github-platform-token`,
-`tinyfish-api-key` and `loki-gateway-token` (`clusters/homelab/broker/sops-contract.yaml`).
+`github-fork-token`, `tinyfish-api-key` and `loki-gateway-token`. **Step 1 must
+be finished first**: two of the six are minted by the machine user, and the
+fork token cannot exist before the fork.
+
+Run this on smortress as `smores`. `cluster-kubectl` reads a root-only
+kubeconfig, hence `sudo`.
 
 ```sh
-# 1. collect the values (never echo them into a shell transcript you keep)
-#    neuralwatt-api-key: Neuralwatt key (the same provider the human uses)
-#    github-apps-token / github-platform-token / github-fork-token: step 1
-#    tinyfish-api-key: TinyFish Search key
-#    loki-gateway-token: read from the generated Secret
-kubectl -n observability get secret loki-gateway-token \
-  -o jsonpath='{.data.password}' | base64 -d
+# 1. The two host-resident provider keys (the same values the host's agents
+#    already use) and the cluster-generated gateway token.
+NW=$(cat /run/secrets/neuralwatt-api-key)
+TF=$(cat /run/secrets/tinyfish-api-key)
+LOKI=$(sudo cluster-kubectl -n observability get secret loki-gateway-token \
+  -o jsonpath='{.data.password}' | base64 -d)
 
-# 2. write broker-credentials.yaml with those five keys, then:
+# 2. The three PATs from step 1, pasted at a prompt that does not echo.
+read -rsp 'github-apps-token: ' APPS; echo
+read -rsp 'github-platform-token: ' PLATFORM; echo
+read -rsp 'github-fork-token: ' FORK; echo
+
+# 3. One SOPS file, 0600, encrypted to the flux-system age recipient.
+umask 077
+jq -n --arg nw "$NW" --arg apps "$APPS" --arg platform "$PLATFORM" \
+      --arg fork "$FORK" --arg tinyfish "$TF" --arg loki "$LOKI" \
+  '{ "neuralwatt-api-key": $nw, "github-apps-token": $apps,
+     "github-platform-token": $platform, "github-fork-token": $fork,
+     "tinyfish-api-key": $tinyfish, "loki-gateway-token": $loki }' \
+  > broker-credentials.yaml
 sops -e -i broker-credentials.yaml
+unset NW TF LOKI APPS PLATFORM FORK
 
-# 3. decrypt in a pipe and create the Secret, one file per key:
-kubectl -n broker create secret generic broker-credentials \
-  --from-file=neuralwatt-api-key=<(sops -d broker-credentials.yaml | yq -r .neuralwatt-api-key) \
-  --from-file=github-apps-token=<(sops -d broker-credentials.yaml | yq -r .github-apps-token) \
-  --from-file=github-platform-token=<(sops -d broker-credentials.yaml | yq -r .github-platform-token) \
-  --from-file=github-fork-token=<(sops -d broker-credentials.yaml | yq -r .github-fork-token) \
-  --from-file=tinyfish-api-key=<(sops -d broker-credentials.yaml | yq -r .tinyfish-api-key) \
-  --from-file=loki-gateway-token=<(sops -d broker-credentials.yaml | yq -r .loki-gateway-token)
-kubectl -n broker rollout restart deployment/broker
+# 4. Materialise the Secret: one file per enrolled key, no value on the
+#    command line and none in shell history.
+tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+sops -d broker-credentials.yaml > "$tmp/creds.json"
+for key in neuralwatt-api-key github-apps-token github-platform-token \
+           github-fork-token tinyfish-api-key loki-gateway-token; do
+  jq -r --arg k "$key" '.[$k]' "$tmp/creds.json" > "$tmp/$key"
+done
+rm -f "$tmp/creds.json"   # --from-file turns every entry into a key
+sudo cluster-kubectl -n broker create secret generic broker-credentials \
+  --from-file="$tmp"
+sudo cluster-kubectl -n broker rollout restart deployment/broker
 ```
 
-The broker reads the files once at start and aborts if one is missing, so a
-failed Secret leaves the pod pending rather than forwarding unauthenticated
-requests. Verify from inside the broker namespace (the two in-cluster hosts are
-the only ones that need no DNS or TLS):
+The broker strips whitespace from each file and aborts at start if one is
+missing, so a failed Secret leaves the pod pending rather than forwarding
+unauthenticated requests. To rotate: `sudo cluster-kubectl -n broker delete
+secret broker-credentials`, then repeat steps 3-4 with the new value.
+
+Verify from inside the broker pod (the image has no `curl`; the two in-cluster
+hosts are the only ones that need neither DNS nor TLS):
 
 ```sh
-kubectl -n broker exec deploy/broker -- \
-  python -c 'import urllib.request; print(urllib.request.urlopen("http://127.0.0.1:8080/healthz").status)'
-kubectl -n broker exec deploy/broker -- \
-  curl -sS -o /dev/null -w '%{http_code}\n' \
-  http://127.0.0.1:8080/loki/loki/api/v1/labels
+sudo cluster-kubectl -n broker exec deploy/broker -- python -c '
+import json, urllib.request
+print(urllib.request.urlopen("http://127.0.0.1:8080/healthz").status)
+r = urllib.request.urlopen("http://127.0.0.1:8080/loki/loki/api/v1/labels")
+print(r.status, json.load(r)["status"])
+'
 ```
 
 Expected: `200` for health, and `200` for the Loki labels call with the gateway
