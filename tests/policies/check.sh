@@ -392,13 +392,15 @@ eq "$(jq -r '.[] | select(.kind == "ImagePolicy" and .metadata.name == "nanobot"
 eq "$(jq -r '.[] | select(.kind == "ImageUpdateAutomation" and .metadata.name == "nanobot") | [.metadata.namespace, .spec.sourceRef.kind, .spec.sourceRef.name, .spec.git.checkout.ref.branch, .spec.git.push.branch, .spec.update.strategy, .spec.update.path] | join(":")' "$work/flux-system.json")" \
   "flux-system:GitRepository:homelabs-apps:main:main:Setters:./" \
   "ImageUpdateAutomation pushes to homelabs-apps main with the Setters strategy"
+eq "$(jq -r '.[] | select(.kind == "ImagePolicy" and .metadata.name == "nanobot") | [.spec.digestReflectionPolicy, .spec.interval] | join(":")' "$work/flux-system.json")" \
+  "Always:5m" "the nanobot policy reflects digests on its own interval"
 eq "$(jq -r '.[] | select(.kind == "GitRepository" and .metadata.namespace == "flux-system" and .metadata.name == "homelabs-apps") | [.spec.url, .spec.ref.branch, .spec.secretRef.name] | join(":")' "$work/flux-system.json")" \
   "ssh://git@ssh.github.com:443/smores56/homelabs-apps:main:homelabs-apps-write" \
   "the image automation source is homelabs-apps over SSH 443 with the write secret"
 eq "$(jq -r '[.[] | select(.kind == "Secret")] | length' "$work/flux-system.json")" \
   "0" "the write credential is not in git (SOPS-managed Secret)"
 if jq -r '.[] | select(.kind == "ConfigMap" and .metadata.name == "homelabs-apps-write-contract") | .data.marker' "$work/flux-system.json" |
-  grep -Fq "{\"\$imagepolicy\": \"flux-system:nanobot\"}"; then
+  grep -Fq "{\"\$imagepolicy\": \"flux-system:nanobot:digest\"}"; then
   ok "the write contract records the tenant-side setter marker"
 else
   bad "the write contract does not record the setter marker"
