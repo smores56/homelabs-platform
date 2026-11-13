@@ -120,14 +120,13 @@ else
 fi
 
 # Kanbei is a public hostname behind Access (SDLC #586). The private WARP route
-# is retired: this change drops its destroy guard so the follow-up can destroy
-# it. The route still exists here, without the guard, by design.
+# is retired: it never got a client past the edge certificate, and a public
+# hostname needs no client component.
 echo "== kanbei access application"
-kanbei_route=$(extract cloudflare_zero_trust_network_hostname_route.kanbei)
-if [[ -z $kanbei_route ]]; then
-  bad "kanbei hostname route is still present for its final apply"
+if [[ -n $(extract cloudflare_zero_trust_network_hostname_route.kanbei) ]]; then
+  bad "the private kanbei hostname route is gone"
 else
-  ok "kanbei hostname route is still present for its final apply"
+  ok "the private kanbei hostname route is gone"
 fi
 kanbei_app=$(extract cloudflare_zero_trust_access_application.kanbei)
 if [[ -z $kanbei_app ]]; then

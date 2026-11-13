@@ -8,17 +8,7 @@
 #
 # This replaced a private WARP hostname route. A private hostname needs Gateway's
 # L4 rewrite and a client-side initial-resolved IP; a public hostname needs
-# neither, and the same in-guest TLS still sits behind Access. The route below is
-# retired in the follow-up change that deletes this resource: `prevent_destroy`
-# is dropped here first, because OpenTofu refuses to destroy a resource whose
-# state still carries the guard.
-
-resource "cloudflare_zero_trust_network_hostname_route" "kanbei" {
-  account_id = var.account_id
-  hostname   = "kanbei.${var.domain}"
-  tunnel_id  = var.host_tunnel_id
-  comment    = "Kanbei chat: private hostname route (WARP only); TLS terminates in the guest"
-}
+# neither, and the same in-guest TLS still sits behind Access.
 
 # `allow_authenticate_via_warp` costs nothing here: a device that already runs
 # the Cloudflare One client skips the browser login, and every other device gets
