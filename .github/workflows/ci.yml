@@ -70,6 +70,22 @@ jobs:
       - name: run apps/webhook unit tests
         run: python3 -m unittest discover -s apps/webhook/tests -t apps/webhook -v
 
+  nanobot-image:
+    name: nanobot image render tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          persist-credentials: false
+      # Stdlib only, on the runner's python3: images/nanobot/render.py defers its
+      # yaml and nanobot imports, so the memory MCP wiring is asserted without
+      # building the image or installing anything.
+      - name: render memory MCP tests
+        run: |
+          python3 -m py_compile images/nanobot/render.py
+          python3 -m unittest discover -s tests/nanobot-image -t tests/nanobot-image -v
+
   kubeconform:
     name: kubeconform
     runs-on: ubuntu-latest

@@ -904,9 +904,10 @@ PY
 cluster-kubectl -n tenant-apps rollout restart deploy/nanobot
 ```
 
-`render.py` rewrites only the listener hosts, providers, presets, prompt, skills
-and cron, so the rotated secret survives restarts; the rollout also discards the
-old container log. Store the printed token in the password manager.
+`render.py` rewrites only the listener hosts, providers, presets, the memory MCP
+server (when `BROKER_URL` is set), prompt, skills and cron, so the rotated secret
+survives restarts; the rollout also discards the old container log. Store the
+printed token in the password manager.
 
 ## 21. Kanbei public hostname behind Access
 
