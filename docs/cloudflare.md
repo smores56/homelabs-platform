@@ -204,7 +204,7 @@ zone with no application of its own is reachable only by the owner's identity.
   can declare.
 - The `service auth` policy is account-wide: any service token minted in that
   account is accepted by those applications. Rotate a leaked token in
-  Zero Trust → Access → Service Auth; the notification policy emails before one
+  Zero Trust → Access controls → Service credentials → Service tokens; the notification policy emails before one
   expires.
 
 ## CAA

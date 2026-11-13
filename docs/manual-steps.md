@@ -884,7 +884,7 @@ before the first apply; applying first fails on the destroy.
    `cloudflare_zero_trust_tunnel_cloudflared_config.cluster` resource is the
    source of truth; a dashboard edit is replaced by the next apply.
 
-3. Mint the maki service token in Zero Trust → Access → Service Auth. The
+3. Mint the maki service token in Zero Trust → Access controls → Service credentials → Service tokens. The
    `service auth` policy already accepts any valid service token; store the
    `CF-Access-Client-Id`/`CF-Access-Client-Secret` pair in maki's client config,
    never in the cluster. The owner uses the browser identity.
@@ -982,7 +982,7 @@ change deletes the resource.
    route still exists, and WARP clients would take the retired path.
 
 5. The application allows the owner email and **nothing else**. It deliberately
-   does not attach the account-wide `Service Auth` policy: that decision accepts
+   does not attach the account-wide `service auth` policy: that decision accepts
    any valid service token in the account, so the agent's own token would open
    Kanbei. Do not attach it; an unattended client that must reach Kanbei needs
    its own Access decision plus a reviewed terraform change. `tests/tofu/check.sh`
