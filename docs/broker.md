@@ -76,6 +76,7 @@ each request's logical host (see "GitHub App identity" below).
 | `github-agent` | `https://api.github.com:443` | `Authorization: Bearer` | app: `nix-config`, `kanbei`, `contents: read`, `pull_requests: write` | no |
 | `github-sdlc-git` | `https://github.com:443` | `Authorization: Basic x-access-token:<token>` | app: `sdlc`, `contents: write` | no |
 | `github-sdlc` | `https://api.github.com:443` | `Authorization: Bearer` | app: `sdlc`, `issues: write`, `metadata: read` | no |
+| `github-hooks` | `https://api.github.com:443` | `Authorization: Bearer` | app: `sdlc`, `homelabs-apps`, `repository_hooks: write`, `metadata: read` | no |
 | `tinyfish` | `https://api.search.tinyfish.ai:443` | `X-Api-Key: <token>` | `tinyfish-api-key` | no |
 | `loki` | `http://loki-gateway.observability.svc.cluster.local:3100` | `Authorization: Bearer`, fixed `X-Scope-OrgID: data` | `loki-gateway-token` | yes |
 | `memory` | `http://memory-mcp.graphiti.svc.cluster.local:8182` | `Authorization: Bearer` | `memory-mcp-token` (optional) | yes |
@@ -132,6 +133,20 @@ because the registry edits issues and nothing else, and GitHub requires
 installation before these hosts work (docs/manual-steps.md step 1, item 2): a
 repository named here but absent from the installation fails the whole host with
 a 422.
+
+`github-hooks` (SDLC #628) is the outbound half of the webhook receiver: the
+agent registers repository hooks that GitHub delivers to
+`https://agent-hooks.sammohr.dev/`, so this host only ever creates one. The
+enrollment holds `repository_hooks: write` plus `metadata: read` on `sdlc` and
+`homelabs-apps`, admits only `POST /repos/<owner>/<repo>/hooks`, and a body
+guard requires `config.url` to start with `https://agent-hooks.sammohr.dev/`.
+The narrow shape is the point: `PATCH`/`DELETE` (`method_denied`) would retarget
+or delete a hook the human installed, and without the body guard the agent could
+point a fresh hook at an attacker URL, whose deliveries carry the repository's
+event payloads. The App needs the **Repository webhooks: read and write**
+permission and a re-consented installation first (docs/manual-steps.md step 34):
+an installation token cannot grow a permission the installation never approved,
+so hook creation fails with `403`/`422` until then.
 
 `memory` (SDLC #631) is the graphiti memory wrapper
 (`memory-mcp.graphiti.svc.cluster.local:8182`), the same MCP endpoint
@@ -207,7 +222,7 @@ an `allow` regex. When a request matches the method and path, the body must be
 valid UTF-8 JSON with no repeated key, and the named field must be a string
 matching `allow` at its start. A repeated key is `body_json_invalid` because two
 JSON parsers can read two different values from it. The canonical use is webhook
-creation (the enrollment lands with the webhook receiver, not here):
+creation on the `github-hooks` host (SDLC #628):
 
 ```json
 "body_guards": [

@@ -7,14 +7,17 @@ the broker resolves the upstream or touches the network (SDLC #624).
 from __future__ import annotations
 
 import json
+import pathlib
 import re
 import unittest
 
-from broker.config import BodyGuard, Enrollment, Injection
+from broker.config import BodyGuard, Enrollment, Injection, load_config
 from broker.policy import Denied, check_request
 
 HOOK_PATH = "/repos/smores56/kanbei/hooks"
 HOOK_URL = "https://agent-hooks.sammohr.dev/kanbei"
+
+SHIPPED = pathlib.Path(__file__).resolve().parents[3] / "clusters/homelab/broker/config/broker.json"
 
 
 def hook_guard() -> BodyGuard:
@@ -165,6 +168,61 @@ class BodyPredicateTest(unittest.TestCase):
             check_request(guarded(), "POST", HOOK_PATH, body("https://evil.example/" + secret))
         self.assertNotIn(secret, raised.exception.reason)
         self.assertNotIn("evil.example", raised.exception.reason)
+
+
+class ShippedHookEnrollmentTest(unittest.TestCase):
+    """`github-hooks` (#628) as shipped: the file, not an inline Enrollment.
+
+    These run the real `check_request` against the enrolled predicates, so a
+    config edit that drops the guard or widens the path fails here.
+    """
+
+    SDLC_HOOK_PATH = "/repos/smores56/sdlc/hooks"
+
+    def setUp(self) -> None:
+        self.enrollment = load_config(SHIPPED, env={}).hosts["github-hooks"]
+
+    def hook_body(self, url: str = "https://agent-hooks.sammohr.dev/hook/abc") -> bytes:
+        return json.dumps({"config": {"url": url}}).encode()
+
+    def test_parses_as_a_post_only_guarded_api_host(self) -> None:
+        enrollment = self.enrollment
+        self.assertEqual((enrollment.scheme, enrollment.host, enrollment.port), ("https", "api.github.com", 443))
+        self.assertFalse(enrollment.allow_private)
+        self.assertEqual(enrollment.allow_methods, ("POST",))
+        self.assertEqual(enrollment.allow_paths[0].pattern, r"^/repos/[^/]+/[^/]+/hooks$")
+        guard = enrollment.body_guards[0]
+        self.assertEqual(guard.methods, ("POST",))
+        self.assertEqual(guard.paths[0].pattern, r"^/repos/[^/]+/[^/]+/hooks$")
+        self.assertEqual(guard.field, "config.url")
+        self.assertEqual(guard.allow.pattern, r"^https://agent-hooks\.sammohr\.dev/")
+
+    def test_hook_creation_under_the_receiver_passes(self) -> None:
+        check_request(self.enrollment, "POST", self.SDLC_HOOK_PATH, self.hook_body())
+
+    def test_patch_and_delete_are_denied_by_method(self) -> None:
+        for method in ("PATCH", "DELETE"):
+            with self.assertRaises(Denied, msg=method) as raised:
+                check_request(self.enrollment, method, self.SDLC_HOOK_PATH, self.hook_body())
+            self.assertEqual(raised.exception.reason, "method_denied")
+            self.assertEqual(raised.exception.status, 403)
+
+    def test_non_hook_paths_are_denied(self) -> None:
+        # /hooks/123 (a hook id) and /keys are both outside the allowlist.
+        for path in ("/repos/smores56/sdlc/hooks/123", "/repos/smores56/sdlc/keys"):
+            with self.assertRaises(Denied, msg=path) as raised:
+                check_request(self.enrollment, "POST", path, self.hook_body())
+            self.assertEqual(raised.exception.reason, "path_denied")
+
+    def test_a_hook_url_outside_the_receiver_is_denied(self) -> None:
+        for url in (
+            "https://evil.example/hook",
+            "https://agent-hooks.sammohr.dev.evil.example/hook",
+            "http://agent-hooks.sammohr.dev/hook",
+        ):
+            with self.assertRaises(Denied, msg=url) as raised:
+                check_request(self.enrollment, "POST", self.SDLC_HOOK_PATH, self.hook_body(url))
+            self.assertEqual(raised.exception.reason, "body_field_denied")
 
 
 if __name__ == "__main__":
