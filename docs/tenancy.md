@@ -121,8 +121,9 @@ the agent gets** — there is no kubeconfig, no proxy and no generic forwarding.
 | Service | `tenant-apps/agent-control`, ClusterIP **8081** | ingress only from the `broker` namespace on 8081; egress only DNS and the k3s API range (443/6443) |
 | Role | `tenant-apps/agent-control` (platform RBAC stage) | `pods`, `pods/log`, `events`, `replicasets` get/list/watch; `get`/`patch` on `deployments/nanobot` only (`resourceNames`) |
 | ClusterRole | `agent-control-read`, bound in the agent-control stage | `pods`, `events`, `nodes` get/list/watch; `deployments`, `statefulsets`, `daemonsets` get/list; Flux `kustomizations` get/list |
+| Secret | `tenant-apps/agent-control-build` (hand-made, step 33), key `token`, mounted only at `/run/build` | a GitHub App installation token or fine-grained PAT with `Actions: write` on `smores56/homelabs-platform` only — **the only GitHub credential outside the broker**; mounted `optional: true`, so its absence degrades `POST /self/build` to `503` and nothing else |
 
-The HTTP surface is exactly nine routes; any other path is `404` and a wrong
+The HTTP surface is exactly ten routes; any other path is `404` and a wrong
 method on a known path is `405`. Probes are TCP checks, so no HTTP health route
 exists outside the list.
 
@@ -132,6 +133,7 @@ exists outside the list.
 | `GET /self/logs?tail=N` | container logs, `tail` clamped to 1..500, only for pods labelled `app.kubernetes.io/name=nanobot` **and** owned by the nanobot Deployment's ReplicaSets |
 | `GET /self/events` | events about those pods and the Deployment |
 | `POST /self/restart` | patches the `homelabs.dev/restart-requested-at` pod-template annotation on `deployments/nanobot` (`202`) |
+| `POST /self/build` | dispatches `publish-nanobot.yml` through the Actions API (`202`); repository, workflow and ref are constants, the token is read from the mounted Secret and never logged (`docs/flux.md`) |
 | `GET /cluster/pods`, `/cluster/events`, `/cluster/nodes` | read-only cluster picture, curated fields |
 | `GET /cluster/workloads` | Deployments/StatefulSets/DaemonSets across namespaces, **metadata only** |
 | `GET /cluster/flux` | Flux Kustomizations with readiness, revision and message |
