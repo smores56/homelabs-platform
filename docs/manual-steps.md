@@ -531,12 +531,26 @@ cluster-kubectl -n graphiti logs -f job/memory-restore
 #    restore, reconcile state, then delete it with the same Job shape and the
 #    command `rm /data/memory/.restore-in-progress`.
 
-# 4. Bring the graph and the wrapper back (on the first cutover, merging the
-#    platform branch sets the replicas); the reconciler re-submits whatever the
-#    restored registry still marks pending.
+# 4. Boot FalkorDB once with the AOF off so the restored dump.rdb loads. Redis
+#    with `appendonly yes` starts empty when no AOF exists; renaming the old one
+#    is necessary but not sufficient (see the note after this block).
+cluster-kubectl -n graphiti patch deploy graphiti-falkordb --type=strategic \
+  -p '{"spec":{"template":{"spec":{"containers":[{"name":"falkordb","env":[{"name":"REDIS_ARGS","value":"--appendonly no --save \"\""}]}]}}}}'
 cluster-kubectl -n graphiti scale deploy/graphiti-falkordb --replicas=1
+# wait until the log says "DB loaded from disk" and this count is non-zero:
+cluster-kubectl -n graphiti exec deploy/graphiti-falkordb -- \
+  redis-cli GRAPH.QUERY global "MATCH (n) RETURN count(n)"
+cluster-kubectl -n graphiti exec deploy/graphiti-falkordb -- \
+  redis-cli CONFIG SET appendonly yes
+# back to the deployed args; the Recreate reloads the AOF this just wrote
+cluster-kubectl -n graphiti patch deploy graphiti-falkordb --type=strategic \
+  -p '{"spec":{"template":{"spec":{"containers":[{"name":"falkordb","env":[{"name":"REDIS_ARGS","value":"--appendonly yes --appendfsync everysec --save \"\""}]}]}}}}'
 cluster-kubectl -n graphiti scale deploy/memory-mcp --replicas=1
 ```
+
+The two `REDIS_ARGS` patches fight Flux: the data stage re-applies the
+Deployment within its 10-minute interval, so run the block in one go. If the
+node count stays 0, stop before `CONFIG SET` — the snapshot did not load.
 
 Rolling back to the host is `sudo memory restore <export>` on smortress after
 copying the export out of the share — not a restart of the frozen host copy,
