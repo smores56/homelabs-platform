@@ -71,7 +71,7 @@ each request's logical host (see "GitHub App identity" below).
 
 `github-platform-push` is the git transport half of the `github-platform`
 capability: GitHub serves git smart HTTP only on `github.com`, while PR calls
-are REST on `api.github.com`. The agent pushes `agent/*` branches to
+are REST on `api.github.com`. The agent pushes `agent/**` branches to
 `homelabs-platform` and opens same-repo pull requests; there is no fork (a
 GitHub App cannot fork, and GitHub refuses a fork of your own private
 repository), so branch rulesets, not the fork boundary, keep the identity off

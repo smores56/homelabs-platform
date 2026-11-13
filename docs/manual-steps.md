@@ -49,13 +49,22 @@ main-gated environment secrets), and the ruleset in item 3.
    one repository). Record the **installation ID** from the install URL
    (`/installations/<id>`). The app id, key and installation id reach the broker
    only as files (step 10); nothing is committed.
-3. Contain the identity to `agent/*`: Settings -> Rules -> Rulesets -> New
+3. Contain the identity to `agent/**`: Settings -> Rules -> Rulesets -> New
    branch ruleset:
-   - Target: include by pattern `~ALL`, exclude by pattern `agent/*`.
+   - Target: include by pattern `~ALL`, exclude by pattern `agent/**` (double
+     star: a single `*` does not cross `/`, so nested agent branches would
+     otherwise fall back under the restrictive rule).
    - Rules: Restrict creations, Restrict updates, Restrict deletions.
    - Bypass list: Repository admins (the human); leave the app out.
    Branch protection on `main` (step 5) still requires a PR and passing checks,
-   so the app can neither merge nor force-push.
+   so the app can neither merge nor force-push. Do not rely on the description:
+   read the API's view back:
+   `gh api repos/smores56/homelabs-platform/rulesets --jq '.[] | select(.target=="branch") | .id'`,
+   then that id's `conditions.ref_name` (`include ["~ALL"]`,
+   `exclude ["agent/**"]`), `rules[].type` (`creation`, `update`, `deletion`)
+   and `bypass_actors`. The acceptance script also probes both refusals live
+   (a push outside `agent/**` and a push touching `.github/workflows/`), so a
+   silently removed control fails the run instead of waiting for an incident.
 4. The mirror's `github-backup-read-pat` (step 22) is not the agent's identity;
    it stays an operator-owned fine-grained PAT.
 
