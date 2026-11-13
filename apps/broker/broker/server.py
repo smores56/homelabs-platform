@@ -95,6 +95,14 @@ def connect_pinned(enrollment: Enrollment, pinned: PinnedAddress, timeout: float
     return http.client.HTTPConnection(str(pinned.ip), enrollment.port, timeout=timeout)
 
 
+def relay_target(enrollment: Enrollment, path: str, query: str) -> str:
+    """The request-target sent upstream, with the host's prefix restored."""
+    forwarded = enrollment.path_prefix + path
+    # Re-encode the decoded path: dot segments are already canonical, and a
+    # space or control character must never reach the request line.
+    return quote(forwarded, safe="/:@!$&'()*+,;=-._~") + (f"?{query}" if query else "")
+
+
 def build_outbound_headers(
     inbound: list[tuple[str, str]],
     enrollment: Enrollment,
@@ -269,7 +277,7 @@ class Broker:
             raise Denied("ambiguous_query", status=400)
         # Re-encode the decoded path: dot segments are already canonical, and a
         # space or control character must never reach the request line.
-        target = quote(path, safe="/:@!$&'()*+,;=-._~") + (f"?{query}" if query else "")
+        target = relay_target(enrollment, path, query)
 
         connection = self.connector(enrollment, pinned, CONNECT_TIMEOUT)
         try:

@@ -21,7 +21,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from broker.config import BodyGuard, Config, Enrollment, Injection
 from broker.credentials import StaticCredentials
-from broker.server import Broker, make_server
+from broker.server import Broker, make_server, relay_target
 
 SECRET = "s3cr3t-broker-token"
 AGENT_SECRET = "agent-supplied-value"
@@ -347,3 +347,27 @@ class BrokerTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+
+class PathPrefixTest(unittest.TestCase):
+    def enrollment(self, prefix: str) -> Enrollment:
+        return Enrollment(
+            name="self",
+            scheme="http",
+            host="agent-control.tenant-apps.svc.cluster.local",
+            port=8081,
+            allow_private=True,
+            secret_name="",
+            injection=Injection(kind="none"),
+            path_prefix=prefix,
+        )
+
+    def test_the_host_prefix_is_restored_upstream(self) -> None:
+        # agent-control addresses /self/... and /cluster/...; the broker strips
+        # only the logical host, so the enrollment puts its namespace back.
+        self.assertEqual(relay_target(self.enrollment("/self"), "/status", ""), "/self/status")
+        self.assertEqual(relay_target(self.enrollment("/cluster"), "/pods", "tail=5"), "/cluster/pods?tail=5")
+
+    def test_without_a_prefix_the_path_is_unchanged(self) -> None:
+        self.assertEqual(relay_target(self.enrollment(""), "/v1/messages", ""), "/v1/messages")

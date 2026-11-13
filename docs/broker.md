@@ -80,8 +80,14 @@ each request's logical host (see "GitHub App identity" below).
 | `loki` | `http://loki-gateway.observability.svc.cluster.local:3100` | `Authorization: Bearer`, fixed `X-Scope-OrgID: data` | `loki-gateway-token` | yes |
 | `memory` | `http://memory-mcp.graphiti.svc.cluster.local:8182` | `Authorization: Bearer` | `memory-mcp-token` (optional) | yes |
 | `notify` | `https://notify.invalid:443` (placeholder) | `Authorization: Bearer` | `notify-token` | no |
-| `self` | `http://agent-control.tenant-apps.svc.cluster.local:8081` | none | — | yes |
+| `self` | `http://agent-control.tenant-apps.svc.cluster.local:8081` (prefix `/self`) | none | — | yes |
+| `cluster` | `http://agent-control.tenant-apps.svc.cluster.local:8081` (prefix `/cluster`) | none | — | yes |
 | `status` | `http://status-exporter.observability.svc.cluster.local:9101` | none (metrics text) | — | yes |
+
+`path_prefix` restores a service's own route namespace after the broker
+strips the logical host: the caller addresses `BROKER_URL/self/status`, and
+the service sees `/self/status`; `BROKER_URL/cluster/pods` becomes
+`/cluster/pods`. Without it the upstream would only see the trailing path.
 
 `github-platform-push` is the git transport half of the `github-platform`
 capability: GitHub serves git smart HTTP only on `github.com`, while PR calls

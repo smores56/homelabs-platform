@@ -186,7 +186,15 @@
       "scheme": "http",
       "host": "agent-control.tenant-apps.svc.cluster.local",
       "port": 8081,
-      "allow_private": true
+      "allow_private": true,
+      "path_prefix": "/self"
+    },
+    "cluster": {
+      "scheme": "http",
+      "host": "agent-control.tenant-apps.svc.cluster.local",
+      "port": 8081,
+      "allow_private": true,
+      "path_prefix": "/cluster"
     },
     "status": {
       "scheme": "http",

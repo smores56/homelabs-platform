@@ -32,6 +32,7 @@ METHODS = ("GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS")
 MAX_REQUEST_BYTES = 64 * 1024 * 1024
 # A body guard names one JSON field by dot-separated keys.
 BODY_FIELD = re.compile(r"^[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)*$")
+PATH_PREFIX = re.compile(r"^(/[A-Za-z0-9._~-]+)+/?$")
 # Enrollment headers may not smuggle a credential of their own; the only
 # credential on the wire is the one named by `inject`.
 CREDENTIAL_HEADERS = frozenset(
@@ -117,6 +118,11 @@ class Enrollment:
     # A host whose provider is not provisioned yet: a missing secret file is a
     # 503 for that host instead of a startup abort. Never a request without it.
     optional_secret: bool = False
+    # Prepended to the caller's path before forwarding. The caller addresses
+    # $BROKER_URL/<logical>/<path>; without this the upstream only ever sees
+    # <path>, so a service whose own routes are namespaced (agent-control's
+    # /self/... and /cluster/...) needs its namespace restored here.
+    path_prefix: str = ""
 
     @property
     def default_port(self) -> bool:
@@ -319,6 +325,9 @@ def _parse_enrollment(logical: str, raw: object) -> Enrollment:
         raise ConfigError(f"{logical}: optional_secret must be a boolean")
     if optional_secret and (not secret_name or app is not None):
         raise ConfigError(f"{logical}: optional_secret needs a static secret, not a github_app")
+    path_prefix = raw.get("path_prefix", "")
+    if not isinstance(path_prefix, str) or (path_prefix and not PATH_PREFIX.match(path_prefix)):
+        raise ConfigError(f"{logical}: path_prefix must be empty or a leading-slash path")
     if injection.kind == "none":
         if secret_name:
             raise ConfigError(f"{logical}: no-injection enrollment must not name a secret")
@@ -370,6 +379,7 @@ def _parse_enrollment(logical: str, raw: object) -> Enrollment:
         body_guards=_parse_body_guards(logical, raw.get("body_guards")),
         max_body_bytes=_parse_max_body_bytes(logical, raw.get("max_body_bytes")),
         optional_secret=optional_secret,
+        path_prefix=path_prefix.rstrip("/"),
     )
 
 

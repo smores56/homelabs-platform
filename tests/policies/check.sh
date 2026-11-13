@@ -776,16 +776,19 @@ fi
 # agent's BROKER_URL paths depend on; the unit tests parse the same file.
 enrollment='.[] | select(.kind == "ConfigMap" and (.metadata.name | startswith("broker-config"))) | .data["broker.json"] | fromjson'
 eq "$(jq -r "$enrollment | .logical_hosts | keys | sort | join(\",\")" "$work/broker.json")" \
-  "github-agent,github-agent-push,github-apps,github-platform,github-platform-push,github-sdlc,github-sdlc-git,loki,memory,neuralwatt,notify,self,status,tinyfish" \
+  "cluster,github-agent,github-agent-push,github-apps,github-platform,github-platform-push,github-sdlc,github-sdlc-git,loki,memory,neuralwatt,notify,self,status,tinyfish" \
   "the broker enrolls exactly the agent's logical hosts"
 eq "$(jq -r "$enrollment | [.logical_hosts | to_entries[] | select(.value.allow_private) | .key] | sort | join(\",\")" "$work/broker.json")" \
-  "loki,memory,self,status" "only the in-cluster hosts are private enrollments"
+  "cluster,loki,memory,self,status" "only the in-cluster hosts are private enrollments"
 eq "$(jq -r "$enrollment | .logical_hosts.notify | [.host, .allow_private, .inject.kind, .secret, (.optional_secret | tostring), (.allow_methods | join(\",\")), (.allow_paths | join(\";\")), (.max_body_bytes | tostring)] | join(\":\")" "$work/broker.json")" \
   "notify.invalid:false:bearer:notify-token:true:POST:^/v1/notify$:4096" \
   "notify is a public placeholder, POST-only, bearer, body-capped, optional token"
-eq "$(jq -r "$enrollment | .logical_hosts.self | [.host, .port, .allow_private, (.secret // \"-\"), (.inject.kind // \"none\")] | join(\":\")" "$work/broker.json")" \
-  "agent-control.tenant-apps.svc.cluster.local:8081:true:-:none" \
-  "self is a credential-free private enrollment"
+eq "$(jq -r "$enrollment | .logical_hosts.self | [.host, .port, .allow_private, (.secret // \"-\"), (.inject.kind // \"none\"), .path_prefix] | join(\":\")" "$work/broker.json")" \
+  "agent-control.tenant-apps.svc.cluster.local:8081:true:-:none:/self" \
+  "self is a credential-free private enrollment with its route prefix"
+eq "$(jq -r "$enrollment | .logical_hosts.cluster | [.host, .port, .allow_private, .path_prefix] | join(\":\")" "$work/broker.json")" \
+  "agent-control.tenant-apps.svc.cluster.local:8081:true:/cluster" \
+  "cluster is the same service with the cluster route prefix"
 eq "$(jq -r "$enrollment | .logical_hosts.memory | [.scheme, .host, .port, .allow_private, .inject.kind, .secret, (.optional_secret | tostring)] | join(\":\")" "$work/broker.json")" \
   "http:memory-mcp.graphiti.svc.cluster.local:8182:true:bearer:memory-mcp-token:true" \
   "memory is the in-cluster wrapper on 8182 with an optional bearer token"

@@ -22,6 +22,7 @@ class ShippedConfigTest(unittest.TestCase):
         self.assertEqual(
             sorted(self.config.hosts),
             [
+                "cluster",
                 "github-agent",
                 "github-agent-push",
                 "github-apps",
@@ -266,9 +267,14 @@ class ConfigValidationTest(unittest.TestCase):
         with self.assertRaises(ConfigError):
             load_config(self.write(self.base(secret="", inject={"kind": "none"}, optional_secret=True)), env={})
 
+    def test_path_prefix_must_be_a_leading_slash_path(self) -> None:
+        config = load_config(self.write(self.base(path_prefix="/self/")), env={})
+        self.assertEqual(config.hosts["example"].path_prefix, "/self")
+        for bad in ("self", "//x", "/a b", 7):
+            with self.assertRaises(ConfigError):
+                load_config(self.write(self.base(path_prefix=bad)), env={})
+
     def test_credential_header_cannot_be_a_fixed_header(self) -> None:
-        with self.assertRaises(ConfigError):
-            load_config(self.write(self.base(headers={"Authorization": "Bearer x"})), env={})
         with self.assertRaises(ConfigError):
             load_config(self.write(self.base(headers={"Authorization": "Bearer x"})), env={})
 
