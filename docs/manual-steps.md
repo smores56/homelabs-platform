@@ -31,11 +31,13 @@ main-gated environment secrets), and the ruleset in item 3.
      off. Turning any of these on would create a second, human-impersonating
      token type the broker does not need and cannot audit.
    - Repository permissions: **Contents: read and write**, **Pull requests:
-     read and write**, **Metadata: read** (mandatory); **Actions: read** if you
-     want CI status in agent context. Leave **Workflows** at **No access** on
-     purpose: GitHub refuses a push that touches `.github/workflows/**`
-     without it, so a workflow change stays a diff the agent hands to the human
-     (`.github/` is Kanbei-critical), not something it can push.
+     read and write**, **Metadata: read** (mandatory); **Actions: read** for CI
+     status and publish digests. Leave **Workflows** at **No access**, but do
+     not treat it as a push gate: verified 2026-11-12, an installation token
+     with only `contents: write` pushed a modification to
+     `.github/workflows/ci.yml` on an `agent/**` branch. The permission still
+     bounds releases and API use; the control for workflow *changes* is the
+     merge, below.
    - Organization permissions, Account permissions, Enterprise permissions:
      **No access**, all of them. The app operates on two user-owned
      repositories through scoped installation tokens; anything broader is
@@ -51,14 +53,18 @@ main-gated environment secrets), and the ruleset in item 3.
    only as files (step 10); nothing is committed.
 3. Contain the identity to `agent/**`: Settings -> Rules -> Rulesets -> New
    branch ruleset:
-   - Target: include by pattern `~ALL`, exclude by pattern `agent/**` (double
-     star: a single `*` does not cross `/`, so nested agent branches would
-     otherwise fall back under the restrictive rule).
+   - Target branches: **Include all branches**, exclude by pattern `agent/**`
+     (double star: a single `*` does not cross `/`, so nested agent branches
+     would otherwise fall back under the restrictive rule). An **empty
+     include** is inert: the ruleset is listed and `GET /rules/branches/...`
+     reports its rules, but pushes are not blocked — verified live, so set the
+     include explicitly.
    - Rules: Restrict creations, Restrict updates, Restrict deletions.
    - Bypass list: Repository admins (the human); leave the app out.
-   Branch protection on `main` (step 5) still requires a PR and passing checks,
-   so the app can neither merge nor force-push. Do not rely on the description:
-   read the API's view back:
+   Branch protection on `main` (step 5) requires a PR, passing checks, and a
+   Code Owners review, so the app can neither merge nor force-push and a
+   `.github/` or `*.tf` change needs a human review. Do not rely on the
+   description: read the API's view back:
    `gh api repos/smores56/homelabs-platform/rulesets --jq '.[] | select(.target=="branch") | .id'`,
    then that id's `conditions.ref_name` (`include ["~ALL"]`,
    `exclude ["agent/**"]`), `rules[].type` (`creation`, `update`, `deletion`)
@@ -144,8 +150,10 @@ to an environment that exists.
 
 Run the commands from `docs/runbook.md` section "Branch protection on main".
 They require the same admin token; `enforce_admins` is false so the owner can
-still push a bootstrap commit, while `homelabs-agent[bot]` and every
-other identity are bound by PR review and the required checks.
+still push a bootstrap commit, while `homelabs-agent[bot]` and every other
+identity are bound by PR review, the required checks, and **Require review from
+Code Owners** — the last one is what keeps `.github/` and `*.tf` (Kanbei-
+critical) human-reviewed now that the app can technically push a workflow edit.
 
 After applying, confirm the app cannot push to `main` (expected: `protected
 branch hook declined`) and cannot force-push (expected: `Cannot force-push to a
