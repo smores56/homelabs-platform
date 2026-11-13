@@ -469,8 +469,13 @@ first cutover:
      --graph-url redis://127.0.0.1:6379 \
      --graph-dir /var/lib/memory/falkordb \
      --graph-timeout 120
-   sudo chmod -R a+rX /var/lib/data/graphiti/db-dumps/memory/cutover
+   sudo chown -R 1000:1000 /var/lib/data/graphiti/db-dumps/memory/cutover
    ```
+
+   The restore Job runs as uid 1000, and SQLite's read-only open of a WAL
+   registry still creates the `registry.sqlite-shm` sidecar next to it, so the
+   pod must own the export directory; a root-owned 0755 tree fails with
+   `attempt to write a readonly database`.
 
    Then stop the host stack
    (`sudo systemctl stop memory-export.timer; sudo systemctl stop memory-mcp
@@ -494,7 +499,9 @@ first cutover:
 There is no systemd in the cluster, so the restore is a Job. The directory
 argument is the export being installed on the `graphiti-data` share: the
 CronJob writes `/data/db-dumps/memory`, and the cutover export is
-`/data/db-dumps/memory/cutover`:
+`/data/db-dumps/memory/cutover`. The directory must be owned by uid 1000 (the
+Job's user): SQLite's read-only open of a WAL registry creates a
+`registry.sqlite-shm` sidecar beside it.
 
 ```sh
 # 1. Every writer and the graph stop first: the registry is single-writer.
