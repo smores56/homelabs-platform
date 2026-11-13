@@ -400,7 +400,7 @@ eq "$(jq -r '.[] | select(.kind == "GitRepository" and .metadata.namespace == "f
 eq "$(jq -r '[.[] | select(.kind == "Secret")] | length' "$work/flux-system.json")" \
   "0" "the write credential is not in git (SOPS-managed Secret)"
 if jq -r '.[] | select(.kind == "ConfigMap" and .metadata.name == "homelabs-apps-write-contract") | .data.marker' "$work/flux-system.json" |
-  grep -Fq "{\"\$imagepolicy\": \"flux-system:nanobot\"}"; then
+  grep -Fq "{\"\$imagepolicy\": \"flux-system:nanobot:digest\"}"; then
   ok "the write contract records the tenant-side setter marker"
 else
   bad "the write contract does not record the setter marker"
