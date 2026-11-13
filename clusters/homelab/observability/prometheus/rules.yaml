@@ -1,0 +1,78 @@
+# Alert rules (SDLC #620). Prometheus evaluates them and pushes firing alerts to
+# Alertmanager, which routes them to the mail relay.
+#
+# What is alertable is bounded by what is scraped: Prometheus itself, the
+# human-owned status exporter (the only sanctioned view of the data tier, which
+# now also reports CronJob success), and any pod annotated
+# `prometheus.io/scrape: "true"`. There is no kube-state-metrics and no
+# node-exporter, so these rules never claim to see a restarted container or a
+# full disk.
+#
+# The backup rules are the replacement for the host's `cloudflare-email@` hook
+# on a moved tree: a CronJob that stops succeeding for 26 hours is a missed
+# night plus two hours, which is the shortest window that cannot fire on a
+# normal late run. A tree that has never succeeded is covered by the same
+# expression, because the exporter reports 0 as its last-success timestamp.
+groups:
+  - name: homelabs-platform
+    rules:
+      - alert: TargetDown
+        expr: up == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.job }} target {{ $labels.instance }} is down"
+          description: >-
+            Prometheus has failed to scrape this target for five minutes. For the
+            status exporter this also means every data-tier metric is stale.
+
+      - alert: StatusExporterFailing
+        expr: homelabs_data_status_exporter_last_scrape_success == 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "the status exporter cannot read the API"
+          description: >-
+            The exporter has served metrics but its last Kubernetes API read
+            failed. Data-tier readiness and CronJob freshness are unknown until
+            this clears; the alert inhibits the alerts it would otherwise cause.
+
+      - alert: DataWorkloadNotReady
+        expr: homelabs_data_workload_ready == 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.namespace }}/{{ $labels.name }} has no ready replica"
+          description: >-
+            The Deployment or StatefulSet reports zero ready replicas against a
+            non-zero desired count for fifteen minutes.
+
+      - alert: ResticBackupStale
+        expr: >-
+          time() - homelabs_data_cronjob_last_successful_timestamp_seconds{cronjob="restic-backup"} > 26 * 3600
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "no successful restic run for {{ $labels.namespace }} in 26h"
+          description: >-
+            The tree has not completed a backup for more than a night and two
+            hours. Check `kubectl -n {{ $labels.namespace }} get jobs` and the
+            Job's log; the host's restic job still holds this tree until its
+            restore drill passes (docs/data-migration.md).
+
+      - alert: ResticPreflightStale
+        expr: >-
+          time() - homelabs_data_cronjob_last_successful_timestamp_seconds{cronjob="restic-preflight"} > 8 * 24 * 3600
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.namespace }} restic preflight has not passed in 8 days"
+          description: >-
+            The weekly permission and read drill has not produced a successful
+            Job in eight days, so the tree's readiness to own its backups is
+            unproven. It runs weekly; a missed week is not noise.

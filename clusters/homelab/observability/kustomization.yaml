@@ -2,10 +2,13 @@ apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
 # One Flux stage (platform-observability) applies this tree after the admission
-# and network stages. Loki, Prometheus, Vector, the status exporter and the Loki
-# gateway live in the `observability` platform namespace.
+# and network stages. Prometheus, Alertmanager, the mail relay, Loki, Vector, the
+# status exporter and the Loki gateway live in the `observability` platform
+# namespace.
 resources:
   - prometheus
+  - alertmanager
+  - mailrelay
   - loki
   - vector
   - status-exporter

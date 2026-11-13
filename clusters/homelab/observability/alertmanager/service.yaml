@@ -1,0 +1,48 @@
+# ClusterIP only: Prometheus pushes alerts to `alertmanager:9093` in this
+# namespace, and nothing outside it may dial this Service. There is no Ingress
+# and no NodePort, so the UI is reachable only with a port-forward.
+apiVersion: v1
+kind: Service
+metadata:
+  name: alertmanager
+  labels:
+    app.kubernetes.io/name: alertmanager
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: observability
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: alertmanager
+  ports:
+    - name: http
+      port: 9093
+      targetPort: http
+---
+# The notification log and the silences. Losing it costs a re-sent mail, not an
+# alert: Prometheus re-sends every firing alert on `group_interval` regardless.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: alertmanager-data
+  labels:
+    app.kubernetes.io/name: alertmanager
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: observability
+spec:
+  accessModes: ["ReadWriteOnce"]
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 1Gi
+---
+# Alertmanager never talks to the API server: the config is a mounted file and no
+# token is automounted.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: alertmanager
+  labels:
+    app.kubernetes.io/name: alertmanager
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: observability
+automountServiceAccountToken: false

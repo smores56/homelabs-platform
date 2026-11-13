@@ -1,0 +1,100 @@
+# Alertmanager, single replica (SDLC #620). There is no HA pair to form on a
+# single-node cluster, so gossip is disabled outright: `--cluster.listen-address`
+# empty makes this instance standalone, and the 1 Gi claim holds its silences and
+# notification log so a restart does not re-send or forget anything.
+#
+# It receives alerts from Prometheus only (the alerts are evaluated there and
+# sent over `/api/v2/alerts`) and forwards them to `mailrelay`, which speaks the
+# Cloudflare Email Service API. Two hops on purpose: Alertmanager's own SMTP
+# receiver would need a relay with a host and a set of credentials that no host
+# in this cluster runs, and the host already has a working sender
+# (`cloudflare-email@`), so the small HTTP shim reuses that API instead of
+# introducing an SMTP server.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: alertmanager
+  labels:
+    app.kubernetes.io/name: alertmanager
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: observability
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: alertmanager
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: alertmanager
+        app.kubernetes.io/part-of: homelabs
+        homelabs.dev/tier: observability
+    spec:
+      serviceAccountName: alertmanager
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        fsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: alertmanager
+          image: prom/alertmanager:v0.35.0
+          args:
+            - --config.file=/etc/alertmanager/alertmanager.yaml
+            - --storage.path=/alertmanager
+            - --web.listen-address=0.0.0.0:9093
+            # No peer: a second Alertmanager would only duplicate every
+            # notification, and there is no second node to place it on.
+            - --cluster.listen-address=
+            # The UI never leaves the namespace; there is no Ingress and the
+            # NetworkPolicy admits Prometheus only.
+            - --web.external-url=http://alertmanager.observability.svc.cluster.local:9093
+          ports:
+            - name: http
+              containerPort: 9093
+          resources:
+            requests:
+              cpu: 20m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          readinessProbe:
+            httpGet:
+              path: /-/ready
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 15
+          livenessProbe:
+            httpGet:
+              path: /-/healthy
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 30
+          volumeMounts:
+            - name: config
+              mountPath: /etc/alertmanager
+              readOnly: true
+            - name: data
+              mountPath: /alertmanager
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: config
+          configMap:
+            name: alertmanager-config
+        - name: data
+          persistentVolumeClaim:
+            claimName: alertmanager-data
+        - name: tmp
+          emptyDir: {}

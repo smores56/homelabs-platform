@@ -2,10 +2,11 @@
 """Human-owned status exporter for the `data` namespace.
 
 Agents (nanobot) never receive `get pods` in a data namespace, so this process
-is the sanctioned, read-only view of what runs there: readiness, restart counts
-and image versions, rendered as Prometheus metrics. It holds one narrowly scoped
-identity: the workload ClusterRole grants `get/list/watch pods` and `get/list`
-on deployments/statefulsets and is bound by one RoleBinding per data namespace,
+is the sanctioned, read-only view of what runs there: readiness, restart counts,
+image versions and CronJob freshness, rendered as Prometheus metrics. It holds
+one narrowly scoped identity: the workload ClusterRole grants `get/list/watch
+pods`, `get/list` on deployments/statefulsets and `get/list` on cronjobs, and is
+bound by one RoleBinding per data namespace,
 while the cluster-scoped `nodes` read lives in a separate ClusterRole bound by a
 single ClusterRoleBinding. Binding the workload role cluster-wide would hand out
 `pods` everywhere, which is why the roles are split.
@@ -22,6 +23,7 @@ import ssl
 import threading
 import time
 import urllib.request
+from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Iterable
 
@@ -132,6 +134,50 @@ def workload_metrics(workloads: Iterable[dict[str, Any]]) -> list[str]:
     return lines
 
 
+def parse_rfc3339(value: Any) -> float:
+    """Unix seconds for a Kubernetes RFC 3339 timestamp; 0.0 when absent.
+
+    Kubernetes writes `2026-11-13T03:05:41Z`. `fromisoformat` handles the `Z`
+    form only from Python 3.11, which the image satisfies, and `Z` is the form
+    the API server emits for these fields. An unparsable value is reported as 0
+    (never succeeded) rather than crashing the whole scrape: a wrong timestamp is
+    visible as a stale-backup alert, not as a dead exporter.
+    """
+    if not value:
+        return 0.0
+    try:
+        return float(datetime.fromisoformat(str(value).replace("Z", "+00:00")).timestamp())
+    except ValueError:
+        return 0.0
+
+
+def cronjob_metrics(cronjobs: Iterable[dict[str, Any]]) -> list[str]:
+    """Freshness and suspension for every CronJob in the scraped namespaces.
+
+    `last_successful_timestamp_seconds` is what the backup alerts compare against
+    wall-clock time; 0 means no successful run has ever been recorded, which is
+    also the state before the first run. `suspended` is the operator's own switch
+    and is exported so a deliberately paused job is distinguishable from one that
+    is failing.
+    """
+    lines: list[str] = []
+    for cronjob in cronjobs:
+        metadata = cronjob.get("metadata", {})
+        namespace = metadata.get("namespace", DEFAULT_NAMESPACE)
+        labels = {"namespace": namespace, "cronjob": metadata.get("name", "")}
+        status = cronjob.get("status") or {}
+        lines.append(
+            render_sample(
+                "homelabs_data_cronjob_last_successful_timestamp_seconds",
+                labels,
+                parse_rfc3339(status.get("lastSuccessfulTime")),
+            )
+        )
+        suspended = 1 if (cronjob.get("spec") or {}).get("suspend") else 0
+        lines.append(render_sample("homelabs_data_cronjob_suspended", labels, suspended))
+    return lines
+
+
 def render_success(success: bool, last_success_at: float | None = None) -> str:
     """Exporter self-metrics.
 
@@ -204,7 +250,14 @@ class KubernetesClient:
             statefulsets = self.get(f"/apis/apps/v1/namespaces/{namespace}/statefulsets").get(
                 "items", []
             )
-            samples += pod_metrics(pods) + workload_metrics(deployments + statefulsets)
+            cronjobs = self.get(f"/apis/batch/v1/namespaces/{namespace}/cronjobs").get(
+                "items", []
+            )
+            samples += (
+                pod_metrics(pods)
+                + workload_metrics(deployments + statefulsets)
+                + cronjob_metrics(cronjobs)
+            )
         return samples
 
 

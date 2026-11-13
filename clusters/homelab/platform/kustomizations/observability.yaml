@@ -23,8 +23,10 @@ spec:
     name: flux-system
   serviceAccountName: kustomize-controller
 ---
-# External Secrets objects for the Loki gateway token. Same precondition as
-# platform-secrets-eso: install the operator first (docs/manual-steps.md step 8).
+# External Secrets objects for the observability namespace: the Loki gateway
+# token (a Password generator) and the mail relay's Cloudflare token, which is a
+# SOPS projection. Same precondition as platform-secrets-eso: install the
+# operator first (docs/manual-steps.md step 8).
 # Do not express that as `suspend: true` here — git owns this spec, so the flag
 # would return on the next flux-system reconcile.
 apiVersion: kustomize.toolkit.fluxcd.io/v1
@@ -40,7 +42,7 @@ spec:
   retryInterval: 1m
   timeout: 5m
   prune: true
-  path: ./clusters/homelab/observability/loki-gateway/eso
+  path: ./clusters/homelab/observability/eso
   dependsOn:
     - name: platform-observability
   sourceRef:

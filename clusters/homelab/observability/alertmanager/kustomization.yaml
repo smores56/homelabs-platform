@@ -1,0 +1,13 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: observability
+resources:
+  - deployment.yaml
+  - service.yaml
+# The config is a mounted file the pod reads at start; a change renames the
+# ConfigMap, kustomize rewrites the volume name, and the Recreate strategy rolls
+# the pod, so a route edit is never a live-reload guess.
+configMapGenerator:
+  - name: alertmanager-config
+    files:
+      - alertmanager.yaml

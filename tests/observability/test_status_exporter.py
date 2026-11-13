@@ -133,11 +133,11 @@ class RenderTest(unittest.TestCase):
         self.assertEqual('m{pod="a\\"b\\\\c"} 1', line)
 
     def test_render_reports_scrape_success(self) -> None:
-        text = exporter.render(["homelabs_data_pod_ready{a=\"b\"} 1"], True, 1794370185)
+        text = exporter.render(["homelabs_data_pod_ready{a=\"b\"} 1"], True, 1794367785)
         self.assertIn("homelabs_data_pod_ready{a=\"b\"} 1", text)
         self.assertIn("homelabs_data_status_exporter_last_scrape_success 1", text)
         self.assertIn(
-            "homelabs_data_status_exporter_last_scrape_timestamp_seconds 1794370185", text
+            "homelabs_data_status_exporter_last_scrape_timestamp_seconds 1794367785", text
         )
         self.assertTrue(text.endswith("\n"))
 
@@ -147,6 +147,53 @@ class RenderTest(unittest.TestCase):
         self.assertIn("homelabs_data_status_exporter_last_scrape_success 0", text)
         self.assertIn(
             "homelabs_data_status_exporter_last_scrape_timestamp_seconds 0", text
+        )
+
+
+def cronjob(last_successful: str | None, suspend: bool = False) -> dict:
+    status = {} if last_successful is None else {"lastSuccessfulTime": last_successful}
+    return {
+        "metadata": {"name": "restic-backup", "namespace": "immich"},
+        "spec": {"suspend": suspend},
+        "status": status,
+    }
+
+
+class CronJobMetricsTest(unittest.TestCase):
+    """Backup freshness is what the ResticBackupStale rule compares to the clock."""
+
+    def test_rfc3339_is_unix_seconds(self) -> None:
+        self.assertEqual(1794367785.0, exporter.parse_rfc3339("2026-11-11T03:29:45Z"))
+
+    def test_missing_timestamp_is_zero(self) -> None:
+        self.assertEqual(0.0, exporter.parse_rfc3339(None))
+
+    def test_unparsable_timestamp_is_zero_not_a_crash(self) -> None:
+        self.assertEqual(0.0, exporter.parse_rfc3339("not-a-time"))
+
+    def test_metrics_carry_the_tree_and_the_success_time(self) -> None:
+        self.assertEqual(
+            [
+                'homelabs_data_cronjob_last_successful_timestamp_seconds'
+                '{cronjob="restic-backup",namespace="immich"} 1794367785.0',
+                'homelabs_data_cronjob_suspended{cronjob="restic-backup",namespace="immich"} 0',
+            ],
+            exporter.cronjob_metrics([cronjob("2026-11-11T03:29:45Z")]),
+        )
+
+    def test_never_succeeded_reports_zero(self) -> None:
+        lines = exporter.cronjob_metrics([cronjob(None)])
+        self.assertIn(
+            'homelabs_data_cronjob_last_successful_timestamp_seconds'
+            '{cronjob="restic-backup",namespace="immich"} 0.0',
+            lines,
+        )
+
+    def test_suspended_job_is_visible(self) -> None:
+        lines = exporter.cronjob_metrics([cronjob(None, suspend=True)])
+        self.assertIn(
+            'homelabs_data_cronjob_suspended{cronjob="restic-backup",namespace="immich"} 1',
+            lines,
         )
 
 

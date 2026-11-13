@@ -1119,3 +1119,45 @@ The failure signal for a tree is the Alertmanager route in step 25
 (`ResticBackupStale` fires when no successful run has been recorded for 26 hours)
 — check `kubectl -n <ns> get jobs` and the Job's log before assuming the share is
 the problem.
+
+## 25. Create the Alertmanager mail token and send a test alert
+
+Cluster alerts go Prometheus → Alertmanager → `mailrelay` → Cloudflare's Email
+Service API (`clusters/homelab/observability/alertmanager/` and `mailrelay/`).
+The relay needs one credential; the sender, recipient and account tag are in the
+Deployment as identifiers.
+
+1. Mint a Cloudflare API token with **Email Sending: Edit** on the account, on the
+   same onboarding as the host's `cloudflare-email` sender (the from address must
+   be on `send.sammohr.dev`, and the recipient must be verified there). Store it:
+
+   ```sh
+   kubectl -n observability create secret generic alertmanager-mail-sops \
+     --from-literal=token=<token>
+   ```
+
+   Do not commit that file. `ExternalSecret` `mailrelay-token` projects it, and the
+   `platform-observability-secrets` stage must be resumed first (step 8).
+
+2. Confirm the whole chain before trusting it:
+
+   ```sh
+   kubectl -n observability get deploy alertmanager mailrelay
+   kubectl -n observability port-forward svc/alertmanager 9093:9093 &
+   curl -s -XPOST localhost:9093/api/v2/alerts -H 'Content-Type: application/json' -d '[{
+     "labels": {"alertname": "MailPathTest", "severity": "warning", "namespace": "observability"},
+     "annotations": {"summary": "manual test of the alert path"}}]'
+   kubectl -n observability logs deploy/mailrelay --tail=20
+   ```
+
+   The relay log shows `"POST /alert HTTP/1.1" 200`; a 502 means Cloudflare
+   rejected the call (bad token, unverified recipient, wrong from domain) and the
+   response body names which. The test alert resolves after
+   `global.resolve_timeout` (5m) and sends a second, resolved mail.
+
+3. Only after the test mail arrives may a moved unit lose its `cloudflare-email@`
+   hook. Host-only units keep it: there is no host → cluster ingest yet.
+
+4. Rotating the token is: replace `alertmanager-mail-sops`, wait for the 1h ESO
+   refresh (or delete `mailrelay-token`), then revoke the old token. The relay
+   reads the mounted file per delivery, so nothing restarts.

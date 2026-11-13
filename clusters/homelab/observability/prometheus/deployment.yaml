@@ -41,6 +41,9 @@ spec:
             - --storage.tsdb.retention.time=168h
             - --storage.tsdb.retention.size=8GB
             - --web.listen-address=0.0.0.0:9090
+            # Rule files are re-read only on (re)load; the ConfigMap rename plus
+            # the Recreate strategy is what delivers a change.
+            - --web.enable-lifecycle
           ports:
             - name: http
               containerPort: 9090
@@ -72,6 +75,9 @@ spec:
             - name: config
               mountPath: /etc/prometheus
               readOnly: true
+            - name: rules
+              mountPath: /etc/prometheus/rules
+              readOnly: true
             - name: data
               mountPath: /prometheus
             - name: tmp
@@ -80,6 +86,9 @@ spec:
         - name: config
           configMap:
             name: prometheus-config
+        - name: rules
+          configMap:
+            name: prometheus-rules
         - name: data
           persistentVolumeClaim:
             claimName: prometheus-data
