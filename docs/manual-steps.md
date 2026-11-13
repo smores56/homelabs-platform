@@ -771,6 +771,31 @@ before the first apply; applying first fails on the destroy.
    Expected: `BROKER_URL` is set, no `CLOUDFLARE_*` variable exists, and the
    pod has no mounted service-account token.
 
+### Rotating the agent's WebUI token
+
+The WebUI password is `channels.websocket.tokenIssueSecret` in
+`$HOME/.nanobot/config.json` on the scratch PVC
+(`/data/home/.nanobot/config.json`). nanobot generates it on first start, so it
+appears in that bootstrap's pod log; rotate it if the log was shared. Rotation
+invalidates every issued websocket token, so open browsers must sign in again.
+
+```sh
+cluster-kubectl -n tenant-apps exec -i deploy/nanobot -- python - <<'PY'
+import json, secrets, pathlib
+p = pathlib.Path("/data/home/.nanobot/config.json")
+c = json.loads(p.read_text())
+ws = c.setdefault("channels", {}).setdefault("websocket", {})
+ws["tokenIssueSecret"] = secrets.token_hex(16)
+p.write_text(json.dumps(c, indent=2) + "\n")
+print("new WebUI token:", ws["tokenIssueSecret"])
+PY
+cluster-kubectl -n tenant-apps rollout restart deploy/nanobot
+```
+
+`render.py` rewrites only the listener hosts, providers, presets, prompt, skills
+and cron, so the rotated secret survives restarts; the rollout also discards the
+old container log. Store the printed token in the password manager.
+
 ## 21. Kanbei private route and service token
 
 `tofu/kanbei.tf` creates the private WARP hostname route and its Access
