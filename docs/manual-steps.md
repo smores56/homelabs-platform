@@ -823,60 +823,61 @@ cluster-kubectl -n tenant-apps rollout restart deploy/nanobot
 and cron, so the rotated secret survives restarts; the rollout also discards the
 old container log. Store the printed token in the password manager.
 
-## 21. Kanbei private route and service token
+## 21. Kanbei public hostname behind Access
 
-`tofu/kanbei.tf` creates the private WARP hostname route and its Access
-application. It deliberately creates **no** DNS record and **no** tunnel ingress
-rule: a record would make `kanbei.sammohr.dev` public, and the host tunnel's
-ingress stays in nix-config. The route and the application both carry
-`prevent_destroy`; re-adopting them after a state loss is `tofu import`, and
-removing them is `tofu state rm` first, then the dashboard.
+`tofu/kanbei.tf` creates the Access application for `kanbei.sammohr.dev`. The
+hostname is published by the host tunnel's ingress in nix-config
+(`webProxy.services.kanbei` -> `https://127.0.0.1:443`, the relay into the
+guest), so the guest's certificate is what cloudflared verifies between the
+connector and the origin. The wildcard CNAME in `tofu/main.tf` resolves the
+name; no `cloudflare_dns_record` is created, and `tests/tofu/check.sh` asserts
+that. A browser sees the Cloudflare edge certificate, not the guest's.
 
-1. Finish the WARP client posture before applying (nix-config
-   `docs/kanbei-access.md` has the full table): Gateway proxy on with TCP,
-   split-tunnel include `100.80.0.0/16` and `2606:4700:0cf1:4000::/64`, DNS
-   through Gateway with no local-domain fallback for `dev`, and TLS decryption
-   off for this hostname so the guest certificate stays end to end.
+This change retires the private WARP hostname route, and that takes two applies.
+OpenTofu refuses to destroy a resource whose state still carries
+`prevent_destroy`, so the route's guard is dropped first and the follow-up
+change deletes the resource.
 
-2. Apply the two objects; the plan must show no DNS record:
+1. Publish the ingress first, in nix-config: the same generation enables
+   `kanbeiVm` and declares `webProxy.services.kanbei`. After the switch:
+
+   ```sh
+   curl -sS -o /dev/null -D - https://kanbei.sammohr.dev/ | head -3
+   # expect: HTTP/2 302 to <team>.cloudflareaccess.com
+   ```
+
+2. Apply the application change; the plan must show no DNS record:
 
    ```sh
    tofu -chdir=tofu plan -no-color
-   # expect: cloudflare_zero_trust_network_hostname_route.kanbei (create) and
-   # cloudflare_zero_trust_access_application.kanbei (create), nothing else
+   # expect: cloudflare_zero_trust_access_application.kanbei (update), nothing else
    tofu -chdir=tofu apply -no-color
    ```
 
-3. Verify the route is private and the application exists. The wildcard CNAME
-   still resolves the name (that is expected); a *specific* record is the
-   regression:
+3. Apply the route removal, in the commit that deletes the resource:
 
    ```sh
-   ZONE=$(curl -sS -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
-     "https://api.cloudflare.com/client/v4/zones?name=sammohr.dev" |
-     jq -r '.result[0].id')
-   curl -sS -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
-     "https://api.cloudflare.com/client/v4/zones/$ZONE/dns_records?name=kanbei.sammohr.dev" |
-     jq '.result | length'        # expect 0
-   tofu -chdir=tofu state list | grep -E 'network_hostname_route\.kanbei|access_application\.kanbei$'
+   tofu -chdir=tofu plan -no-color
+   # expect: cloudflare_zero_trust_network_hostname_route.kanbei (destroy), nothing else
+   tofu -chdir=tofu apply -no-color
    ```
 
-   With WARP paused, `curl -sS -o /dev/null -D - https://kanbei.sammohr.dev/`
-   must not reach the guest (Access denies, or the tunnel 404s); with WARP on
-   and TLS inspection off, the certificate is the guest's:
-   `openssl s_client -connect kanbei.sammohr.dev:443 -servername kanbei.sammohr.dev </dev/null`
-   shows `CN = kanbei.sammohr.dev` from the ACME CA, not a Cloudflare edge
-   certificate.
+4. Verify the name is public-but-gated and no private route survives:
 
-4. The application allows the owner email (and thus the owner's enrolled WARP
-   identity) and **nothing else**. It deliberately does not attach the
-   account-wide `Service Auth` policy: that decision accepts any valid service
-   token in the account, so the agent's own token would open Kanbei. Do not
-   attach it. An unattended client that must reach Kanbei needs its own Access
-   decision plus a reviewed terraform change, and the state-rm/import order in
-   step 3 applies to any policy edit on this app. The owner uses the WARP
-   identity, not a token. `tests/tofu/check.sh` fails if a second policy (or a
-   bypass) appears on the Kanbei application.
+   ```sh
+   tofu -chdir=tofu state list | grep -E 'network_hostname_route|access_application\.kanbei$'
+   dig +short kanbei.sammohr.dev      # Cloudflare edge addresses, never 172.64.128.0/20
+   ```
+
+   A token address from the Gateway initial-resolved range means a hostname
+   route still exists, and WARP clients would take the retired path.
+
+5. The application allows the owner email and **nothing else**. It deliberately
+   does not attach the account-wide `Service Auth` policy: that decision accepts
+   any valid service token in the account, so the agent's own token would open
+   Kanbei. Do not attach it; an unattended client that must reach Kanbei needs
+   its own Access decision plus a reviewed terraform change. `tests/tofu/check.sh`
+   fails if a second policy (or a bypass) appears on the application.
 
 ## 22. Create the read-only mirror PAT and run `github-backup`
 

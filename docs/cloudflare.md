@@ -9,7 +9,7 @@ Kanbei-critical (`docs/kanbei-critical.md`): the token can repoint a route.
 
 | Tunnel | Runs where | Serves | Owner |
 | --- | --- | --- | --- |
-| Host tunnel | `cloudflared` on `smortress`, declared from `nix-config` `modules/nixos/web-proxy.nix` | `ssh.sammohr.dev`, the Kanbei private WARP route, and `agent`/`memory` until their cluster cutovers | human, nix-config |
+| Host tunnel | `cloudflared` on `smortress`, declared from `nix-config` `modules/nixos/web-proxy.nix` | `ssh.sammohr.dev`, `kanbei.sammohr.dev`, and `agent`/`memory` until their cluster cutovers | human, nix-config |
 | Cluster tunnel | `cloudflared` in the `ingress` namespace (`clusters/homelab/ingress/`) | the apps whose origin moved into the cluster (`immich`, `music`, `calibre`, later `memory`, `agent`) | this repository |
 
 `tofu/` owns DNS, Access and notifications for **both** tunnels; it does not
@@ -18,30 +18,19 @@ in `tofu/main.tf` (as it was before the move); its container, credentials and
 ingress rules stay in nix-config. The cluster tunnel's DNS comes from
 `var.cluster_hosts` and `var.cluster_tunnel_id` in `tofu/dns.tf`.
 
-The Kanbei route is a **private hostname route**, not a public DNS record:
-`kanbei.sammohr.dev` is reached only through WARP, with Gateway TLS decryption
-off. `tofu/kanbei.tf` creates the route and its Access application (SDLC #586),
-reusing `var.host_tunnel_id`; it deliberately creates no `cloudflare_dns_record`
-and no tunnel ingress rule. The route is only useful after the WARP posture in
-`docs/manual-steps.md` step 21 is in place. The shape is:
+`kanbei.sammohr.dev` is a **public hostname behind Access**: the host tunnel's
+ingress in nix-config (`webProxy.services.kanbei`) sends it to
+`https://127.0.0.1:443`, the relay into the guest, and the guest terminates TLS
+with its own certificate; the wildcard record below resolves the name.
+`tofu/kanbei.tf` creates only the Access application (SDLC #586): a public
+`self_hosted` destination, the owner email policy, and no `service_auth`.
 
-```hcl
-resource "cloudflare_zero_trust_network_hostname_route" "kanbei" {
-  account_id = var.account_id
-  hostname   = "kanbei.${var.domain}"
-  tunnel_id  = var.host_tunnel_id
-}
-
-resource "cloudflare_zero_trust_access_application" "kanbei" {
-  # owner email + service auth, no bypass, prevent_destroy
-}
-```
-
-`*.sammohr.dev` still resolves the name to the host tunnel, but the tunnel has
-no ingress rule for it, so a request that bypasses WARP reaches the 404
-fallback and Access denies it first. A specific DNS record or a dashboard
-ingress entry would reopen the path; `tests/tofu/check.sh` asserts neither
-exists.
+A private WARP hostname route and its Gateway L4 rewrite were retired on
+2026-11-13. A private hostname needs Gateway to hand the client an
+initial-resolved IP and rewrite the connection into the tunnel, which never
+happened for either owner device; a public hostname needs no client component.
+`tests/tofu/check.sh` asserts there is no hostname route and no specific DNS
+record.
 
 Nothing about the host tunnel's ingress rules is asserted here; the
 `webProxy.services` assertion in nix-config is what keeps a protected hostname
@@ -174,10 +163,11 @@ zone with no application of its own is reachable only by the owner's identity.
 
 - **Protected applications** keep the email allow policy and add `service auth`
   (`non_identity`, any valid service token) where an unattended client connects:
-  `ssh` (`cloudflared access ssh`), `memory` (the MCP wrapper's device), `agent`
-  (a blessed device's proxy), and `kanbei` (the private WARP route, with
-  `allow_authenticate_via_warp` so an enrolled device passes without a browser
-  redirect). `nanobot` is retired (SDLC #583): the cluster serves the same app on
+  `ssh` (`cloudflared access ssh`), `memory` (the MCP wrapper's device) and
+  `agent` (a blessed device's proxy). `kanbei` keeps the email policy alone and
+  adds `allow_authenticate_via_warp`, so a device that already runs the
+  Cloudflare One client skips the login; a device without it gets the ordinary
+  Access redirect. `nanobot` is retired (SDLC #583): the cluster serves the same app on
   `agent`, and the old application is gone rather than left email-only.
   The API rejects `allow_authenticate_via_warp` until the account has a
   Cloudflare One Client authentication session duration (Zero Trust → Access →
