@@ -1239,13 +1239,37 @@ CONTROL_RBAC
         continue
         ;;
     esac
+    # `kubectl auth can-i get pods/log` drops the subresource: kubectl parses the
+    # positional argument as a plain resource and only honours --subresource, so
+    # the row silently asked about pods. Split it ourselves; without this a
+    # cluster-wide `pods` read "passes" a pods/log denial and a real log read
+    # goes unasserted.
+    resource_name=$resource
+    subresource=()
+    if [[ $resource == */* ]]; then
+      resource_name=${resource%%/*}
+      subresource=("--subresource=${resource#*/}")
+    fi
     if [[ $ns == "-" ]]; then
-      got=$(kubectl auth can-i "$verb" "$resource" --as "$sa" 2>/dev/null)
+      got=$(kubectl auth can-i "$verb" "$resource_name" "${subresource[@]}" --as "$sa" 2>/dev/null)
     else
-      got=$(kubectl auth can-i "$verb" "$resource" -n "$ns" --as "$sa" 2>/dev/null)
+      got=$(kubectl auth can-i "$verb" "$resource_name" "${subresource[@]}" -n "$ns" --as "$sa" 2>/dev/null)
     fi
     eq "${got:-error}" "$expect" "runtime: rbac ${subject:-tenant} $verb $resource ($ns)"
   done <tests/policies/rbac.tsv
+
+  # `auth can-i` has no --resource-name, so a rule scoped by resourceNames
+  # cannot ride in rbac.tsv: `deployments.apps/nanobot` would read as the
+  # `nanobot` subresource. Ask the authorizer directly instead.
+  name_allows() { # verb group resource name namespace user -> true|false
+    cat <<JSON | kubectl create -f - -o jsonpath='{.status.allowed}' 2>/dev/null
+{"apiVersion":"authorization.k8s.io/v1","kind":"SubjectAccessReview","spec":{"user":"$6","resourceAttributes":{"namespace":"$5","verb":"$1","group":"$2","resource":"$3","name":"$4"}}}
+JSON
+  }
+  eq "$(name_allows patch apps deployments nanobot tenant-apps "$control_sa")" "true" \
+    "runtime: rbac control patch deployments.apps/nanobot (tenant-apps)"
+  eq "$(name_allows patch apps deployments bench tenant-apps "$control_sa")" "false" \
+    "runtime: rbac control patch deployments.apps/bench (tenant-apps)"
 
   out=$(kubectl create secret generic probe --from-literal=k=v --dry-run=server \
     -n tenant-apps --as "$tenant_sa" 2>&1)

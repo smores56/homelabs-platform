@@ -1,7 +1,9 @@
 # verb	resource	namespace	expect	subject (tenant|agent)
 # namespace "-" means cluster scope. Every line is evaluated with
 # kubectl auth can-i --as=system:serviceaccount:tenant-apps:tenant-apps-reconciler
-# against a real API server in --runtime mode.
+# against a real API server in --runtime mode. `resource/subresource` is passed
+# as --subresource (a positional slash is ignored by kubectl), so a name-scoped
+# rule cannot live here; check.sh probes resourceNames with a SubjectAccessReview.
 create	secrets	tenant-apps	no
 list	secrets	tenant-apps	no
 create	serviceaccounts	tenant-apps	no
@@ -81,8 +83,6 @@ create	pods	immich	no	exporter
 get	pods	tenant-apps	yes	control
 list	pods/log	tenant-apps	yes	control
 get	events	tenant-apps	yes	control
-patch	deployments.apps/nanobot	tenant-apps	yes	control
-patch	deployments.apps/bench	tenant-apps	no	control
 patch	deployments.apps	tenant-apps	no	control
 delete	pods	tenant-apps	no	control
 create	pods	tenant-apps	no	control
