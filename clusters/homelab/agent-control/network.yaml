@@ -1,0 +1,92 @@
+# Both ends of the one flow, plus the pod's own API egress. `tenant-apps` and
+# `broker` are default-deny, so a missing half fails closed; stating both here
+# means neither side depends on the other's file being applied first
+# (agent-ingress.yaml precedent).
+#
+# DNS is not restated: `allow-dns-egress` in platform/network already selects
+# every pod in tenant-apps.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: agent-control-from-broker
+  namespace: tenant-apps
+  labels:
+    app.kubernetes.io/name: agent-control
+    homelabs.dev/tier: tenant
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: agent-control
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: broker
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: broker
+      ports:
+        - protocol: TCP
+          port: 8081
+---
+# The broker's namespaced half. The logical-host enrollment that uses it is in
+# broker.json (a separate lane); without this rule the broker's default-deny
+# egress would drop the request before the Service is reached.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: egress-agent-control
+  namespace: broker
+  labels:
+    app.kubernetes.io/name: agent-control
+    homelabs.dev/tier: broker
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: broker
+  policyTypes: ["Egress"]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: tenant-apps
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: agent-control
+      ports:
+        - protocol: TCP
+          port: 8081
+---
+# The API server is not a pod (kube-apiserver runs on the host in k3s), so a
+# podSelector cannot express it. A client dials the `kubernetes` ClusterIP on
+# 443, but the packet the policy sees is the post-DNAT node address on 6443, and
+# kube-router matches destination range and port independently: the same rule
+# names both ranges on both ports (observability/network precedent).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: agent-control-kubernetes-api-egress
+  namespace: tenant-apps
+  labels:
+    app.kubernetes.io/name: agent-control
+    homelabs.dev/tier: tenant
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: agent-control
+  policyTypes: ["Egress"]
+  egress:
+    - to:
+        # The k3s service range a client names, and the `cluster` guest's own
+        # address it is translated to (10.77.1.2/30 tap, nix-config
+        # modules/lib/vm-host.nix index 1) where k3s serves the API.
+        - ipBlock:
+            cidr: 10.43.0.0/16
+        - ipBlock:
+            cidr: 10.77.1.0/30
+      ports:
+        - protocol: TCP
+          port: 443
+        - protocol: TCP
+          port: 6443

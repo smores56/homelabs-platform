@@ -1,0 +1,61 @@
+# The agent-control identity. It is the only ServiceAccount in `tenant-apps`
+# besides nanobot that must mount a token — its whole purpose is to talk to the
+# API — and the privileges are capped at what the service's nine routes do.
+#
+# Absent on purpose: Secrets and ConfigMaps (no credentials, ever), pods/exec,
+# attach, portforward and proxy (no code execution or traffic interception),
+# create/update/delete on anything except the one annotation patch, and every
+# RBAC or CRD API group. The cluster-wide read half — pods, events, nodes,
+# workload metadata, Flux Kustomizations — is a separate ClusterRole in
+# clusters/homelab/agent-control, bound there, so no rule of it can be widened
+# by editing a namespaced Role.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: agent-control
+  namespace: tenant-apps
+  labels:
+    app.kubernetes.io/name: agent-control
+    homelabs.dev/tier: tenant
+automountServiceAccountToken: true
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: agent-control
+  namespace: tenant-apps
+  labels:
+    app.kubernetes.io/name: agent-control
+    homelabs.dev/tier: tenant
+rules:
+  # The agent's own pods: state, logs and events. Ownership is narrowed in the
+  # service (pods owned by the nanobot Deployment's ReplicaSets), which is a
+  # softer guarantee than RBAC could express — label selectors are not a verb.
+  - apiGroups: [""]
+    resources: ["pods", "pods/log", "events"]
+    verbs: ["get", "list", "watch"]
+  # One write, one object: the pod-template annotation that rolls the agent.
+  # `resourceNames` makes `patch deployments` a no-op for anything else in the
+  # namespace, and a deployment's other fields are still patchable — the
+  # service patches exactly one annotation and the RBAC is the ceiling.
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    resourceNames: ["nanobot"]
+    verbs: ["patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: agent-control
+  namespace: tenant-apps
+  labels:
+    app.kubernetes.io/name: agent-control
+    homelabs.dev/tier: tenant
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: agent-control
+subjects:
+  - kind: ServiceAccount
+    name: agent-control
+    namespace: tenant-apps

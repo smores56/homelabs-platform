@@ -1,0 +1,20 @@
+# ClusterIP only. The Service is the DNS name the broker's `self` logical host
+# dials (agent-control.tenant-apps.svc.cluster.local:8081); nothing publishes it
+# outside the cluster and no NodePort or Ingress exists.
+apiVersion: v1
+kind: Service
+metadata:
+  name: agent-control
+  namespace: tenant-apps
+  labels:
+    app.kubernetes.io/name: agent-control
+    homelabs.dev/tier: tenant
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: agent-control
+  ports:
+    - name: http
+      port: 8081
+      targetPort: http
+      protocol: TCP
