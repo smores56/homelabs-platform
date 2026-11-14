@@ -68,20 +68,23 @@ class InventoryContractTests(unittest.TestCase):
 
     def test_dataset_names_come_from_zfs_datasets(self):
         pending = set(BACKUP_VARS["backup_pending_host_groups"])
-        rows = {
-            row["recovery_group"]: row
-            for row in ALL_VARS["zfs_datasets"]
-        }
         for group in self.groups["groups"]:
             if group["group_id"] in pending:
                 continue
             key = group["group_id"].replace("-", "_")
             self.assertIn(key, ALL_VARS["recovery_inventory"])
+            expected = [
+                row["name"]
+                for row in ALL_VARS["zfs_datasets"]
+                if row["recovery_group"] == key
+            ]
             self.assertEqual(
-                [member["dataset"] for member in group["members"]],
-                [rows[key]["name"]],
+                sorted(member["dataset"] for member in group["members"]),
+                sorted(expected),
             )
-            self.assertEqual(group["members"][0]["mount"], rows[key]["mountpoint"])
+            mounts = {row["name"]: row["mountpoint"] for row in ALL_VARS["zfs_datasets"]}
+            for member in group["members"]:
+                self.assertEqual(member["mount"], mounts[member["dataset"]])
 
     def test_pending_groups_are_not_in_the_host_inventory_yet(self):
         pending = list(BACKUP_VARS["backup_pending_host_groups"])

@@ -15,13 +15,13 @@ data_plane_services:
     ports:
       - "127.0.0.1:7101:7101"
     environment:
-      DATA_PLANE_DB: "{{ data_plane_state_root }}/event-service/events.sqlite"
+      DATA_PLANE_DB: "{{ data_plane_state_root }}/events/events.sqlite"
       DATA_PLANE_SECRET_FILE: "{{ data_plane_secret_root }}/event-service.env"
       DATA_PLANE_HOST: "0.0.0.0"
       DATA_PLANE_PORT: "7101"
     state_dir: "{{ data_plane_state_root }}/event-service"
     volumes:
-      - "{{ data_plane_state_root }}/event-service:/var/lib/homelab/event-service:rw"
+      - "{{ data_plane_state_root }}/events:/var/lib/data-plane/events:rw"
     read_write_paths:
       - "{{ data_plane_state_root }}/event-service"
       - "{{ data_plane_run_root }}/event-service"
@@ -40,7 +40,7 @@ data_plane_services:
     ports:
       - "127.0.0.1:7102:7102"
     environment:
-      DATA_PLANE_DB: "{{ data_plane_state_root }}/write-broker/broker.sqlite"
+      DATA_PLANE_DB: "{{ data_plane_state_root }}/intents/intents.sqlite"
       DATA_PLANE_SECRET_FILE: "{{ data_plane_secret_root }}/write-broker.env"
       DATA_PLANE_CATALOG: "{{ data_plane_config_root }}/sources.json"
       DATA_PLANE_HOST: "0.0.0.0"
@@ -48,7 +48,7 @@ data_plane_services:
       DATA_PLANE_GENERAL_ROOT: /srv/books
     state_dir: "{{ data_plane_state_root }}/write-broker"
     volumes:
-      - "{{ data_plane_state_root }}/write-broker:/var/lib/homelab/write-broker:rw"
+      - "{{ data_plane_state_root }}/intents:/var/lib/data-plane/intents:rw"
       - "/srv/books:/srv/books:rw"
     read_write_paths:
       - "{{ data_plane_state_root }}/write-broker"
@@ -66,14 +66,14 @@ data_plane_services:
     args: ["backup"]
     ports: []
     environment:
-      DATA_PLANE_MANIFEST_DIR: "{{ data_plane_state_root }}/backup-controller/manifests"
+      DATA_PLANE_MANIFEST_DIR: "{{ data_plane_state_root }}/manifests"
       DATA_PLANE_GROUPS: "{{ backup_groups | default([]) | join(',') }}"
       DATA_PLANE_DESTINATIONS: "{{ backup_destinations | default([]) | join(',') }}"
       DATA_PLANE_SECRET_FILE: "{{ data_plane_secret_root }}/backup-controller.env"
     state_dir: "{{ data_plane_state_root }}/backup-controller"
     container_user: "65532:65532"
     volumes:
-      - "{{ data_plane_state_root }}/backup-controller:/var/lib/homelab/backup-controller:rw"
+      - "{{ data_plane_state_root }}/manifests:/var/lib/data-plane/manifests:rw"
       - "/srv:/srv:ro"
       - "/var/backups/primary:/var/backups/primary:rw"
       - "/var/backups/secondary:/var/backups/secondary:rw"
@@ -120,7 +120,7 @@ data_plane_services:
       - "127.0.0.1:7103:7103"
     environment:
       DATA_PLANE_PORTAL_DIR: "{{ data_plane_state_root }}/recovery-portal/site"
-      DATA_PLANE_MANIFEST_DIR: "{{ data_plane_state_root }}/backup-controller/manifests"
+      DATA_PLANE_MANIFEST_DIR: "{{ data_plane_state_root }}/manifests"
       DATA_PLANE_HOST: "0.0.0.0"
       DATA_PLANE_PORT: "7103"
     state_dir: "{{ data_plane_state_root }}/recovery-portal"

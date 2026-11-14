@@ -92,7 +92,6 @@ backup_destinations: "{{ backup_repositories | map(attribute='name') | list }}"
 # explicit members so a host apply cannot silently skip them. Delete an entry
 # only when all.yml classifies the same datasets.
 backup_pending_host_groups:
-  - data-plane-state
   - browsing
   - finance
   - mail
@@ -179,7 +178,7 @@ backup_group_specs:
     resume: []
     members:
       - name: event-log
-        dataset: tank/data-plane/event-log
+        dataset: tank/data-plane/events
         mount: /var/lib/data-plane/events
         writer: event-service
       - name: manifests
@@ -259,7 +258,7 @@ backup_dataset_paths:
   tank/notes: /srv/notes/.zfs/snapshot/{snapshot}
   tank/photos: /srv/photos/.zfs/snapshot/{snapshot}
   tank/wallpapers: /srv/wallpapers/.zfs/snapshot/{snapshot}
-  tank/data-plane/event-log: /var/lib/data-plane/events/.zfs/snapshot/{snapshot}
+  tank/data-plane/events: /var/lib/data-plane/events/.zfs/snapshot/{snapshot}
   tank/data-plane/manifests: /var/lib/data-plane/manifests/.zfs/snapshot/{snapshot}
   tank/data-plane/intents: /var/lib/data-plane/intents/.zfs/snapshot/{snapshot}
   tank/browsing/catalog: /var/lib/data-plane/browsing/.zfs/snapshot/{snapshot}
@@ -272,7 +271,7 @@ backup_dataset_paths:
 # Host paths for the snapshot unit and its request consumer. The manifest
 # directory is the same claim the in-cluster backup-controller watches.
 backup_state_root: /var/lib/data-plane
-backup_manifest_dir: /var/lib/homelab/backup-controller/manifests
+backup_manifest_dir: /var/lib/data-plane/manifests
 backup_request_dir: /var/lib/data-plane/requests
 backup_request_archive: /var/lib/data-plane/requests-archive
 backup_config_file: /etc/homelab/backup.json

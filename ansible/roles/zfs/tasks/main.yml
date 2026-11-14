@@ -21,7 +21,7 @@
       - zfs_datasets | selectattr('recovery_group', 'undefined') | list | length == 0
       - zfs_datasets | map(attribute='recovery_group') | unique
         | difference(recovery_inventory.keys() | list) | length == 0
-      - zfs_datasets | rejectattr('mountpoint', 'match', '^/srv/') | list | length == 0
+      - zfs_datasets | rejectattr('mountpoint', 'match', '^/(srv|var/lib/data-plane)/') | list | length == 0
       - zfs_datasets | map(attribute='mountpoint') | unique | length == (zfs_datasets | length)
     fail_msg: "Every dataset needs a recovery_group from recovery_inventory and a unique /srv mountpoint"
 

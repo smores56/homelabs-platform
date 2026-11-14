@@ -210,11 +210,17 @@ recovery_inventory:
   wallpapers:
     visibility: personal
     destination_tiers: [primary, secondary, r2]
+  data_plane_state:
+    visibility: infrastructure
+    destination_tiers: [primary, secondary, r2]
 
 # Structural parents hold no data and are never mounted themselves.
 zfs_container_datasets:
   - name: "{{ zfs_pool }}/memory"
     mountpoint: /srv/memory
+    canmount: "off"
+  - name: "{{ zfs_pool }}/data-plane"
+    mountpoint: /var/lib/data-plane
     canmount: "off"
 
 zfs_datasets:
@@ -253,6 +259,21 @@ zfs_datasets:
     recovery_group: wallpapers
     recordsize: 1M
     mode: "0755"
+  - name: "{{ zfs_pool }}/data-plane/events"
+    mountpoint: /var/lib/data-plane/events
+    recovery_group: data_plane_state
+    recordsize: 16K
+    mode: "0700"
+  - name: "{{ zfs_pool }}/data-plane/intents"
+    mountpoint: /var/lib/data-plane/intents
+    recovery_group: data_plane_state
+    recordsize: 16K
+    mode: "0700"
+  - name: "{{ zfs_pool }}/data-plane/manifests"
+    mountpoint: /var/lib/data-plane/manifests
+    recovery_group: data_plane_state
+    recordsize: 16K
+    mode: "0700"
 
 # Restic repositories only. Mounted on demand by the backup units, never at
 # boot, and never executed from or written setuid.
@@ -311,7 +332,7 @@ data_plane_images:
   recovery_portal: ""
   write_broker: ""
 
-data_plane_state_root: /var/lib/homelab
+data_plane_state_root: /var/lib/data-plane
 data_plane_config_root: /etc/homelab/data-plane
 data_plane_secret_root: /etc/homelab/secrets
 data_plane_podman_root: /var/lib/homelab/podman

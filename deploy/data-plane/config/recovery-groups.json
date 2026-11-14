@@ -210,22 +210,22 @@
       "parent_dataset": "tank/data-plane",
       "members": [
         {
-          "name": "event-log",
-          "dataset": "tank/data-plane/event-log",
+          "name": "events",
+          "dataset": "tank/data-plane/events",
           "mount": "/var/lib/data-plane/events",
+          "writer": "event-service"
+        },
+        {
+          "name": "intents",
+          "dataset": "tank/data-plane/intents",
+          "mount": "/var/lib/data-plane/intents",
           "writer": "event-service"
         },
         {
           "name": "manifests",
           "dataset": "tank/data-plane/manifests",
           "mount": "/var/lib/data-plane/manifests",
-          "writer": "backup-controller"
-        },
-        {
-          "name": "intents",
-          "dataset": "tank/data-plane/intents",
-          "mount": "/var/lib/data-plane/intents",
-          "writer": "write-broker"
+          "writer": "event-service"
         }
       ],
       "required_config": [
