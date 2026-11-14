@@ -38,7 +38,7 @@ concurrency:
 
 jobs:
   plan:
-    name: tofu plan (read-only)
+    name: tofu plan
     runs-on: ubuntu-latest
     timeout-minutes: 20
     # A job-level environment is the only place GitHub accepts one, so the whole
