@@ -24,6 +24,7 @@ from typing import Any, Iterable, Mapping
 
 from data_plane.backup.controller import FanoutController
 from data_plane.backup.destinations import InMemoryDestination
+from data_plane.backup.generations import read_manifest
 from data_plane.broker import Broker
 from data_plane.broker_journal import BrokerJournal
 from data_plane.collectors.relay import Relay
@@ -32,6 +33,7 @@ from data_plane.errors import DataPlaneError
 from data_plane.event_log import EventLog
 from data_plane.identity import IdentityIssuer
 from data_plane.intents import IntentStore
+from data_plane.recovery.portal import build_entries, write_portal
 from data_plane.model import (
     Authority,
     Capability,
@@ -42,9 +44,16 @@ from data_plane.model import (
     Visibility,
 )
 
-from . import backup_service, broker_service, common, event_service, relay_service
+from . import (
+    backup_service,
+    broker_service,
+    common,
+    event_service,
+    portal_service,
+    relay_service,
+)
 
-SERVICES = ("event", "broker", "relay", "backup")
+SERVICES = ("event", "broker", "relay", "backup", "portal")
 
 
 class ConfigError(Exception):
@@ -73,6 +82,10 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--manifest-dir", default=_env("DATA_PLANE_MANIFEST_DIR", "manifests")
     )
+    parser.add_argument(
+        "--portal-dir", default=_env("DATA_PLANE_PORTAL_DIR")
+    )
+    parser.add_argument("--dataset", action="append", dest="datasets")
     parser.add_argument("--group", action="append", dest="groups")
     parser.add_argument("--destination", action="append", dest="destinations")
     parser.add_argument(
@@ -316,6 +329,12 @@ def _run_broker(args: argparse.Namespace) -> int:
 
 
 def _run_backup(args: argparse.Namespace) -> int:
+    if _env("DATA_PLANE_ALLOW_FIXTURES", "false").lower() not in {"1", "true", "yes"}:
+        raise ConfigError(
+            "backup service is fixture-only until a real ZFS snapshotter and "
+            "restic destinations are configured; set DATA_PLANE_ALLOW_FIXTURES=true "
+            "only for a local drill"
+        )
     groups = tuple(args.groups or _comma_list(_env("DATA_PLANE_GROUPS"))) or (
         "fixture",
     )
@@ -332,11 +351,32 @@ def _run_backup(args: argparse.Namespace) -> int:
     return 0
 
 
+def _run_portal(args: argparse.Namespace) -> int:
+    manifest_dir = Path(args.manifest_dir)
+    manifests = [
+        read_manifest(path) for path in sorted(manifest_dir.glob("*.json"))
+    ]
+    destinations = tuple(
+        args.destinations or _comma_list(_env("DATA_PLANE_DESTINATIONS"))
+    )
+    datasets = tuple(args.datasets or _comma_list(_env("DATA_PLANE_DATASETS")))
+    if not destinations:
+        raise ConfigError("DATA_PLANE_DESTINATIONS is required for the portal")
+    directory = Path(
+        _required(args.portal_dir, "--portal-dir (DATA_PLANE_PORTAL_DIR)")
+    )
+    write_portal(directory, manifests, destinations, datasets, 1)
+    service = portal_service.PortalService(directory)
+    common.serve("portal", service.handler(), port=args.port, host=args.host)
+    return 0
+
+
 _RUNNERS = {
     "event": _run_event,
     "broker": _run_broker,
     "relay": _run_relay,
     "backup": _run_backup,
+    "portal": _run_portal,
 }
 
 
