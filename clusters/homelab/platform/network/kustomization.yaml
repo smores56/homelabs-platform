@@ -14,3 +14,4 @@ resources:
   - data-backup-egress.yaml
   - agent-ingress.yaml
   - webhook-flows.yaml
+  - notify-flows.yaml
