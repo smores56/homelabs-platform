@@ -246,7 +246,7 @@ eq "$(jq -r '.[] | select(.metadata.name == "mailrelay-egress-public") | [.spec.
   "mailrelay:0.0.0.0/0:10.0.0.0/8,100.64.0.0/10,127.0.0.0/8,169.254.0.0/16,172.16.0.0/12,192.168.0.0/16:443" \
   "only the mail relay reaches the public internet, only on 443, only global unicast"
 if jq -r '.[] | select(.metadata.name != "allow-dns-egress" and .metadata.name != "mailrelay-egress-public") | .spec.egress[]? | .to[]? | .ipBlock.cidr // empty' \
-  "$network_json" | grep -qx '0.0.0.0/0'; then
+  "$network_json" | grep -x '0.0.0.0/0' >/dev/null; then
   bad "an observability policy other than the mail relay allows public egress"
 else
   ok "no other observability pod reaches the public internet"
@@ -279,7 +279,10 @@ rules=clusters/homelab/observability/prometheus/rules.yaml
 for expr in 'up == 0' 'homelabs_data_workload_ready == 0' \
   'homelabs_data_cronjob_last_successful_timestamp_seconds{cronjob="restic-backup"} > 26 * 3600' \
   'homelabs_data_cronjob_last_successful_timestamp_seconds{cronjob="restic-preflight"} > 8 * 24 * 3600'; do
-  if yq -r '.groups[].rules[].expr' "$rules" | tr -s ' ' | grep -Fq -- "$expr"; then
+  # No `-q` anywhere in a `pipefail` pipeline: it makes grep exit at the first
+  # match, `tr` then dies of SIGPIPE, and pipefail turns a found rule into a
+  # missing one. Redirect instead, so grep reads to EOF.
+  if yq -r '.groups[].rules[].expr' "$rules" | tr -s ' ' | grep -F -- "$expr" >/dev/null; then
     ok "alert rule present: $expr"
   else
     bad "alert rule missing: $expr"
