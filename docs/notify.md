@@ -11,7 +11,7 @@ write to it; nothing sends mail.
 | `ntfy` Deployment, Service, claim, config | `clusters/homelab/notify/` |
 | Users, tokens, ACL | `ntfy-auth` Secret, projected by ESO from `ntfy-auth-sops` |
 | Public hostname | `ntfy.sammohr.dev`, cluster tunnel, Access bypass (`docs/cloudflare.md`) |
-| Cluster alerts | `notifyrelay` in `observability` -> `ntfy.notify:8080` |
+| Cluster alerts | `notifyrelay` in `observability` -> `ntfy.notify:8080` (Alertmanager `/alert`, Flux `/flux`) |
 | Host units | `ntfy-publish@.service` in `nix-config` -> `https://ntfy.sammohr.dev/alerts` |
 | The agent | `$BROKER_URL/notify/agent` |
 
@@ -61,3 +61,9 @@ There is no out-of-band channel once the mail path is gone. The two Cloudflare
 tunnel-health policies stay on email for exactly that reason: they detect the
 tunnel the bus is reached through. `ntfy-publish@` failures land in the journal,
 and `NtfyDown` fires when Prometheus stops scraping `/metrics`.
+
+Cluster alerts do not depend on the tunnel: `notifyrelay` posts to the Service,
+not to `ntfy.sammohr.dev`, so a tunnel outage still delivers Prometheus and Flux
+failures. The agent's path does depend on it — the broker resolves the public
+hostname — so agent notifications fail while the tunnel is down and the chat
+channel is unaffected.

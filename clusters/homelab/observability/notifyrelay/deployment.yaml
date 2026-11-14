@@ -1,17 +1,22 @@
-# The mail path for every cluster alert (SDLC #620). Alertmanager posts its
-# webhook payload here; this process turns it into the same Cloudflare Email
-# Service call the host's `cloudflare-email@` units make, so cluster and host
-# failures arrive from one verified sender.
+# The cluster's path to the notification bus (SDLC #620, #649). Alertmanager
+# posts its webhook payload to `/alert` and Flux's notification-controller posts
+# its generic-provider payload to `/flux`; this process turns each into one ntfy
+# publish on topic `alerts`, so cluster alerts and reconcile failures arrive on
+# the same bus as host unit failures.
 #
-# It is deliberately dumb: no template engine, no deduplication, no queue. A
-# 200 means Cloudflare accepted the message; a 502 makes Alertmanager retry from
-# its notification log.
+# It is deliberately dumb: no template engine, no deduplication, no queue. A 200
+# means ntfy accepted the message; a 502 makes the sender retry (Alertmanager
+# from its notification log, Flux on the next event).
+#
+# It posts to the in-cluster Service, not `ntfy.sammohr.dev`: it has no
+# `allow_private` rule to honour, and cluster alerts must not depend on the
+# tunnel they may be reporting on.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: mailrelay
+  name: notifyrelay
   labels:
-    app.kubernetes.io/name: mailrelay
+    app.kubernetes.io/name: notifyrelay
     app.kubernetes.io/part-of: homelabs
     homelabs.dev/tier: observability
 spec:
@@ -20,17 +25,17 @@ spec:
     type: Recreate
   selector:
     matchLabels:
-      app.kubernetes.io/name: mailrelay
+      app.kubernetes.io/name: notifyrelay
   template:
     metadata:
       labels:
-        app.kubernetes.io/name: mailrelay
+        app.kubernetes.io/name: notifyrelay
         app.kubernetes.io/part-of: homelabs
         homelabs.dev/tier: observability
       annotations:
         prometheus.io/scrape: "false"
     spec:
-      serviceAccountName: mailrelay
+      serviceAccountName: notifyrelay
       automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true
@@ -39,27 +44,24 @@ spec:
         seccompProfile:
           type: RuntimeDefault
       containers:
-        - name: mailrelay
+        - name: notifyrelay
           # Source from the generated ConfigMap: a change is a pod rollout, and
           # the unit tests in tests/observability run this exact file.
           image: python:3.13.12-slim
-          command: ["python", "-u", "/app/mailrelay.py"]
+          command: ["python", "-u", "/app/notifyrelay.py"]
           ports:
             - name: http
               containerPort: 8080
           env:
             - name: PORT
               value: "8080"
-            # Identifiers, not credentials: the account tag and the addresses
-            # the host's sender already uses (modules/nixos/alerting.nix).
-            - name: CF_ACCOUNT_ID
-              value: 385f7d47e2e8438fbda5d6f76d760434
-            - name: MAIL_FROM
-              value: alerts@send.sammohr.dev
-            - name: MAIL_TO
-              value: sam@sammohr.dev
-            - name: CF_API_TOKEN_FILE
-              value: /etc/mailrelay/token
+            # The Service, not the public hostname: see the header comment.
+            - name: NTFY_URL
+              value: http://ntfy.notify.svc.cluster.local:8080
+            - name: NTFY_TOPIC
+              value: alerts
+            - name: NTFY_TOKEN_FILE
+              value: /etc/notifyrelay/token
             - name: PYTHONDONTWRITEBYTECODE
               value: "1"
           resources:
@@ -91,17 +93,17 @@ spec:
               mountPath: /app
               readOnly: true
             - name: token
-              mountPath: /etc/mailrelay
+              mountPath: /etc/notifyrelay
               readOnly: true
             - name: tmp
               mountPath: /tmp
       volumes:
         - name: source
           configMap:
-            name: mailrelay-source
+            name: notifyrelay-source
         - name: token
           secret:
-            secretName: mailrelay-token
+            secretName: notifyrelay-token
             # Readable by the pod uid: no fsGroup, so kubelet would otherwise
             # leave this root-owned and unreadable.
             defaultMode: 0444
@@ -112,15 +114,15 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: mailrelay
+  name: notifyrelay
   labels:
-    app.kubernetes.io/name: mailrelay
+    app.kubernetes.io/name: notifyrelay
     app.kubernetes.io/part-of: homelabs
     homelabs.dev/tier: observability
 spec:
   type: ClusterIP
   selector:
-    app.kubernetes.io/name: mailrelay
+    app.kubernetes.io/name: notifyrelay
   ports:
     - name: http
       port: 8080
@@ -129,9 +131,9 @@ spec:
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: mailrelay
+  name: notifyrelay
   labels:
-    app.kubernetes.io/name: mailrelay
+    app.kubernetes.io/name: notifyrelay
     app.kubernetes.io/part-of: homelabs
     homelabs.dev/tier: observability
 automountServiceAccountToken: false

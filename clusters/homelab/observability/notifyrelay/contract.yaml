@@ -1,0 +1,41 @@
+# The credential contract for the cluster's path to the bus, recorded as data
+# rather than prose. No value is here: `notifyrelay-token` is projected by ESO
+# from `notify-relay-sops`, a SOPS+age Secret in the observability namespace
+# (created by hand, docs/manual-steps.md step 29), because no age key exists in
+# this repository.
+#
+# The token is the ntfy `publisher` user's, which is write-only on `alerts`. It
+# is not the broker's `agent` token: revocation stays per source, so a leaked
+# relay token cannot page the agent and a leaked agent token cannot page a human.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: notifyrelay-contract
+  labels:
+    app.kubernetes.io/name: notifyrelay
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: observability
+data:
+  secretName: notifyrelay-token
+  sopsSecretName: notify-relay-sops
+  key: token
+  topic: alerts
+  scope: >-
+    The ntfy `publisher` user's access token (`publisher:alerts:wo`), so the
+    relay can publish to `alerts` and cannot subscribe, cannot read history and
+    cannot touch the `agent` topic. The bus enforces that, not this pod.
+  source: >-
+    Take the `publisher` token from the bus's `ntfy-auth-sops` Secret
+    (docs/manual-steps.md step 24), then
+    `kubectl -n observability create secret generic notify-relay-sops
+    --from-literal=token=<token>`. Encrypt the file with the operator's age key
+    if it is kept as a manifest; never commit it.
+  rotate: >-
+    Replace the token in `ntfy-auth-sops`, restart the bus so it re-provisions
+    `auth.db`, then replace `notify-relay-sops` and wait for the ESO refresh
+    (1h) or delete `notifyrelay-token` so it is recreated. The next POST uses
+    the new value; there is nothing to restart, because the relay reads the file
+    per delivery.
+  verify: >-
+    kubectl -n observability get secret notifyrelay-token -o
+    jsonpath='{.data.token}' | base64 -d | grep -c . # expect 1

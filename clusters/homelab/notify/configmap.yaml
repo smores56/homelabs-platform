@@ -6,6 +6,11 @@
 # would otherwise lose the alerts the bus exists to deliver. `keepalive` stays
 # under Cloudflare's ~100s idle timeout or the tunnel drops the stream.
 #
+# `message-size-limit` is raised from the 4 KiB default because an Alertmanager
+# batch with `max_alerts: 0` is one message that lists every firing alert; the
+# relay truncates at 16 KiB, so the two numbers are the same on purpose. The
+# broker's own 4 KiB cap on the agent path is separate and unchanged.
+#
 # The request limiter is raised rather than exempted. `visitor-request-limit-
 # exempt-hosts` matches hostnames and IPs, and the relay reaches ntfy over the
 # Service ClusterIP, so its source is a pod IP that changes on every restart —
@@ -25,6 +30,7 @@ data:
     behind-proxy: true
     cache-file: "/var/lib/ntfy/cache.db"
     cache-duration: "72h"
+    message-size-limit: "16k"
     auth-file: "/var/lib/ntfy/auth.db"
     auth-default-access: "deny-all"
     enable-signup: false

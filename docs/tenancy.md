@@ -44,7 +44,7 @@ applied by the first stage (`docs/flux.md`).
 | `notify` | `no-host-access`, `notify-runtime` | DNS only | the cluster tunnel on 8080, `observability/notifyrelay` on 8080, `observability/prometheus` on 9090 |
 | `data` (each of `immich`, `navidrome`, `opdshelf`, `graphiti`) | `no-host-access`, `data-workload-source`, `data-pvc-scope`, `data-pvc-storage` | same namespace, DNS; HTTPS for `immich-machine-learning` and `graphiti` | same namespace, `ingress` on the app's port |
 | `ingress` | none beyond PSA | the four data apps and `graphiti/memory-mcp` on their ports, `tenant-apps/nanobot` 8080, Cloudflare edge 443, DNS | none |
-| `observability` | exempt from `no-host-access` | DNS, the k3s API range on 443 (Vector, Prometheus, exporter), Loki and the annotated scrape targets, Prometheus → Alertmanager, Alertmanager → mail relay; the mail relay alone reaches 443 on global unicast | default-deny; Vector/Loki/gateway wiring, Prometheus scrapes, the broker paths, and the alerting chain |
+| `observability` | exempt from `no-host-access` | DNS, the k3s API range on 443 (Vector, Prometheus, exporter), Loki and the annotated scrape targets, Prometheus → Alertmanager, Alertmanager and `flux-system` → notify relay, the relay → `notify`/ntfy 8080 | default-deny; Vector/Loki/gateway wiring, Prometheus scrapes, the broker paths, and the alerting chain |
 
 ## Admission policy
 
@@ -199,8 +199,8 @@ because the tenant repository is not readable from this one.
 Loki 3100 (Loki accepts ingress from exactly those two pods), Prometheus to the
 annotated targets, the broker to the gateway and the exporter, the cluster digest
 to those two (stated in the digest stage), the k3s API range on 443 for the three
-API clients, and Prometheus → Alertmanager → mail relay. Only the mail relay has
-public egress, and only on 443 (`docs/observability.md`). `platform` is the one
+API clients, and Prometheus → Alertmanager → notify relay → the bus. Nothing in
+the namespace has public egress (`docs/observability.md`). `platform` is the one
 namespace still without a default-deny: it holds the CronJobs and the reconciler
 pods, which are platform-tier by label and already cluster-wide.
 

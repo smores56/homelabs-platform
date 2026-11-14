@@ -1,14 +1,17 @@
-# The alerting path (SDLC #620), stated on both ends of every hop:
+# The alerting path (SDLC #620, #649), stated on both ends of every hop:
 #
 #   prometheus   -> alertmanager 9093   push firing alerts (`/api/v2/alerts`)
-#   alertmanager -> mailrelay 8080      webhook delivery
-#   mailrelay    -> api.cloudflare.com 443  the Cloudflare Email Service API
+#   alertmanager -> notifyrelay 8080    webhook delivery
+#   flux-system  -> notifyrelay 8080    reconcile failures (Flux `Alert`)
+#   notifyrelay  -> ntfy 8080           one publish per batch, topic `alerts`
 #
-# The relay is the only pod in this namespace with public egress, and it is the
-# only one whose job is to talk to the internet. Its `except` list is the same
-# non-global set the broker and the tenant use, so a rewritten destination cannot
-# land on the pod network, the tap, the host's LAN, the metadata address or
-# loopback. Alertmanager itself has no public egress; neither does Prometheus.
+# The relay no longer leaves the cluster: it posts to the bus's Service, so this
+# namespace has no public egress at all. That is the point — a cluster alert must
+# not depend on the tunnel it may be reporting on, and the bus is in-cluster.
+#
+# The notify-side half of the last hop is in clusters/homelab/notify/
+# networkpolicy.yaml; both ends are stated so neither depends on the other's file
+# being applied first (webhook-flows.yaml precedent).
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -58,7 +61,7 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: alertmanager-to-mailrelay
+  name: alertmanager-to-notifyrelay
   namespace: observability
   labels:
     app.kubernetes.io/name: alertmanager
@@ -73,7 +76,7 @@ spec:
     - to:
         - podSelector:
             matchLabels:
-              app.kubernetes.io/name: mailrelay
+              app.kubernetes.io/name: notifyrelay
       ports:
         - protocol: TCP
           port: 8080
@@ -81,22 +84,30 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: mailrelay-from-alertmanager
+  name: notifyrelay-from-senders
   namespace: observability
   labels:
-    app.kubernetes.io/name: mailrelay
+    app.kubernetes.io/name: notifyrelay
     app.kubernetes.io/part-of: homelabs
     homelabs.dev/tier: observability
 spec:
   podSelector:
     matchLabels:
-      app.kubernetes.io/name: mailrelay
+      app.kubernetes.io/name: notifyrelay
   policyTypes: ["Ingress"]
   ingress:
+    # Alertmanager posts `/alert`; the notification-controller posts `/flux`.
+    # `flux-system` is not default-deny, so only this end needs stating.
     - from:
         - podSelector:
             matchLabels:
               app.kubernetes.io/name: alertmanager
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: flux-system
+          podSelector:
+            matchLabels:
+              app: notification-controller
       ports:
         - protocol: TCP
           port: 8080
@@ -104,29 +115,25 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: mailrelay-egress-public
+  name: notifyrelay-egress-notify
   namespace: observability
   labels:
-    app.kubernetes.io/name: mailrelay
+    app.kubernetes.io/name: notifyrelay
     app.kubernetes.io/part-of: homelabs
     homelabs.dev/tier: observability
 spec:
   podSelector:
     matchLabels:
-      app.kubernetes.io/name: mailrelay
+      app.kubernetes.io/name: notifyrelay
   policyTypes: ["Egress"]
   egress:
     - to:
-        - ipBlock:
-            cidr: 0.0.0.0/0
-            except:
-              - 10.0.0.0/8
-              - 172.16.0.0/12
-              - 192.168.0.0/16
-              - 169.254.0.0/16
-              - 100.64.0.0/10
-              - 127.0.0.0/8
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: notify
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: ntfy
       ports:
-        # Cloudflare's API, which is the only host this pod ever names.
         - protocol: TCP
-          port: 443
+          port: 8080

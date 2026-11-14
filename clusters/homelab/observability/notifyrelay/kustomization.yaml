@@ -5,6 +5,6 @@ resources:
   - deployment.yaml
   - contract.yaml
 configMapGenerator:
-  - name: mailrelay-source
+  - name: notifyrelay-source
     files:
-      - mailrelay.py
+      - notifyrelay.py
