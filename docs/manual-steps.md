@@ -1539,13 +1539,16 @@ until the new drill below passes.
    ```
 
    Start one tree at a time: the repository lock is per tree, but a second
-   upload of the same tree re-reads everything from byte 0. An interrupted
-   first upload is safe to repeat — restic skips blobs the repository already
-   holds — but never run `forget --prune` before the first snapshot exists, or
-   the uploaded packs it does not reference yet are collected. Start right after
-   a nightly run (05:00 Europe/Berlin): `concurrencyPolicy: Forbid` covers only
-   the Jobs the CronJob creates, so a nightly run that begins while a first
-   upload is alive walks the same tree a second time.
+   upload of the same tree re-reads everything from byte 0. On smortress, where
+   the admin kubeconfig is root-only, prefix the command with
+   `KC='sudo cluster-kubectl'` — the script prints that hint itself when the
+   client it picked cannot read the cluster. An interrupted first upload is safe
+   to repeat — restic skips blobs the repository already holds — but never run
+   `forget --prune` before the first snapshot exists, or the uploaded packs it
+   does not reference yet are collected. Start right after a nightly run (05:00
+   Europe/Berlin): `concurrencyPolicy: Forbid` covers only the Jobs the CronJob
+   creates, so a nightly run that begins while a first upload is alive walks the
+   same tree a second time.
 
 4. Run the drill from a workstation. The exact commands are the `drill` key of
    the tree's `restic-contract` ConfigMap, and the preflight prints the same text
