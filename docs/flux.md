@@ -266,7 +266,7 @@ policy bindings treat it like the rest of the platform tier.
 
 ## Stage ordering
 
-`clusters/homelab/platform/kustomization.yaml` applies fourteen Flux Kustomizations;
+`clusters/homelab/platform/kustomization.yaml` applies twenty Flux Kustomizations;
 each one's `dependsOn` is asserted by `tests/policies/check.sh`.
 
 ```text
@@ -278,8 +278,13 @@ platform-secrets      sops contract ConfigMap    (dependsOn namespaces, policies
     └── platform-secrets-eso   ESO objects (needs the operator)
 platform-broker       broker Deployment/Service  (dependsOn namespaces, rbac,
                       policies, network, secrets)
+platform-agent-control   agent-control Service/RBAC (dependsOn namespaces, rbac,
+                      policies, network)
 platform-webhook      inbound webhook receiver  (dependsOn namespaces,
                       network, policies, secrets)
+platform-notify       ntfy Deployment/Service/claim (dependsOn namespaces,
+                      network, policies)
+    └── platform-notify-secrets   ntfy ExternalSecret (needs the operator)
 platform-storage      StorageClass + static PVs  (dependsOn namespaces)
 platform-backup       repository mirror CronJob/PVC (dependsOn namespaces,
                       policies)
@@ -288,7 +293,9 @@ platform-digest       cluster digest CronJob + PV/PVC (dependsOn namespaces,
 platform-data-apps    Immich, Navidrome, OPDShelf, Graphiti
                       (dependsOn policies, network, storage)
 platform-ingress      cloudflared + routing contract (dependsOn namespaces, network)
-platform-observability
+platform-observability   Prometheus, Loki, Alertmanager (dependsOn notify,
+                      policies)
+    └── platform-observability-secrets   ESO objects (needs the operator)
 platform-nanobot-policy   nanobot-policy ConfigMap in tenant-apps
                       (dependsOn namespaces, policies)
 platform-tenants      GitRepository + tenant Kustomization
