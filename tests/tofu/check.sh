@@ -367,6 +367,11 @@ fi
 pr=.github/workflows/tofu-plan-pr.yml
 if grep -qE '^[[:space:]]*pull_request:' "$pr"; then ok "the pre-merge plan runs on pull requests"; else bad "the pre-merge plan runs on pull requests"; fi
 if grep -q 'environment: cloudflare-plan' "$pr"; then ok "the pre-merge plan uses the read-only environment"; else bad "the pre-merge plan uses the read-only environment"; fi
+if grep -qE '^    environment:' "$pr"; then
+  bad "the pre-merge plan scopes the environment to the plan step"
+else
+  ok "the pre-merge plan scopes the environment to the plan step"
+fi
 if grep -qE 'environment: cloudflare$' "$pr"; then
   bad "the pre-merge plan never enters the write-token environment"
 else

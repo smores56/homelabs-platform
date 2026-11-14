@@ -127,6 +127,12 @@ Actions write:
    - `cloudflare-plan` holds the read-only pair from step 3a. Policy: `main` and
      `smores/*`, because the pre-merge plan runs on a PR branch.
    Neither lists `agent/*`, so a branch the bot can push reaches no environment.
+   That is deliberate even for the read-only pair: reading the zone enumerates
+   every DNS record, Access application and ingress rule. A PR from `agent/*`
+   that touches `tofu/` therefore fails the plan check, and a human re-pushes the
+   same diff onto a `smores/*` branch to plan it. The plan workflow sets the
+   environment on the plan step, not on the job, so an `agent/*` PR that touches
+   nothing here still gets a green check.
    Neither has required reviewers: that reviewer was the click this design
    removes, and the merge plus the required plan check are the approval now.
 

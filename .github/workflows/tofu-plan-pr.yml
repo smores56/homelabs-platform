@@ -11,7 +11,7 @@ name: tofu-plan-pr
 #
 #   1. fork PRs receive no environment secrets at all; the job says so and
 #      stops before anything reads a credential;
-#   2. the job uses `cloudflare-plan`, not `cloudflare`: a separate environment
+#   2. the plan step uses `cloudflare-plan`, not `cloudflare`: a separate environment
 #      holding only the read-only pair, restricted to `main` and `smores/*`. A
 #      branch edit that declares `environment: cloudflare` is refused before any
 #      secret is injected, so the write token is unreachable from a branch;
@@ -41,7 +41,6 @@ jobs:
     name: tofu plan (read-only)
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    environment: cloudflare-plan
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
@@ -102,9 +101,15 @@ jobs:
           scripts/install-ci-tools.sh "$RUNNER_TEMP/bin"
           echo "$RUNNER_TEMP/bin" >>"$GITHUB_PATH"
 
+      # The environment sits on this step, not on the job: a job-level one makes
+      # the branch policy reject the whole run, so an `agent/*` PR that touches
+      # nothing here would show a red required check. The guard above runs with
+      # no credential at all, and only a tofu-touching PR reaches the policy that
+      # refuses `agent/*`.
       - name: init and plan
         id: plan
         if: steps.guard.outputs.run == 'true'
+        environment: cloudflare-plan
         env:
           # guard: read-only-credentials
           # Read-only by contract (docs/manual-steps.md step 14). A workflow edit
