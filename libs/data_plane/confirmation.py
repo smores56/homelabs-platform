@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import secrets
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Mapping
@@ -111,11 +112,11 @@ def render(operation: NormalizedOperation) -> str:
 
     lines = [
         "Confirmation required",
-        f"intent: {operation.intent_id}",
-        f"source: {operation.source_id}",
-        f"capability: {operation.capability}",
+        f"intent: {_quote(operation.intent_id)}",
+        f"source: {_quote(operation.source_id)}",
+        f"capability: {_quote(operation.capability)}",
         f"epoch: {operation.epoch}",
-        f"base revision: {operation.base_revision or '(none)'}",
+        f"base revision: {_quote(operation.base_revision) if operation.base_revision else '(none)'}",
         f"affected count: {operation.affected_count}",
         f"targets: {', '.join(_quote(item) for item in operation.targets)}",
         f"destination: {_quote(operation.destination) if operation.destination else '(none)'}",
@@ -130,7 +131,7 @@ def render(operation: NormalizedOperation) -> str:
         lines.append("field diff:")
         for change in sorted(operation.field_diff, key=lambda item: item.field):
             lines.append(
-                f"  {change.field}: {_quote(change.before)} -> {_quote(change.after)}"
+                f"  {_quote(change.field)}: {_quote(change.before)} -> {_quote(change.after)}"
             )
     else:
         lines.append("field diff: (none)")
@@ -162,6 +163,7 @@ class ConfirmationGate:
 
     def __post_init__(self) -> None:
         self._entries: dict[str, _Entry] = {}
+        self._lock = threading.Lock()
 
     def issue(
         self, operation: NormalizedOperation, approved_by: str
@@ -179,37 +181,45 @@ class ConfirmationGate:
             nonce=secrets.token_hex(16),
         )
         token = secrets.token_urlsafe(32)
-        self._entries[token] = _Entry(approval=approval)
+        with self._lock:
+            self._entries[token] = _Entry(approval=approval)
         return approval, token
 
     def verify(self, token: str, operation: NormalizedOperation) -> Approval:
-        entry = self._entries.get(token)
-        if entry is None:
-            raise ConfirmationError("unknown confirmation token")
-        if entry.invalidated:
-            raise ConfirmationError("confirmation was invalidated")
-        if entry.used:
-            raise ConfirmationError("confirmation token was already used")
-        approval = entry.approval
-        now = int(self.clock())
-        if now >= approval.expires_at:
-            raise ConfirmationError("confirmation expired")
-        if approval.operation_hash != operation_hash(operation):
-            raise ConfirmationError("confirmation does not match the operation")
-        if approval.intent_id != operation.intent_id:
-            raise ConfirmationError("confirmation was issued for another intent")
-        if approval.epoch != operation.epoch:
-            raise ConfirmationError("source epoch changed; re-confirm the operation")
-        entry.used = True
-        return approval
+        with self._lock:
+            entry = self._entries.get(token)
+            if entry is None:
+                raise ConfirmationError("unknown confirmation token")
+            if entry.invalidated:
+                raise ConfirmationError("confirmation was invalidated")
+            if entry.used:
+                raise ConfirmationError("confirmation token was already used")
+            approval = entry.approval
+            now = int(self.clock())
+            if now >= approval.expires_at:
+                raise ConfirmationError("confirmation expired")
+            if approval.operation_hash != operation_hash(operation):
+                raise ConfirmationError("confirmation does not match the operation")
+            if approval.intent_id != operation.intent_id:
+                raise ConfirmationError("confirmation was issued for another intent")
+            if approval.epoch != operation.epoch:
+                raise ConfirmationError("source epoch changed; re-confirm the operation")
+            # Mark used while still holding the lock so two concurrent callers
+            # cannot both observe an unused token.
+            entry.used = True
+            return approval
 
     def invalidate(self, token: str) -> None:
-        entry = self._entries.get(token)
-        if entry is None:
-            raise ConfirmationError("unknown confirmation token")
-        entry.invalidated = True
+        with self._lock:
+            entry = self._entries.get(token)
+            if entry is None:
+                raise ConfirmationError("unknown confirmation token")
+            entry.invalidated = True
 
     def pending(self) -> Iterable[tuple[str, Approval]]:
-        for token, entry in self._entries.items():
-            if not entry.used and not entry.invalidated:
-                yield token, entry.approval
+        with self._lock:
+            return [
+                (token, entry.approval)
+                for token, entry in self._entries.items()
+                if not entry.used and not entry.invalidated
+            ]

@@ -23,6 +23,10 @@ class AuthorizationError(DataPlaneError):
     """An identity is not allowed to perform the requested operation."""
 
 
+class AuthenticationError(AuthorizationError):
+    """A credential cannot be authenticated: malformed, tampered, or expired."""
+
+
 class ConfirmationRequired(DataPlaneError):
     """The operation is destructive, bulk, irreversible, or cross-domain."""
 

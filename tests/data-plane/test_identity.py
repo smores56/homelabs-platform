@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import unittest
 
-from data_plane.errors import AuthorizationError
+from data_plane.errors import AuthenticationError, AuthorizationError
 from data_plane.identity import (
     EXTERNAL_PROFILE,
     LOCAL_PROFILE,
@@ -97,6 +97,16 @@ class IdentityTests(unittest.TestCase):
         token = self.issuer.issue(LOCAL_PROFILE, "agent", (("notes", "read"),))
         claims = decode_claims(token, KEY, now=self.now)
         self.assertEqual(decode_claims(encode_claims(claims, KEY), KEY, now=self.now), claims)
+
+    def test_malformed_base64_is_an_authentication_error(self):
+        with self.assertRaises(AuthenticationError):
+            decode_claims("payload.!!!", KEY, now=self.now)
+        with self.assertRaises(AuthenticationError):
+            self.issuer.verify("no-separator")
+
+    def test_ttl_is_capped(self):
+        with self.assertRaises(AuthorizationError):
+            self.issuer.issue(LOCAL_PROFILE, "agent", (("notes", "read"),), ttl=10**7)
 
 
 if __name__ == "__main__":

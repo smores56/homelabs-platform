@@ -7,6 +7,7 @@ import unittest
 
 from data_plane.collectors.relay import (
     IDEMPOTENCY_HEADER,
+    MAX_TRACKED_KEYS,
     SIGNATURE_HEADER,
     RateLimitError,
     RecordSchema,
@@ -48,6 +49,7 @@ class RelayTests(unittest.TestCase):
             schema=schema(),
             sink=self.sunk.append,
             clock=lambda: self.now,
+            source_id="mail",
         )
 
     def headers(self, body, key, *, signature=None):
@@ -94,6 +96,7 @@ class RelayTests(unittest.TestCase):
             schema=schema(max_bytes=16),
             sink=self.sunk.append,
             clock=lambda: self.now,
+            source_id="mail",
         )
         body = json.dumps(record()).encode()
         with self.assertRaises(ValidationError):
@@ -126,6 +129,7 @@ class RelayTests(unittest.TestCase):
             ),
             sink=self.sunk.append,
             clock=lambda: self.now,
+            source_id="mail",
         )
         body = json.dumps({"source_id": "mail", "object_id": "message-1"}).encode()
         with self.assertRaises(ValidationError):
@@ -137,6 +141,7 @@ class RelayTests(unittest.TestCase):
             schema=schema(max_records_per_second=2),
             sink=self.sunk.append,
             clock=lambda: self.now,
+            source_id="mail",
         )
         for cursor in (1, 2):
             body = json.dumps(record(object_id=f"message-{cursor}")).encode()
@@ -186,6 +191,54 @@ class RelayTests(unittest.TestCase):
     def test_tombstone_record_accepted(self):
         result = self.submit(record(tombstone=True))
         self.assertTrue(result["tombstone"])
+
+    def test_extra_fields_are_rejected(self):
+        with self.assertRaises(ValidationError):
+            self.submit(record(unexpected="value"))
+        self.assertEqual(self.sunk, [])
+
+    def test_a_record_from_another_source_is_rejected(self):
+        with self.assertRaises(AuthorizationError):
+            self.submit(record(source_id="other"))
+        self.assertEqual(self.sunk, [])
+
+    def test_deeply_nested_json_is_rejected(self):
+        nested = "leaf"
+        for _ in range(30):
+            nested = [nested]
+        with self.assertRaises(ValidationError):
+            self.submit(record(blob=nested))
+        self.assertEqual(self.sunk, [])
+
+    def test_signature_binds_the_configured_source(self):
+        other = Relay(
+            secret=SECRET,
+            schema=schema(),
+            sink=self.sunk.append,
+            clock=lambda: self.now,
+            source_id="other",
+        )
+        body = json.dumps(record()).encode()
+        forged = {IDEMPOTENCY_HEADER: "key-1", SIGNATURE_HEADER: f"sha256={other.sign(body, 'key-1')}"}
+        with self.assertRaises(AuthorizationError):
+            self.relay.submit(forged, body, 1)
+
+    def test_tracked_idempotency_keys_are_bounded(self):
+        relay = Relay(
+            secret=SECRET,
+            schema=schema(max_records_per_second=MAX_TRACKED_KEYS + 100),
+            sink=self.sunk.append,
+            clock=lambda: self.now,
+            source_id="mail",
+        )
+        for index in range(MAX_TRACKED_KEYS + 25):
+            body = json.dumps(record(object_id=f"message-{index}")).encode()
+            headers = {
+                IDEMPOTENCY_HEADER: f"key-{index}",
+                SIGNATURE_HEADER: f"sha256={relay.sign(body, f'key-{index}')}",
+            }
+            relay.submit(headers, body, index + 1)
+        self.assertLessEqual(len(relay._seen), MAX_TRACKED_KEYS)
 
 
 if __name__ == "__main__":

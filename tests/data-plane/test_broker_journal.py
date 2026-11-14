@@ -69,6 +69,9 @@ class Adapter:
         if self.fail:
             raise RuntimeError("adapter failed")
         for target in operation.targets:
+            if operation.capability == "delete":
+                self.records.pop(target, None)
+                continue
             record = self.records.setdefault(target, {"id": target, "rev": "r1"})
             for change in operation.field_diff:
                 record[change.field] = change.after
@@ -182,7 +185,7 @@ class BrokerJournalTests(unittest.TestCase):
         self.assertEqual(self.adapter.calls, calls)
 
         self.adapter.fail = False
-        intent = self.broker.reconcile(self.store.find("key-unknown").intent_id)
+        intent = self.broker.reconcile(token, self.store.find("key-unknown").intent_id)
         self.assertIs(intent.state, IntentState.FAILED)
 
 

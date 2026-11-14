@@ -12,7 +12,7 @@ import hashlib
 import hmac
 import json
 import time
-from collections import deque
+from collections import OrderedDict, deque
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping
 
@@ -30,6 +30,8 @@ TOMBSTONE_FIELD = "tombstone"
 
 _RATE_WINDOW_SECONDS = 1.0
 _SIGNATURE_PREFIX = "sha256="
+_MAX_JSON_DEPTH = 8
+MAX_TRACKED_KEYS = 1024
 
 
 class RateLimitError(ValidationError):
@@ -48,6 +50,12 @@ class RecordSchema:
     def validate(self, record: Mapping[str, Any]) -> None:
         if not isinstance(record, dict):
             raise ValidationError("record must be a JSON object")
+        allowed = set(self.required_fields) | set(self.field_types)
+        unexpected = sorted(set(record) - allowed)
+        if unexpected:
+            raise ValidationError(
+                "record has fields outside the schema: " + ", ".join(unexpected)
+            )
         for name in self.required_fields:
             if name not in record:
                 raise ValidationError(f"record is missing required field {name!r}")
@@ -70,14 +78,19 @@ class Relay:
         schema: RecordSchema,
         sink: Callable[[dict[str, Any]], Any],
         clock: Callable[[], float] = time.time,
+        *,
+        source_id: str,
     ) -> None:
         self._secret = secret.encode("utf-8") if isinstance(secret, str) else secret
         if not self._secret:
             raise ValidationError("relay secret is empty")
+        if not isinstance(source_id, str) or not source_id.strip():
+            raise ValidationError("relay source id is required")
+        self._source_id = source_id.strip()
         self._schema = schema
         self._sink = sink
         self._clock = clock
-        self._seen: dict[str, tuple[bytes, dict[str, Any]]] = {}
+        self._seen: OrderedDict[str, tuple[bytes, dict[str, Any]]] = OrderedDict()
         self._cursors: dict[str, int] = {}
         self._timestamps: dict[str, deque[float]] = {}
 
@@ -86,7 +99,13 @@ class Relay:
             raise ValidationError("body must be bytes")
         if not idempotency_key.strip():
             raise ValidationError("idempotency key is required")
-        message = idempotency_key.encode("utf-8") + b"\x00" + body
+        message = (
+            self._source_id.encode("utf-8")
+            + b"\x00"
+            + idempotency_key.encode("utf-8")
+            + b"\x00"
+            + body
+        )
         return hmac.new(self._secret, message, hashlib.sha256).hexdigest()
 
     def submit(
@@ -105,6 +124,11 @@ class Relay:
         if not key:
             raise ValidationError("idempotency key is required")
 
+        if len(body) > self._schema.max_bytes:
+            raise ValidationError(
+                f"body is {len(body)} bytes; limit is {self._schema.max_bytes}"
+            )
+
         signature = normalized.get(SIGNATURE_HEADER, "").strip()
         if not signature:
             raise AuthorizationError("missing relay signature")
@@ -113,11 +137,6 @@ class Relay:
             presented.encode("utf-8"), self.sign(body, key).encode("ascii")
         ):
             raise AuthorizationError("invalid relay signature")
-
-        if len(body) > self._schema.max_bytes:
-            raise ValidationError(
-                f"body is {len(body)} bytes; limit is {self._schema.max_bytes}"
-            )
 
         seen = self._seen.get(key)
         if seen is not None:
@@ -133,6 +152,12 @@ class Relay:
         source = record.get(SOURCE_FIELD)
         if not isinstance(source, str) or not source.strip():
             raise ValidationError("record has no stable source id")
+        if source != self._source_id:
+            # The relay is bound to one source; a body cannot choose its own
+            # rate-limit, cursor, or identity namespace.
+            raise AuthorizationError(
+                f"record source {source!r} is not this relay's source {self._source_id!r}"
+            )
         if TOMBSTONE_FIELD not in record or not isinstance(
             record[TOMBSTONE_FIELD], bool
         ):
@@ -155,6 +180,9 @@ class Relay:
             "idempotency_key": key,
         }
         self._seen[key] = (body, result)
+        self._seen.move_to_end(key)
+        while len(self._seen) > MAX_TRACKED_KEYS:
+            self._seen.popitem(last=False)
         return dict(result)
 
     def _decode(self, body: bytes) -> dict[str, Any]:
@@ -164,7 +192,19 @@ class Relay:
             raise ValidationError("body is not valid UTF-8 JSON") from exc
         if not isinstance(record, dict):
             raise ValidationError("record must be a JSON object")
+        self._check_depth(record)
         return record
+
+    @staticmethod
+    def _check_depth(value: Any, depth: int = 0) -> None:
+        if depth > _MAX_JSON_DEPTH:
+            raise ValidationError("record is nested too deeply")
+        if isinstance(value, dict):
+            for item in value.values():
+                Relay._check_depth(item, depth + 1)
+        elif isinstance(value, list):
+            for item in value:
+                Relay._check_depth(item, depth + 1)
 
     def _check_cursor(self, source: str, cursor: int) -> None:
         if isinstance(cursor, bool) or not isinstance(cursor, int):
@@ -181,7 +221,9 @@ class Relay:
 
     def _check_rate(self, source: str) -> float:
         now = float(self._clock())
-        timestamps = self._timestamps.setdefault(source, deque())
+        timestamps = self._timestamps.setdefault(
+            source, deque(maxlen=max(1, self._schema.max_records_per_second * 2))
+        )
         while timestamps and now - timestamps[0] >= _RATE_WINDOW_SECONDS:
             timestamps.popleft()
         if len(timestamps) >= self._schema.max_records_per_second:

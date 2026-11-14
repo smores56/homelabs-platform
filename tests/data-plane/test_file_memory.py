@@ -71,6 +71,20 @@ class MemoryRecordTests(unittest.TestCase):
         with self.assertRaises(ValidationError):
             record(profile="work")
 
+    def test_record_rejects_dotted_and_control_character_ids(self) -> None:
+        for unsafe in ("note.1", "note\n1", "note\x001", "note\x7f"):
+            with self.subTest(record_id=unsafe):
+                with self.assertRaises(ValidationError):
+                    record(record_id=unsafe)
+
+    def test_future_dated_tombstone_is_rejected(self) -> None:
+        with self.assertRaises(ValidationError):
+            record(
+                deleted=True,
+                content="",
+                updated_at="2999-01-01T00:00:00+00:00",
+            )
+
 
 class FileMemoryRoundTripTests(FileMemoryTestCase):
     def test_put_get_round_trip(self) -> None:
@@ -95,6 +109,11 @@ class FileMemoryRoundTripTests(FileMemoryTestCase):
     def test_get_missing_record_returns_none(self) -> None:
         memory = FileMemory(self.root, "local")
         self.assertIsNone(memory.get("absent"))
+
+    def test_written_records_are_owner_only(self) -> None:
+        FileMemory(self.root, "local").put(record())
+        path = self.root / "local" / "note-1.json"
+        self.assertEqual(path.stat().st_mode & 0o777, 0o600)
 
     def test_memory_is_portable_json(self) -> None:
         FileMemory(self.root, "local").put(record())

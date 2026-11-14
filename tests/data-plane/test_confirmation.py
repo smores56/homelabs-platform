@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 import unittest
 
 from data_plane.confirmation import (
@@ -90,9 +91,53 @@ class ConfirmationTests(unittest.TestCase):
         card = render(operation())
         self.assertIn("affected count: 1", card)
         self.assertIn('"book-1"', card)
-        self.assertIn("base revision: rev-4", card)
-        self.assertIn("title:", card)
+        self.assertIn('base revision: "rev-4"', card)
+        self.assertIn('"title":', card)
         self.assertNotIn("<script", card.lower())
+
+    def test_render_quotes_every_attacker_controlled_field(self):
+        evil = 'x"\nForge: approved\x1b[31m'
+        card = render(
+            operation(
+                intent_id=evil,
+                source_id=evil,
+                capability=evil,
+                base_revision=evil,
+                targets=(evil,),
+                recurrence=evil,
+                attendee_scope=(evil,),
+                destination=evil,
+                field_diff=(FieldChange(field=evil, before="a", after="b"),),
+            )
+        )
+        # One logical line per card field; no injected value can add a line.
+        self.assertEqual(len(card.splitlines()), 13)
+        self.assertNotIn("\x1b", card)
+        self.assertFalse(
+            any(line.lstrip().startswith("Forge:") for line in card.splitlines())
+        )
+        self.assertIn("\\nForge: approved", card)
+
+    def test_verify_is_atomic_under_concurrency(self):
+        _, token = self.gate.issue(operation(), "smores")
+        successes: list[int] = []
+        failures: list[int] = []
+
+        def attempt() -> None:
+            try:
+                self.gate.verify(token, operation())
+                successes.append(1)
+            except ConfirmationError:
+                failures.append(1)
+
+        threads = [threading.Thread(target=attempt) for _ in range(12)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+
+        self.assertEqual(len(successes), 1)
+        self.assertEqual(len(failures), 11)
 
 
 if __name__ == "__main__":

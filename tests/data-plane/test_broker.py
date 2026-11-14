@@ -6,6 +6,8 @@ live data.
 
 from __future__ import annotations
 
+import threading
+import time
 import unittest
 
 from data_plane.broker import (
@@ -98,6 +100,8 @@ class FakeAdapter:
         self.applies: list[tuple[str, str]] = []
         self.fail_apply = False
         self.ignore_writes = False
+        self.tombstone_instead = False
+        self.delay = 0.0
 
     def revision(self, target: str) -> str | None:
         return self.records.get(target, {}).get("rev")
@@ -114,6 +118,8 @@ class FakeAdapter:
         ]
 
     def apply(self, operation: NormalizedOperation, idempotency_key: str) -> dict:
+        if self.delay:
+            time.sleep(self.delay)
         if self.fail_apply:
             raise ConnectionError("transport lost while the write was in flight")
         self.applies.append((operation.intent_id, idempotency_key))
@@ -124,7 +130,10 @@ class FakeAdapter:
             for change in operation.field_diff:
                 record[change.field] = change.after
             if operation.capability == "delete":
-                self.records.pop(target, None)
+                if self.tombstone_instead:
+                    record["deleted_at"] = "2026-11-14T00:00:00Z"
+                else:
+                    self.records.pop(target, None)
             else:
                 record["rev"] = f"rev-{len(self.applies) + 1}"
         return {"applied": len(operation.targets)}
@@ -369,7 +378,7 @@ class BrokerTests(unittest.TestCase):
 
         self.adapters["notes"].fail_apply = False
         self.adapters["notes"].records["note-1"]["title"] = "New"
-        reconciled = self.broker.reconcile(intent.intent_id)
+        reconciled = self.broker.reconcile(claims, intent.intent_id)
 
         self.assertIs(reconciled.state, IntentState.APPLIED)
         self.assertEqual(reconciled.effect["title"], "New")
@@ -432,6 +441,136 @@ class BrokerTests(unittest.TestCase):
             self.broker.propose(
                 claims, request(capability="reclassify", idempotency_key="cap-2")
             )
+
+    def test_control_characters_are_rejected_at_normalization(self) -> None:
+        claims = self.local(("notes", "update"))
+        with self.assertRaises(ValidationError):
+            self.broker.propose(
+                claims, request(base_revision="rev\n1", idempotency_key="ctl-1")
+            )
+        with self.assertRaises(ValidationError):
+            self.broker.propose(
+                claims,
+                request(
+                    field_diff=(FieldChange(field="ti\x1btle", before="a", after="b"),),
+                    idempotency_key="ctl-2",
+                ),
+            )
+
+    def test_reconcile_requires_scope_for_the_intent(self) -> None:
+        claims = self.local(("notes", "update"))
+        intent, _ = self.broker.propose(claims, request(idempotency_key="idor-1"))
+        self.adapters["notes"].fail_apply = True
+        with self.assertRaises(OutcomeUnknown):
+            self.broker.apply(claims, request(idempotency_key="idor-1"))
+        self.adapters["notes"].fail_apply = False
+        self.adapters["notes"].records["note-1"]["title"] = "New"
+
+        books_only = self.local(("books", "read"))
+        with self.assertRaises(AuthorizationError):
+            self.broker.reconcile(books_only, intent.intent_id)
+
+    def test_create_without_evidence_is_not_applied(self) -> None:
+        claims = self.local(("notes", "create"))
+        write = request(
+            capability="create",
+            targets=("note-2",),
+            base_revision=None,
+            field_diff=(),
+            idempotency_key="vacuous-create",
+        )
+        self.broker.propose(claims, write)
+        self.adapters["notes"].ignore_writes = True
+
+        with self.assertRaises(OutcomeUnknown):
+            self.broker.apply(claims, write)
+        self.assertIs(
+            self.store.find("vacuous-create").state, IntentState.OUTCOME_UNKNOWN
+        )
+
+        reconciled = self.broker.reconcile(claims, self.store.find("vacuous-create").intent_id)
+        self.assertIs(reconciled.state, IntentState.FAILED)
+
+    def test_delete_that_left_the_target_present_is_not_applied(self) -> None:
+        claims = self.local(("notes", "delete"))
+        write = request(capability="delete", field_diff=(), idempotency_key="vacuous-delete")
+        _, operation = self.broker.propose(claims, write)
+        _, token = self.gate.issue(operation, "smores")
+        self.adapters["notes"].ignore_writes = True
+
+        with self.assertRaises(OutcomeUnknown):
+            self.broker.apply(claims, write, token)
+        self.assertIsNot(self.store.find("vacuous-delete").state, IntentState.APPLIED)
+
+    def test_delete_observed_through_the_contract_tombstone_is_applied(self) -> None:
+        claims = self.local(("notes", "delete"))
+        write = request(capability="delete", field_diff=(), idempotency_key="tomb-delete")
+        _, operation = self.broker.propose(claims, write)
+        _, token = self.gate.issue(operation, "smores")
+        self.adapters["notes"].tombstone_instead = True
+
+        self.broker.apply(claims, write, token)
+        self.assertIs(self.store.find("tomb-delete").state, IntentState.APPLIED)
+
+    def test_concurrent_apply_uses_one_adapter_call(self) -> None:
+        claims = self.local(("notes", "update"))
+        write = request(idempotency_key="race-1")
+        self.broker.propose(claims, write)
+        self.adapters["notes"].delay = 0.05
+
+        errors: list[BaseException] = []
+
+        def run() -> None:
+            try:
+                self.broker.apply(claims, write)
+            except BaseException as exc:  # noqa: BLE001 - recorded for assertion
+                errors.append(exc)
+
+        threads = [threading.Thread(target=run) for _ in range(4)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+
+        self.assertEqual(errors, [])
+        self.assertEqual(len(self.adapters["notes"].applies), 1)
+        self.assertIs(self.store.find("race-1").state, IntentState.APPLIED)
+
+    def test_adapter_error_text_is_redacted_and_truncated(self) -> None:
+        claims = self.local(("notes", "update"))
+        write = request(idempotency_key="leak-1")
+        self.broker.propose(claims, write)
+
+        def explode(*_args: object) -> dict:
+            raise RuntimeError("token=SECRET\n\x1b[31m" + "x" * 400)
+
+        self.adapters["notes"].apply = explode  # type: ignore[method-assign]
+
+        with self.assertRaises(OutcomeUnknown) as raised:
+            self.broker.apply(claims, write)
+
+        message = str(raised.exception)
+        self.assertNotIn("SECRET", message)
+        self.assertNotIn("\n", message)
+        self.assertNotIn("\x1b", message)
+        self.assertLessEqual(len(message), 300)
+        error = self.store.find("leak-1").error or ""
+        self.assertNotIn("SECRET", error)
+        self.assertNotIn("\x1b", error)
+
+    def test_effect_event_records_the_approver_and_token_hash(self) -> None:
+        claims = self.local(("notes", "delete"))
+        write = request(capability="delete", field_diff=(), idempotency_key="audit-1")
+        _, operation = self.broker.propose(claims, write)
+        _, token = self.gate.issue(operation, "smores")
+        self.broker.confirm(claims, write, token)
+
+        self.broker.apply(claims, write)
+
+        approval = self.recorder.events[0]["approval"]
+        self.assertEqual(approval["approved_by"], "smores")
+        self.assertEqual(len(approval["token_sha256"]), 64)
+        self.assertNotEqual(approval["token_sha256"], token)
 
     def test_apply_before_propose_is_rejected(self) -> None:
         claims = self.local(("notes", "update"))

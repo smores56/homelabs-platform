@@ -121,6 +121,29 @@ class StagingGenerationTests(unittest.TestCase):
         generation.commit(1, complete=True)
         self.assertEqual(store.cursor("mail"), 1)
 
+    def test_put_refuses_a_symlinked_object_path(self):
+        generation = self.generation("gen-1")
+        objects = self.root / ".staging" / "gen-1" / "objects"
+        objects.mkdir(parents=True)
+        outside = self.root / "outside"
+        outside.write_bytes(b"keep")
+        (objects / "a").symlink_to(outside)
+
+        with self.assertRaises(PublishError):
+            generation.put("a", b"evil", {})
+        self.assertEqual(outside.read_bytes(), b"keep")
+
+    def test_commit_refuses_a_symlinked_publish_path(self):
+        generation = self.generation("gen-1")
+        generation.put("a", b"alpha", {})
+        published = self.root / "published"
+        published.mkdir(parents=True)
+        (published / "gen-1").symlink_to(self.root / "elsewhere")
+
+        with self.assertRaises(PublishError):
+            generation.commit(1, complete=True)
+        self.assertFalse((self.root / "elsewhere").exists())
+
 
 class CursorStoreTests(unittest.TestCase):
     def setUp(self):

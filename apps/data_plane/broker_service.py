@@ -130,9 +130,9 @@ class BrokerService:
         return 200, {"effect": effect}
 
     def reconcile(self, request: Any, query: common.Query) -> tuple[int, Any]:
-        self._claims(request)
+        claims = self._claims(request)
         data = common.read_json_object(request)
-        intent = self.broker.reconcile(common.field_str(data, "intent_id"))
+        intent = self.broker.reconcile(claims, common.field_str(data, "intent_id"))
         return 200, {"intent": _intent(intent)}
 
     def health(self, request: Any, query: common.Query) -> tuple[int, Any]:

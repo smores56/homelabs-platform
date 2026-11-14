@@ -8,7 +8,8 @@ without executing a backup tool.
 
 ``POST /run`` takes an optional ``{"group": ..., "destinations": [...]}``; a
 group or destination not configured at startup is a validation error.
-``GET /healthz`` reports the configured destinations.
+``GET /healthz`` is ``{"status": "ok", "service": "backup"}`` and nothing
+else: probe output is unauthenticated, so it never names groups or destinations.
 """
 
 from __future__ import annotations
@@ -28,6 +29,8 @@ class BackupService:
     controller: FanoutController
     destinations: tuple[str, ...]
     groups: tuple[str, ...] = ()
+    operator_secret: bytes | str | None = None
+    fixture_mode: bool = True
 
     @property
     def routes(self) -> common.Routes:
@@ -37,6 +40,21 @@ class BackupService:
         }
 
     def run(self, request: Any, query: common.Query) -> tuple[int, Any]:
+        if self.fixture_mode:
+            # A fixture snapshotter or in-memory destination cannot prove a real
+            # backup exists, so it must never publish a verified generation.
+            raise common.HttpError(
+                503,
+                "unavailable",
+                "backup is in fixture mode; no real snapshotter or destination is configured",
+            )
+        secret = self.operator_secret
+        if secret is None or (isinstance(secret, (bytes, str)) and not secret):
+            raise common.HttpError(
+                503, "unavailable", "backup has no operator token configured"
+            )
+        common.require_bearer(request, secret)
+
         empty = request.headers.get("Content-Length", "").strip() in ("", "0")
         data = {} if empty else common.read_json_object(request)
         group = common.field_optional_str(data, "group")
@@ -64,9 +82,5 @@ class BackupService:
         return 200, manifest.to_dict()
 
     def health(self, request: Any, query: common.Query) -> tuple[int, Any]:
-        return 200, {
-            "status": "ok",
-            "service": "backup",
-            "destinations": list(self.destinations),
-            "groups": list(self.groups),
-        }
+        # Unauthenticated probe: no destinations, no groups, no counts.
+        return 200, {"status": "ok", "service": "backup"}

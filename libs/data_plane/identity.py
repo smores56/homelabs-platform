@@ -8,6 +8,7 @@ changing the claim or scope model.
 from __future__ import annotations
 
 import base64
+import binascii
 import hashlib
 import hmac
 import json
@@ -16,12 +17,13 @@ import time
 from dataclasses import dataclass
 from typing import Any, Mapping
 
-from .errors import AuthorizationError, ContractError
+from .errors import AuthenticationError, AuthorizationError, ContractError
 from .model import SourceContract, Visibility
 
 LOCAL_PROFILE = "local"
 EXTERNAL_PROFILE = "external"
 _PROFILES = frozenset({LOCAL_PROFILE, EXTERNAL_PROFILE})
+MAX_IDENTITY_TTL_SECONDS = 3600
 
 
 def canonical_json(value: Any) -> bytes:
@@ -101,24 +103,30 @@ def decode_claims(
     token: str, key: bytes, now: int | None = None, max_skew: int = 60
 ) -> WorkloadClaims:
     if not key:
-        raise AuthorizationError("verification key is empty")
+        raise AuthenticationError("verification key is empty")
     try:
         payload, signature = token.split(".", 1)
-    except ValueError as exc:
-        raise AuthorizationError("malformed identity token") from exc
-    expected = hmac.new(key, payload.encode("ascii"), hashlib.sha256).digest()
-    provided = _b64decode(signature)
+    except (ValueError, AttributeError) as exc:
+        raise AuthenticationError("malformed identity token") from exc
+    if not payload or not signature:
+        raise AuthenticationError("malformed identity token")
+    try:
+        payload_bytes = payload.encode("ascii")
+        provided = _b64decode(signature)
+    except (UnicodeEncodeError, binascii.Error, ValueError) as exc:
+        raise AuthenticationError("malformed identity token") from exc
+    expected = hmac.new(key, payload_bytes, hashlib.sha256).digest()
     if not hmac.compare_digest(expected, provided):
-        raise AuthorizationError("identity signature does not match")
+        raise AuthenticationError("identity signature does not match")
     try:
         claims = WorkloadClaims.from_dict(json.loads(_b64decode(payload)))
-    except (ValueError, json.JSONDecodeError) as exc:
-        raise AuthorizationError(f"malformed identity payload: {exc}") from exc
+    except (ValueError, binascii.Error, json.JSONDecodeError, AuthorizationError) as exc:
+        raise AuthenticationError(f"malformed identity payload: {exc}") from exc
     current = int(time.time()) if now is None else int(now)
     if claims.issued_at > current + max_skew:
-        raise AuthorizationError("identity was issued in the future")
+        raise AuthenticationError("identity was issued in the future")
     if claims.expires_at <= current:
-        raise AuthorizationError("identity has expired")
+        raise AuthenticationError("identity has expired")
     return claims
 
 
@@ -130,10 +138,14 @@ class IdentityIssuer:
         sources: Mapping[str, SourceContract],
         key: bytes,
         clock=time.time,
+        max_ttl: int = MAX_IDENTITY_TTL_SECONDS,
     ) -> None:
         self._sources = dict(sources)
         self._key = key
         self._clock = clock
+        if max_ttl < 1:
+            raise AuthorizationError("max_ttl must be positive")
+        self._max_ttl = max_ttl
 
     def issue(
         self,
@@ -148,6 +160,10 @@ class IdentityIssuer:
             raise AuthorizationError("workload name is empty")
         if ttl < 1:
             raise AuthorizationError("ttl must be positive")
+        if ttl > self._max_ttl:
+            raise AuthorizationError(
+                f"ttl {ttl} exceeds the maximum identity lifetime {self._max_ttl}"
+            )
         resolved = tuple(
             Scope(source_id=source_id, capability=capability)
             for source_id, capability in scopes

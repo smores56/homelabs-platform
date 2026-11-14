@@ -16,11 +16,17 @@ import hashlib
 import hmac
 import json
 import logging
+import re
+import secrets
+import threading
+import time
+from collections import OrderedDict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Callable, Mapping
 from urllib.parse import parse_qs, urlsplit
 
 from data_plane.errors import (
+    AuthenticationError,
     AuthorizationError,
     ConfirmationError,
     ConfirmationRequired,
@@ -39,6 +45,26 @@ LOG = logging.getLogger("data_plane.http")
 MAX_BODY_BYTES = 1 << 20
 _MAX_QUERY_FIELDS = 32
 
+# Request-token framing and freshness. A token is bound to one method, target,
+# body, timestamp, and nonce, and is accepted once inside the freshness window.
+TOKEN_TTL_SECONDS = 60
+TOKEN_VERSION = "v1"
+MAX_NONCE_CACHE = 4096
+_NONCE_PATTERN = re.compile(r"\A[0-9a-f]{16,64}\Z")
+_MAC_PATTERN = re.compile(r"\A[0-9a-f]{64}\Z")
+
+# Transport hardening: one slow body must not hold a worker forever, and the
+# server refuses connections beyond a fixed budget rather than spawning threads
+# without bound.
+BODY_READ_TIMEOUT_SECONDS = 10.0
+REQUEST_TIMEOUT_SECONDS = 15.0
+MAX_CONCURRENT_CONNECTIONS = 64
+_MAX_REQUEST_BACKLOG = 16
+_BUSY_RESPONSE = (
+    b"HTTP/1.1 503 Service Unavailable\r\n"
+    b"Content-Length: 0\r\nConnection: close\r\n\r\n"
+)
+
 Query = Mapping[str, list[str]]
 Route = Callable[[BaseHTTPRequestHandler, Query], tuple[int, Any]]
 Routes = Mapping[tuple[str, str], Route]
@@ -47,6 +73,7 @@ Routes = Mapping[tuple[str, str], Route]
 _STATUS_BY_ERROR: tuple[tuple[type[DataPlaneError], int, str], ...] = (
     (ConfirmationRequired, 403, "confirmation_required"),
     (ConfirmationError, 403, "confirmation_invalid"),
+    (AuthenticationError, 401, "unauthorized"),
     (AuthorizationError, 403, "forbidden"),
     (IdempotencyConflict, 409, "idempotency_conflict"),
     (CursorError, 409, "cursor"),
@@ -128,7 +155,29 @@ def read_body(
             "payload_too_large",
             f"request body exceeds the {max_bytes}-byte limit",
         )
-    body = request.rfile.read(length)
+    connection = getattr(request, "connection", None)
+    deadline = time.monotonic() + BODY_READ_TIMEOUT_SECONDS
+    chunks: list[bytes] = []
+    remaining = length
+    while remaining > 0:
+        if connection is not None:
+            try:
+                connection.settimeout(max(0.1, deadline - time.monotonic()))
+            except OSError:
+                pass
+        try:
+            chunk = request.rfile.read(min(remaining, 65536))
+        except TimeoutError as exc:
+            raise HttpError(408, "timeout", "request body read timed out") from exc
+        except OSError as exc:
+            raise HttpError(400, "bad_request", "request body could not be read") from exc
+        if not chunk:
+            raise HttpError(400, "bad_request", "request body ended early")
+        chunks.append(chunk)
+        remaining -= len(chunk)
+        if time.monotonic() > deadline:
+            raise HttpError(408, "timeout", "request body read timed out")
+    body = b"".join(chunks)
     if len(body) != length:
         raise HttpError(400, "bad_request", "request body ended early")
     return body
@@ -262,21 +311,87 @@ def query_float(
     return parsed
 
 
-def request_token(
-    secret: bytes | str, method: str, target: str, body: bytes = b""
-) -> str:
-    """A shared-key HMAC over ``method\\ntarget\\nsha256(body)``.
+class NonceCache:
+    """A bounded, thread-safe store of recently seen request nonces."""
 
-    Binding the method, the full request target (path and query), and the body
-    digest means a token for one request cannot be replayed for another.
+    def __init__(self, max_entries: int = MAX_NONCE_CACHE) -> None:
+        if max_entries < 1:
+            raise HttpError(500, "internal", "nonce cache size is not positive")
+        self._max_entries = max_entries
+        self._seen: OrderedDict[str, float] = OrderedDict()
+        self._lock = threading.Lock()
+
+    def _purge(self, now: float, ttl: float) -> None:
+        while self._seen:
+            nonce, seen_at = next(iter(self._seen.items()))
+            if now - seen_at < ttl:
+                return
+            self._seen.pop(nonce, None)
+
+    def check_and_add(self, nonce: str, now: float, ttl: float) -> bool:
+        with self._lock:
+            self._purge(now, ttl)
+            if nonce in self._seen:
+                return False
+            self._seen[nonce] = now
+            while len(self._seen) > self._max_entries:
+                self._seen.popitem(last=False)
+            return True
+
+
+_NONCES = NonceCache()
+
+
+def _token_mac(
+    secret: bytes | str,
+    method: str,
+    target: str,
+    body: bytes,
+    timestamp: int,
+    nonce: str,
+) -> str:
+    message = (
+        f"{method.upper()}\n{target}\n{hashlib.sha256(body).hexdigest()}\n"
+        f"{timestamp}\n{nonce}"
+    ).encode("utf-8")
+    return hmac.new(_key(secret), message, hashlib.sha256).hexdigest()
+
+
+def request_token(
+    secret: bytes | str,
+    method: str,
+    target: str,
+    body: bytes = b"",
+    *,
+    timestamp: int | None = None,
+    nonce: str | None = None,
+) -> str:
+    """A shared-key HMAC over method, target, body digest, timestamp, and nonce.
+
+    Binding all five means a token cannot be replayed for another request or
+    reused inside its freshness window.
     """
 
-    message = (
-        f"{method.upper()}\n{target}\n{hashlib.sha256(body).hexdigest()}".encode(
-            "utf-8"
-        )
-    )
-    return "sha256=" + hmac.new(_key(secret), message, hashlib.sha256).hexdigest()
+    stamp = int(time.time()) if timestamp is None else int(timestamp)
+    token_nonce = secrets.token_hex(16) if nonce is None else nonce
+    mac = _token_mac(secret, method, target, body, stamp, token_nonce)
+    return f"{TOKEN_VERSION}:{stamp}:{token_nonce}:{mac}"
+
+
+def _parse_request_token(presented: str) -> tuple[int, str, str]:
+    parts = presented.split(":")
+    if len(parts) != 4:
+        raise HttpError(403, "forbidden", "request token is malformed")
+    version, raw_timestamp, nonce, mac = parts
+    if version != TOKEN_VERSION or not _NONCE_PATTERN.match(nonce):
+        raise HttpError(403, "forbidden", "request token is malformed")
+    if not _MAC_PATTERN.match(mac):
+        raise HttpError(403, "forbidden", "request token is malformed")
+    try:
+        timestamp = int(raw_timestamp)
+    except ValueError as exc:
+        raise HttpError(403, "forbidden", "request token is malformed") from exc
+    return timestamp, nonce, mac
 
 
 def require_request_token(
@@ -284,14 +399,23 @@ def require_request_token(
     secret: bytes | str,
     header: str,
     body: bytes = b"",
+    *,
+    ttl: float = TOKEN_TTL_SECONDS,
+    nonce_cache: NonceCache | None = None,
+    now: float | None = None,
 ) -> None:
     presented = request.headers.get(header, "").strip()
     if not presented:
         raise HttpError(401, "unauthorized", "missing request token")
-    expected = request_token(secret, request.command, request.path, body)
-    if not hmac.compare_digest(
-        presented.encode("utf-8", "ignore"), expected.encode("ascii")
-    ):
+    timestamp, nonce, mac = _parse_request_token(presented)
+    current = time.time() if now is None else float(now)
+    if abs(current - timestamp) > ttl:
+        raise HttpError(403, "forbidden", "request token is stale")
+    cache = _NONCES if nonce_cache is None else nonce_cache
+    if not cache.check_and_add(nonce, current, ttl):
+        raise HttpError(403, "forbidden", "request token was already used")
+    expected = _token_mac(secret, request.command, request.path, body, timestamp, nonce)
+    if not hmac.compare_digest(mac, expected):
         raise HttpError(403, "forbidden", "request token does not match")
 
 
@@ -316,6 +440,8 @@ class JsonHandler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     server_version = "data-plane/1"
     sys_version = ""
+    # Bound the time a client may take to send its request line and headers.
+    timeout = REQUEST_TIMEOUT_SECONDS
     service: Any = None
 
     def do_GET(self) -> None:  # noqa: N802 - http.server API
@@ -360,13 +486,57 @@ def handler_for(service: Any) -> type[JsonHandler]:
     return type(f"{type(service).__name__}Handler", (JsonHandler,), {"service": service})
 
 
+class BoundedThreadingHTTPServer(ThreadingHTTPServer):
+    """A threading server with a hard cap on concurrently served connections."""
+
+    daemon_threads = True
+    request_queue_size = _MAX_REQUEST_BACKLOG
+    max_connections = MAX_CONCURRENT_CONNECTIONS
+
+    def __init__(
+        self,
+        server_address: tuple[str, int],
+        handler: type[BaseHTTPRequestHandler],
+        *,
+        max_connections: int | None = None,
+    ) -> None:
+        limit = self.max_connections if max_connections is None else max_connections
+        if limit < 1:
+            raise ValueError("max_connections must be positive")
+        self._connection_slots = threading.BoundedSemaphore(limit)
+        super().__init__(server_address, handler)
+
+    def process_request(self, request: Any, client_address: Any) -> None:
+        if not self._connection_slots.acquire(blocking=False):
+            try:
+                request.sendall(_BUSY_RESPONSE)
+            except OSError:
+                pass
+            finally:
+                try:
+                    request.close()
+                except OSError:
+                    pass
+            return
+        super().process_request(request, client_address)
+
+    def process_request_thread(self, request: Any, client_address: Any) -> None:
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._connection_slots.release()
+
+
 def build_server(
     name: str,
     handler: type[BaseHTTPRequestHandler],
     host: str = "127.0.0.1",
     port: int = 0,
-) -> ThreadingHTTPServer:
-    server = ThreadingHTTPServer((host, port), handler)
+    max_connections: int | None = None,
+) -> BoundedThreadingHTTPServer:
+    server = BoundedThreadingHTTPServer(
+        (host, port), handler, max_connections=max_connections
+    )
     server.daemon_threads = True
     server.service_name = name  # type: ignore[attr-defined]
     return server

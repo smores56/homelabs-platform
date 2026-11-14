@@ -13,6 +13,9 @@ journals.
 
 from __future__ import annotations
 
+import hashlib
+import re
+import threading
 import time
 import uuid
 from dataclasses import dataclass, replace
@@ -42,6 +45,21 @@ _RECONCILABLE = frozenset(
 _APPLICABLE = frozenset(
     {IntentState.PROPOSED, IntentState.AWAITING_CONFIRMATION, IntentState.APPROVED}
 )
+
+_CONTROL_CHARACTERS = re.compile(r"[\x00-\x1f\x7f-\x9f]")
+_SECRET_PATTERN = re.compile(
+    r"(?i)(token|secret|password|passwd|key)\s*[=:]\s*\S+"
+)
+_MAX_ERROR_TEXT = 160
+_MAX_REMEMBERED_APPROVALS = 1024
+
+
+def _describe_exception(exc: BaseException) -> str:
+    """A bounded, secret-redacted, control-free description safe for the wire."""
+
+    text = _SECRET_PATTERN.sub(r"\1=<redacted>", str(exc))
+    text = _CONTROL_CHARACTERS.sub(" ", text)[:_MAX_ERROR_TEXT]
+    return f"{type(exc).__name__}: {text}".strip()
 
 
 @runtime_checkable
@@ -145,6 +163,10 @@ class Broker:
         self._intents = intents
         self._events = events
         self._clock = clock
+        # Single-writer serialization: the revision check, the adapter apply,
+        # and the read-back must not interleave with another write.
+        self._lock = threading.RLock()
+        self._approvals: dict[str, dict[str, Any]] = {}
 
     # -- reads ---------------------------------------------------------
 
@@ -217,19 +239,21 @@ class Broker:
 
         self._authorize(claims, request.source_id, request.capability)
         contract = self._contract(request.source_id)
-        intent = self._intent_for(request)
-        self._require_epoch(intent.operation, contract)
-        operation = self._build(request, contract, intent.intent_id)
-        self._require_same_operation(intent.operation, operation)
-        if intent.state is not IntentState.AWAITING_CONFIRMATION:
-            raise ValidationError(
-                f"intent {intent.intent_id} is {intent.state.value}, not awaiting confirmation"
-            )
+        with self._lock:
+            intent = self._intent_for(request)
+            self._require_epoch(intent.operation, contract)
+            operation = self._build(request, contract, intent.intent_id)
+            self._require_same_operation(intent.operation, operation)
+            if intent.state is not IntentState.AWAITING_CONFIRMATION:
+                raise ValidationError(
+                    f"intent {intent.intent_id} is {intent.state.value}, not awaiting confirmation"
+                )
 
-        self._gate.verify(token, operation)
-        approved = self._transition(intent, IntentState.APPROVED)
-        self._intents.save(approved)
-        return approved
+            approval = self._gate.verify(token, operation)
+            self._remember_approval(intent.intent_id, approval, token)
+            approved = self._transition(intent, IntentState.APPROVED)
+            self._intents.save(approved)
+            return approved
 
     def apply(
         self,
@@ -241,9 +265,20 @@ class Broker:
 
         An applied intent replays its stored effect without touching the
         adapter. An ``OUTCOME_UNKNOWN`` intent is refused until reconciled.
+        The revision-check-through-apply window is serialized by the broker
+        lock so two writers cannot both pass the same revision check.
         """
 
         self._authorize(claims, request.source_id, request.capability)
+        with self._lock:
+            return self._apply_locked(claims, request, token)
+
+    def _apply_locked(
+        self,
+        claims: WorkloadClaims | str,
+        request: WriteRequest,
+        token: str | None,
+    ) -> dict[str, Any]:
         contract = self._contract(request.source_id)
         intent = self._intent_for(request)
         self._require_epoch(intent.operation, contract)
@@ -266,7 +301,8 @@ class Broker:
                 raise ConfirmationRequired(
                     f"intent {intent.intent_id} requires human confirmation"
                 )
-            self._gate.verify(token, operation)
+            approval = self._gate.verify(token, operation)
+            self._remember_approval(intent.intent_id, approval, token)
             intent = self._transition(intent, IntentState.APPROVED)
             self._intents.save(intent)
 
@@ -289,21 +325,23 @@ class Broker:
         try:
             result = adapter.apply(operation, intent.idempotency_key)
         except Exception as exc:
-            self._mark_unknown(intent, f"apply raised {type(exc).__name__}: {exc}")
+            self._mark_unknown(intent, f"apply raised {_describe_exception(exc)}")
             raise OutcomeUnknown(
-                f"intent {intent.intent_id} may or may not have landed: {exc}"
+                f"intent {intent.intent_id} may or may not have landed: "
+                f"{_describe_exception(exc)}"
             ) from exc
 
         try:
             observed = [adapter.read(target) for target in operation.targets]
         except Exception as exc:
-            self._mark_unknown(intent, f"read-back raised {type(exc).__name__}: {exc}")
+            self._mark_unknown(intent, f"read-back raised {_describe_exception(exc)}")
             raise OutcomeUnknown(
-                f"intent {intent.intent_id} cannot be confirmed by read-back: {exc}"
+                f"intent {intent.intent_id} cannot be confirmed by read-back: "
+                f"{_describe_exception(exc)}"
             ) from exc
 
         if not all(
-            self._observed_matches(operation, record) for record in observed
+            self._observed_matches(operation, contract, record) for record in observed
         ):
             self._mark_unknown(intent, "read-back did not show the expected fields")
             raise OutcomeUnknown(
@@ -316,47 +354,56 @@ class Broker:
         self._record(applied)
         return effect
 
-    def reconcile(self, intent_id: str) -> Intent:
+    def reconcile(self, claims: WorkloadClaims | str, intent_id: str) -> Intent:
         """Observe an ambiguous intent through the adapter and settle it.
 
-        The adapter read is authoritative: matching field values mark the
-        intent applied, anything else marks it failed. A settled intent is
-        returned unchanged.
+        The caller must be authorized for the intent's own source and
+        capability before the broker reads anything: observing an outcome is
+        still a read of that source. A settled intent is returned unchanged.
         """
 
         intent = self._intents.get(intent_id)
         if intent is None:
             raise ValidationError(f"unknown intent {intent_id!r}")
-        if intent.state not in _RECONCILABLE:
-            return intent
-
-        operation = intent.operation
-        try:
-            observed = [
-                self._adapter(operation.source_id).read(target)
-                for target in operation.targets
-            ]
-            satisfied = all(
-                self._observed_matches(operation, record) for record in observed
-            )
-        except Exception:
-            satisfied = False
-            observed = []
-
-        if satisfied:
-            effect = observed[0] if len(observed) == 1 else {"targets": observed}
-            settled = self._transition(
-                intent, IntentState.APPLIED, effect=dict(effect)
-            )
-            self._intents.save(settled)
-            self._record(settled)
-            return settled
-
-        failed = self._transition(
-            intent, IntentState.FAILED, error="reconcile did not observe the effect"
+        self._authorize(
+            claims, intent.operation.source_id, intent.operation.capability
         )
-        self._intents.save(failed)
-        return failed
+        with self._lock:
+            intent = self._intents.get(intent_id)
+            if intent is None:
+                raise ValidationError(f"unknown intent {intent_id!r}")
+            if intent.state not in _RECONCILABLE:
+                return intent
+
+            operation = intent.operation
+            contract = self._contract(operation.source_id)
+            try:
+                observed = [
+                    self._adapter(operation.source_id).read(target)
+                    for target in operation.targets
+                ]
+                satisfied = all(
+                    self._observed_matches(operation, contract, record)
+                    for record in observed
+                )
+            except Exception:
+                satisfied = False
+                observed = []
+
+            if satisfied:
+                effect = observed[0] if len(observed) == 1 else {"targets": observed}
+                settled = self._transition(
+                    intent, IntentState.APPLIED, effect=dict(effect)
+                )
+                self._intents.save(settled)
+                self._record(settled)
+                return settled
+
+            failed = self._transition(
+                intent, IntentState.FAILED, error="reconcile did not observe the effect"
+            )
+            self._intents.save(failed)
+            return failed
 
     # -- internals -----------------------------------------------------
 
@@ -401,6 +448,13 @@ class Broker:
                 f"source {contract.source_id!r} is at epoch {contract.epoch}, "
                 f"not {request.epoch}"
             )
+        if request.base_revision and _CONTROL_CHARACTERS.search(request.base_revision):
+            raise ValidationError("base_revision contains control characters")
+        for change in request.field_diff:
+            if _CONTROL_CHARACTERS.search(change.field):
+                raise ValidationError(
+                    f"field name {change.field!r} contains control characters"
+                )
 
     @staticmethod
     def _build(
@@ -455,11 +509,39 @@ class Broker:
 
     @staticmethod
     def _observed_matches(
-        operation: NormalizedOperation, record: Mapping[str, Any]
+        operation: NormalizedOperation,
+        contract: SourceContract,
+        record: Mapping[str, Any],
     ) -> bool:
+        """Whether the observed record proves the operation landed.
+
+        An empty ``field_diff`` must not make a create or delete vacuously
+        satisfy the check: a create needs the target to exist, and a delete
+        needs the target gone or carrying its contract tombstone.
+        """
+
+        effect = contract.capability(operation.capability).effect
+        if effect is EffectClass.CREATE and not record:
+            return False
+        if effect is EffectClass.DELETE:
+            if not record:
+                return True
+            tombstone = contract.tombstone_field
+            return bool(tombstone and record.get(tombstone))
         return all(
             record.get(change.field) == change.after for change in operation.field_diff
         )
+
+    def _remember_approval(self, intent_id: str, approval: Any, token: str) -> None:
+        # Durable intent rows have no approval columns yet (intents.py is owned
+        # by another lane); keep the audit record in memory for the effect event.
+        if len(self._approvals) >= _MAX_REMEMBERED_APPROVALS:
+            self._approvals.pop(next(iter(self._approvals)))
+        self._approvals[intent_id] = {
+            "approved_by": approval.approved_by,
+            "approved_at": approval.approved_at,
+            "token_sha256": hashlib.sha256(token.encode("utf-8")).hexdigest(),
+        }
 
     def _mark_unknown(self, intent: Intent, reason: str) -> None:
         self._intents.save(
@@ -484,16 +566,18 @@ class Broker:
 
     def _record(self, intent: Intent) -> None:
         operation = intent.operation
-        self._events.record(
-            {
-                "intent_id": intent.intent_id,
-                "source_id": operation.source_id,
-                "capability": operation.capability,
-                "targets": list(operation.targets),
-                "idempotency_key": intent.idempotency_key,
-                "epoch": operation.epoch,
-                "state": intent.state.value,
-                "effect": dict(intent.effect or {}),
-                "at": int(self._clock()),
-            }
-        )
+        event = {
+            "intent_id": intent.intent_id,
+            "source_id": operation.source_id,
+            "capability": operation.capability,
+            "targets": list(operation.targets),
+            "idempotency_key": intent.idempotency_key,
+            "epoch": operation.epoch,
+            "state": intent.state.value,
+            "effect": dict(intent.effect or {}),
+            "at": int(self._clock()),
+        }
+        approval = self._approvals.get(intent.intent_id)
+        if approval is not None:
+            event["approval"] = dict(approval)
+        self._events.record(event)

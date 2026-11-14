@@ -8,6 +8,7 @@ or a restic repository. The fixtures are plain dicts and in-memory adapters.
 from __future__ import annotations
 
 import json
+import socket
 import sys
 import tempfile
 import threading
@@ -54,9 +55,12 @@ NOW = 1_000_000
 class Harness:
     """One service on an ephemeral localhost port."""
 
-    def __init__(self, service: object) -> None:
+    def __init__(self, service: object, max_connections: int | None = None) -> None:
         self.server = common.build_server(
-            "test", common.handler_for(service), port=0
+            "test",
+            common.handler_for(service),
+            port=0,
+            max_connections=max_connections,
         )
         self.thread = threading.Thread(
             target=lambda: self.server.serve_forever(poll_interval=0.02),
@@ -104,6 +108,7 @@ def event_headers(secret: bytes, method: str, path: str, body: bytes = b"") -> d
 
 class EventServiceTests(unittest.TestCase):
     SECRET = b"event-test-secret"
+    CONSUMERS = {"worker": b"worker-secret", "other": b"other-secret"}
 
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
@@ -111,13 +116,19 @@ class EventServiceTests(unittest.TestCase):
         self.log = EventLog(Path(self.tmp.name) / "events.db")
         self.addCleanup(self.log.close)
         self.harness = Harness(
-            event_service.EventService(self.log, self.SECRET)
+            event_service.EventService(
+                self.log, self.SECRET, consumer_secrets=self.CONSUMERS
+            )
         )
         self.harness.__enter__()
         self.addCleanup(self.harness.__exit__, None, None, None)
 
-    def post_event(self, payload: dict, path: str = "/events") -> tuple[int, object]:
-        body = json.dumps(payload).encode()
+    def post_event(
+        self, payload: dict, path: str = "/events", *, key: str = "evt-key"
+    ) -> tuple[int, object]:
+        body_data = dict(payload)
+        body_data.setdefault("idempotency_key", key)
+        body = json.dumps(body_data).encode()
         return self.harness.request(
             "POST", path, body=body, headers=event_headers(self.SECRET, "POST", path, body)
         )
@@ -146,7 +157,9 @@ class EventServiceTests(unittest.TestCase):
             "POST",
             "/events/ack",
             body=ack_body,
-            headers=event_headers(self.SECRET, "POST", "/events/ack", ack_body),
+            headers=event_headers(
+                self.CONSUMERS["worker"], "POST", "/events/ack", ack_body
+            ),
         )
         self.assertEqual(status, 200)
         self.assertEqual(acked, {"consumer": "worker", "position": 1, "epoch": 1})
@@ -206,10 +219,119 @@ class EventServiceTests(unittest.TestCase):
         self.assertEqual(status, 400)
         self.assertEqual(payload["error"]["code"], "validation")
 
-    def test_healthz_needs_no_token(self) -> None:
+    def test_healthz_needs_no_token_and_reveals_no_epoch(self) -> None:
         status, payload = self.harness.request("GET", "/healthz")
         self.assertEqual(status, 200)
         self.assertEqual(payload["service"], "event")
+        self.assertNotIn("epoch", payload)
+
+    def test_replay_is_idempotent_and_client_event_id_is_rejected(self) -> None:
+        first = self.post_event(
+            {"kind": "book.updated", "entity": "book-1", "payload": {"t": 1}},
+            key="replay-1",
+        )
+        second = self.post_event(
+            {"kind": "book.updated", "entity": "book-1", "payload": {"t": 1}},
+            key="replay-1",
+        )
+        self.assertEqual(first[0], 201)
+        self.assertEqual(second[0], 201)
+        self.assertEqual(first[1]["position"], second[1]["position"])
+        self.assertEqual(first[1]["event_id"], second[1]["event_id"])
+        self.assertEqual(len(self.log.read()), 1)
+
+        conflict = self.post_event(
+            {"kind": "book.updated", "entity": "book-1", "payload": {"t": 2}},
+            key="replay-1",
+        )
+        self.assertEqual(conflict[0], 409)
+        self.assertEqual(conflict[1]["error"]["code"], "idempotency_conflict")
+
+        squatted = self.post_event(
+            {"kind": "k", "entity": "e", "event_id": "evt-mine"}, key="squat-1"
+        )
+        self.assertEqual(squatted[0], 400)
+        self.assertEqual(squatted[1]["error"]["code"], "validation")
+
+    def test_ack_is_bound_to_the_consumer(self) -> None:
+        self.post_event({"kind": "k", "entity": "e"})
+        ack_body = json.dumps({"consumer": "worker", "position": 1}).encode()
+
+        status, payload = self.harness.request(
+            "POST",
+            "/events/ack",
+            body=ack_body,
+            headers=event_headers(
+                self.CONSUMERS["other"], "POST", "/events/ack", ack_body
+            ),
+        )
+        self.assertEqual(status, 403)
+        self.assertEqual(self.log.cursor("worker"), (0, 1))
+
+        unknown_body = json.dumps({"consumer": "stranger", "position": 1}).encode()
+        status, payload = self.harness.request(
+            "POST",
+            "/events/ack",
+            body=unknown_body,
+            headers=event_headers(self.SECRET, "POST", "/events/ack", unknown_body),
+        )
+        self.assertEqual(status, 403)
+
+    def test_replayed_and_stale_request_tokens_are_rejected(self) -> None:
+        path = "/events?after=0&limit=10"
+        token = common.request_token(self.SECRET, "GET", path)
+        headers = {"X-Event-Token": token}
+        first = self.harness.request("GET", path, headers=headers)
+        second = self.harness.request("GET", path, headers=headers)
+        self.assertEqual(first[0], 200)
+        self.assertEqual(second[0], 403)
+
+        stale = common.request_token(
+            self.SECRET, "GET", path, timestamp=int(time.time()) - 600
+        )
+        status, payload = self.harness.request(
+            "GET", path, headers={"X-Event-Token": stale}
+        )
+        self.assertEqual(status, 403)
+
+        malformed = {"X-Event-Token": "sha256=" + "0" * 64}
+        status, payload = self.harness.request("GET", path, headers=malformed)
+        self.assertEqual(status, 403)
+
+
+class TransportHardeningTests(unittest.TestCase):
+    def test_read_body_times_out(self) -> None:
+        class SlowFile:
+            def read(self, size: int) -> bytes:
+                raise TimeoutError("slow body")
+
+        class FakeSocket:
+            def settimeout(self, value: float) -> None:
+                pass
+
+        class StubRequest:
+            headers = {"Content-Length": "4"}
+            connection = FakeSocket()
+            rfile = SlowFile()
+
+        with self.assertRaises(common.HttpError) as raised:
+            common.read_body(StubRequest())
+        self.assertEqual(raised.exception.status, 408)
+
+    def test_server_refuses_beyond_the_connection_budget(self) -> None:
+        log = EventLog(":memory:")
+        self.addCleanup(log.close)
+        service = event_service.EventService(log, b"secret", consumer_secrets={})
+        with Harness(service, max_connections=1) as harness:
+            held = socket.create_connection(
+                ("127.0.0.1", harness.server.server_address[1])
+            )
+            try:
+                time.sleep(0.2)
+                status, _payload = harness.request("GET", "/healthz")
+            finally:
+                held.close()
+        self.assertEqual(status, 503)
 
 
 def read_capability() -> Capability:
@@ -355,9 +477,12 @@ class BrokerServiceTests(unittest.TestCase):
         values.update(overrides)
         return values
 
-    def post(self, path: str, payload: dict) -> tuple[int, object]:
+    def post(self, path: str, payload: dict, headers: dict | None = None) -> tuple[int, object]:
         return self.harness.request(
-            "POST", path, body=json.dumps(payload).encode(), headers=self.headers
+            "POST",
+            path,
+            body=json.dumps(payload).encode(),
+            headers=self.headers if headers is None else headers,
         )
 
     def test_propose_confirm_and_apply_with_the_external_operator_token(self) -> None:
@@ -419,13 +544,44 @@ class BrokerServiceTests(unittest.TestCase):
         self.assertEqual(status, 400)
         self.assertEqual(payload["error"]["code"], "validation")
 
+    def test_reconcile_requires_the_intent_capability(self) -> None:
+        write = self.write(
+            capability="update",
+            idempotency_key="recon-1",
+            field_diff=[["title", "Old", "New"]],
+            base_revision="rev-1",
+        )
+        self.assertEqual(self.post("/propose", write)[0], 201)
+        intent_id = self.store.find("recon-1").intent_id
+
+        create_only = self.issuer.issue(
+            LOCAL_PROFILE, "agent", (("notes", "create"),)
+        )
+        status, payload = self.post(
+            "/reconcile",
+            {"intent_id": intent_id},
+            headers={"X-Workload-Token": create_only},
+        )
+        self.assertEqual(status, 403)
+        self.assertEqual(payload["error"]["code"], "forbidden")
+
+    def test_malformed_workload_token_is_unauthorized(self) -> None:
+        status, payload = self.harness.request(
+            "POST",
+            "/propose",
+            body=json.dumps(self.write()).encode(),
+            headers={"X-Workload-Token": "abc.!!!"},
+        )
+        self.assertEqual(status, 401)
+        self.assertEqual(payload["error"]["code"], "unauthorized")
+
 
 class RelayServiceTests(unittest.TestCase):
     SECRET = b"relay-test-secret"
 
     def setUp(self) -> None:
         self.sunk: list[dict] = []
-        self.relay = Relay(self.SECRET, self.schema(), self.sunk.append)
+        self.relay = Relay(self.SECRET, self.schema(), self.sunk.append, source_id="mail")
         self.harness = Harness(relay_service.RelayService(self.relay))
         self.harness.__enter__()
         self.addCleanup(self.harness.__exit__, None, None, None)
@@ -534,6 +690,27 @@ class RelayServiceTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(payload["service"], "relay")
 
+    def test_extra_fields_are_rejected(self) -> None:
+        status, payload = self.ingest(self.record(extra="unexpected"))
+        self.assertEqual(status, 400)
+        self.assertEqual(payload["error"]["code"], "validation")
+        self.assertEqual(self.sunk, [])
+
+    def test_a_record_from_another_source_is_rejected(self) -> None:
+        status, payload = self.ingest(self.record(source_id="other"))
+        self.assertEqual(status, 403)
+        self.assertEqual(payload["error"]["code"], "forbidden")
+        self.assertEqual(self.sunk, [])
+
+    def test_deeply_nested_json_is_rejected(self) -> None:
+        nested: object = "leaf"
+        for _ in range(30):
+            nested = [nested]
+        status, payload = self.ingest(self.record(blob=nested))
+        self.assertEqual(status, 400)
+        self.assertEqual(payload["error"]["code"], "validation")
+        self.assertEqual(self.sunk, [])
+
 
 class FakeSnapshotter:
     def __init__(self) -> None:
@@ -553,6 +730,9 @@ class FakeSnapshotter:
         self.calls.append(("resume", group_id))
 
 
+OPERATOR_TOKEN = "operator-test-token"
+
+
 class BackupServiceTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
@@ -565,16 +745,26 @@ class BackupServiceTests(unittest.TestCase):
             clock=lambda: 1_000.0,
         )
         self.service = backup_service.BackupService(
-            self.controller, ("fixture-a", "fixture-b"), ("books",)
+            self.controller,
+            ("fixture-a", "fixture-b"),
+            ("books",),
+            operator_secret=OPERATOR_TOKEN,
+            fixture_mode=False,
         )
         self.harness = Harness(self.service)
         self.harness.__enter__()
         self.addCleanup(self.harness.__exit__, None, None, None)
 
-    def test_run_publishes_a_complete_generation(self) -> None:
-        status, manifest = self.harness.request(
-            "POST", "/run", body=json.dumps({"group": "books"}).encode()
+    def run_backup(
+        self, payload: dict, *, token: str | None = OPERATOR_TOKEN
+    ) -> tuple[int, object]:
+        headers = {} if token is None else {"Authorization": f"Bearer {token}"}
+        return self.harness.request(
+            "POST", "/run", body=json.dumps(payload).encode(), headers=headers
         )
+
+    def test_run_publishes_a_complete_generation(self) -> None:
+        status, manifest = self.run_backup({"group": "books"})
         self.assertEqual(status, 200)
         self.assertTrue(manifest["complete"])
         self.assertEqual(manifest["group_id"], "books")
@@ -594,16 +784,52 @@ class BackupServiceTests(unittest.TestCase):
         self.assertTrue(list(Path(self.tmp.name, "manifests").glob("*.json")))
 
     def test_unknown_group_is_a_validation_error(self) -> None:
-        status, payload = self.harness.request(
-            "POST", "/run", body=json.dumps({"group": "music"}).encode()
-        )
+        status, payload = self.run_backup({"group": "music"})
         self.assertEqual(status, 400)
         self.assertEqual(payload["error"]["code"], "validation")
 
-    def test_healthz_reports_the_fixture_destinations(self) -> None:
+    def test_run_without_an_operator_token_is_refused(self) -> None:
+        status, payload = self.run_backup({"group": "books"}, token=None)
+        self.assertEqual(status, 401)
+        self.assertEqual(payload["error"]["code"], "unauthorized")
+
+        status, payload = self.run_backup({"group": "books"}, token="wrong")
+        self.assertEqual(status, 403)
+        self.assertEqual(payload["error"]["code"], "forbidden")
+
+    def test_fixture_mode_never_reports_verified(self) -> None:
+        fixture = backup_service.BackupService(
+            self.controller,
+            ("fixture-a", "fixture-b"),
+            ("books",),
+            operator_secret=OPERATOR_TOKEN,
+        )
+        with Harness(fixture) as harness:
+            status, payload = harness.request(
+                "POST",
+                "/run",
+                body=json.dumps({"group": "books"}).encode(),
+                headers={"Authorization": f"Bearer {OPERATOR_TOKEN}"},
+            )
+        self.assertEqual(status, 503)
+        self.assertEqual(payload["error"]["code"], "unavailable")
+
+    def test_a_service_without_a_token_fails_closed(self) -> None:
+        unconfigured = backup_service.BackupService(
+            self.controller,
+            ("fixture-a", "fixture-b"),
+            ("books",),
+            operator_secret=None,
+            fixture_mode=False,
+        )
+        with Harness(unconfigured) as harness:
+            status, payload = harness.request("POST", "/run", body=b"")
+        self.assertEqual(status, 503)
+
+    def test_healthz_names_no_group_or_destination(self) -> None:
         status, payload = self.harness.request("GET", "/healthz")
         self.assertEqual(status, 200)
-        self.assertEqual(payload["destinations"], ["fixture-a", "fixture-b"])
+        self.assertEqual(payload, {"status": "ok", "service": "backup"})
 
 
 if __name__ == "__main__":

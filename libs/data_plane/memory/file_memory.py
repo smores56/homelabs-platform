@@ -71,11 +71,28 @@ def _validate_profile(profile: object, *, field_name: str = "profile") -> str:
     return str(profile)
 
 
+FUTURE_SKEW_SECONDS = 300
+
+
+def _is_future(value: str) -> bool:
+    parsed = datetime.fromisoformat(value)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    now = datetime.now(timezone.utc)
+    return (parsed - now).total_seconds() > FUTURE_SKEW_SECONDS
+
+
 def _validate_record_id(record_id: object) -> str:
     if not isinstance(record_id, str) or not record_id.strip():
         raise ValidationError("memory record id must be non-empty")
     if record_id in {".", ".."} or "/" in record_id or "\\" in record_id:
         raise ValidationError(f"memory record id {record_id!r} is not a flat filename")
+    if "." in record_id:
+        raise ValidationError(f"memory record id {record_id!r} must not contain a dot")
+    if any(ord(character) < 32 or ord(character) == 127 for character in record_id):
+        raise ValidationError(
+            f"memory record id {record_id!r} contains control characters"
+        )
     return record_id
 
 
@@ -138,6 +155,12 @@ class MemoryRecord:
 
         created_at = _timestamp(self.created_at or _now(), "created_at")
         updated_at = _timestamp(self.updated_at or created_at, "updated_at")
+        # A tombstone dated in the future would suppress every real update until
+        # the clock caught up, so reject it at the boundary.
+        if self.deleted and _is_future(updated_at):
+            raise ValidationError(
+                f"memory tombstone {self.id!r} is dated in the future"
+            )
         object.__setattr__(self, "created_at", created_at)
         object.__setattr__(self, "updated_at", updated_at)
 
@@ -367,6 +390,7 @@ class FileMemory:
                 handle.write(body + "\n")
                 handle.flush()
                 os.fsync(handle.fileno())
+            os.chmod(temporary, 0o600)
             os.replace(temporary, path)
         except BaseException:
             Path(temporary).unlink(missing_ok=True)

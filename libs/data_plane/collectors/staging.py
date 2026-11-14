@@ -49,6 +49,11 @@ def _check_generation_id(generation_id: str) -> None:
         raise ValidationError(f"invalid generation id {generation_id!r}")
 
 
+def _reject_symlink(path: Path, label: str) -> None:
+    if path.is_symlink():
+        raise PublishError(f"{label} {path} is a symlink; refusing to follow it")
+
+
 class CursorStore:
     """A durable epoch and per-source high-water cursors.
 
@@ -157,6 +162,8 @@ class StagingGeneration:
         self._tombstones: set[str] = set()
         self._closed = False
         self._published_path: Path | None = None
+        _reject_symlink(self._root / STAGING_DIR, "staging root")
+        _reject_symlink(self._staging, "staging generation")
         self._staging.mkdir(parents=True, exist_ok=True)
 
     @property
@@ -178,8 +185,11 @@ class StagingGeneration:
             raise ValidationError("object metadata is not JSON serializable") from exc
 
         objects = self._staging / "objects"
+        _reject_symlink(objects, "object directory")
         objects.mkdir(parents=True, exist_ok=True)
-        (objects / filename).write_bytes(data)
+        destination = objects / filename
+        _reject_symlink(destination, "object path")
+        destination.write_bytes(data)
         self._objects[object_id] = {
             "object_id": object_id,
             "filename": filename,
@@ -192,8 +202,11 @@ class StagingGeneration:
     def delete(self, object_id: str) -> None:
         self._require_open()
         filename = _object_filename(object_id)
+        objects = self._staging / "objects"
+        _reject_symlink(objects, "object directory")
         if object_id in self._objects:
-            (self._staging / "objects" / filename).unlink(missing_ok=True)
+            _reject_symlink(objects / filename, "object path")
+            (objects / filename).unlink(missing_ok=True)
             del self._objects[object_id]
         self._tombstones.add(object_id)
 
@@ -235,9 +248,11 @@ class StagingGeneration:
                 )
 
         self._write_manifest(cursor)
+        _reject_symlink(self._staging, "staging generation")
         published_root = self._root / PUBLISHED_DIR
+        _reject_symlink(published_root, "published root")
         published_root.mkdir(parents=True, exist_ok=True)
-        if self._published.exists():
+        if self._published.is_symlink() or self._published.exists():
             raise PublishError(f"generation {self._generation_id!r} already exists")
         os.replace(self._staging, self._published)
         self._closed = True

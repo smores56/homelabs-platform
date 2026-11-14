@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 # Data-plane unit tests. Static only: no cluster, no credentials, no network.
+# Covers contracts, identity, journal, broker, backup, collectors, memory, CLI,
+# restore planning, and the migration gates (phases, preflight, data-loss
+# verification, rollback planning).
 set -uo pipefail
 
 root=$(git rev-parse --show-toplevel)
