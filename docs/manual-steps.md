@@ -1550,6 +1550,13 @@ until the new drill below passes.
    creates, so a nightly run that begins while a first upload is alive walks the
    same tree a second time.
 
+   Follow the upload with `sudo scripts/restic-progress.sh` (add
+   `--tree <name>` for one tree, `--once` to append a snapshot to a log). It
+   streams each Job's log and renders the `--json` status record — percentage,
+   bytes against restic's own total, file count and ETA — and reports a Job that
+   is not uploading from its own state, because a deadline kill takes the pod
+   and its log with it.
+
 4. Run the drill from a workstation. The exact commands are the `drill` key of
    the tree's `restic-contract` ConfigMap, and the preflight prints the same text
    on every run, so the two cannot disagree:
