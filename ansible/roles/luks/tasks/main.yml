@@ -260,11 +260,11 @@
 # crypttab: only own the entries the autoinstall did not already write.
 # --------------------------------------------------------------------------
 
-- name: Read the crypttab names outside the managed block
+- name: Read the crypttab entries outside the managed block
   ansible.builtin.command:
     argv:
       - awk
-      - '/# BEGIN ANSIBLE MANAGED BLOCK - homelab luks/{m=1} /# END ANSIBLE MANAGED BLOCK - homelab luks/{m=0;next} !m && $1 !~ /^#/ && NF {print $1}'
+      - '/# BEGIN ANSIBLE MANAGED BLOCK - homelab luks/{m=1} /# END ANSIBLE MANAGED BLOCK - homelab luks/{m=0;next} !m && $1 !~ /^#/ && NF {print $1 "\t" $2}'
       - "{{ luks_crypttab }}"
   register: luks_crypttab_existing
   changed_when: false
@@ -272,11 +272,22 @@
   failed_when: false
   tags: [always]
 
+- name: Split the unmanaged crypttab names and devices
+  ansible.builtin.set_fact:
+    luks_crypttab_unmanaged_names: >-
+      {{ luks_crypttab_existing.stdout_lines | default([])
+         | map('regex_replace', '\t.*$', '') | list }}
+    luks_crypttab_unmanaged_devices: >-
+      {{ luks_crypttab_existing.stdout_lines | default([])
+         | map('regex_replace', '^[^\t]*\t', '') | list }}
+  tags: [always]
+
 - name: List the volumes the autoinstall does not already own
   ansible.builtin.set_fact:
     luks_crypttab_unowned: >-
       {{ luks_volumes
-         | rejectattr('name', 'in', luks_crypttab_existing.stdout_lines | default([]))
+         | rejectattr('name', 'in', luks_crypttab_unmanaged_names)
+         | rejectattr('device', 'in', luks_crypttab_unmanaged_devices)
          | list }}
   tags: [always]
 
@@ -388,7 +399,11 @@
       `cryptsetup luksHeaderBackup`.
     quiet: true
   loop: "{{ luks_dump.results | default([]) | zip(luks_header_stat.results | default([])) | list }}"
-  when: "'destructive' in ansible_run_tags"
+  when:
+    - "'destructive' in ansible_run_tags"
+    # Only volumes Ansible will format (the on-demand backup disks) need this
+    # proof here; the pool volume is checked again before zpool create.
+    - not (item.0.item.entry.auto | bool)
   tags: [destructive]
 
 - name: Open the boot-time volumes

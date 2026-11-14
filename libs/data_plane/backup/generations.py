@@ -244,6 +244,8 @@ def write_manifest(path: str | os.PathLike[str], manifest: GenerationManifest) -
     """Write a manifest through a temporary file, fsync, and atomic rename."""
 
     target = Path(path)
+    if target.exists():
+        raise ManifestError(f"manifest {target} already exists; refusing to overwrite")
     payload = dict(manifest.to_dict())
     payload["manifest_hash"] = manifest_hash(manifest)
     data = canonical_json(payload) + b"\n"
@@ -290,8 +292,10 @@ def read_manifest(path: str | os.PathLike[str]) -> GenerationManifest:
     if not isinstance(payload, dict):
         raise ManifestError(f"manifest {target} is not an object")
     claimed = payload.pop("manifest_hash", None)
+    if claimed is None:
+        raise ManifestError(f"manifest {target} has no manifest_hash")
     manifest = GenerationManifest.from_dict(payload)
-    if claimed is not None and claimed != manifest_hash(manifest):
+    if claimed != manifest_hash(manifest):
         raise ManifestError(f"manifest {target} fails its content hash")
     return manifest
 

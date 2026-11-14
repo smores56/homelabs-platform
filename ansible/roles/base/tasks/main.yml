@@ -152,7 +152,9 @@
   ansible.builtin.file:
     path: "{{ homelab_ssh_confirmation_marker }}"
     state: absent
-  when: homelab_ssh_dropin_change_required | bool
+  when:
+    - homelab_ssh_dropin_change_required | bool
+    - not ansible_check_mode
 
 - name: Back up the current SSH hardening drop-in
   ansible.builtin.copy:

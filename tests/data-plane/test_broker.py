@@ -85,7 +85,11 @@ def contract(
         recovery_group=source_id,
         stable_id_fields=("id",),
         capabilities=(read(), search(), create(), update(), delete()),
-        authority=(FieldAuthority(field="title", authority=Authority.PORTABLE_FILE),),
+        authority=(
+            FieldAuthority(field="title", authority=Authority.PORTABLE_FILE),
+            FieldAuthority(field="owner", authority=Authority.HUMAN),
+            FieldAuthority(field="secret", authority=Authority.PROVIDER, exportable=False),
+        ),
         revision_field="rev",
         tombstone_field="deleted_at",
         epoch=epoch,
@@ -160,6 +164,9 @@ class FakeRecorder:
         self.events: list[dict] = []
 
     def record(self, event: dict) -> None:
+        intent = event.get("intent_id")
+        if any(existing.get("intent_id") == intent for existing in self.events):
+            return
         self.events.append(dict(event))
 
 
@@ -263,6 +270,40 @@ class BrokerTests(unittest.TestCase):
         self.assertIs(self.store.find("create-1").state, IntentState.APPLIED)
         self.assertEqual(len(self.recorder.events), 1)
         self.assertEqual(self.recorder.events[0]["intent_id"], intent.intent_id)
+
+    def test_update_without_a_field_diff_is_rejected(self) -> None:
+        claims = self.local(("notes", "update"))
+        with self.assertRaises(ValidationError):
+            self.broker.propose(
+                claims,
+                request(capability="update", idempotency_key="empty-update", field_diff=()),
+            )
+
+    def test_undeclared_and_human_fields_are_rejected(self) -> None:
+        claims = self.local(("notes", "update"))
+        with self.assertRaises(ValidationError):
+            self.broker.propose(
+                claims,
+                request(
+                    capability="update",
+                    idempotency_key="undeclared",
+                    field_diff=(FieldChange(field="body", before=None, after="x"),),
+                ),
+            )
+        with self.assertRaises(ValidationError):
+            self.broker.propose(
+                claims,
+                request(
+                    capability="update",
+                    idempotency_key="human",
+                    field_diff=(FieldChange(field="owner", before=None, after="x"),),
+                ),
+            )
+
+    def test_read_hides_non_exportable_fields(self) -> None:
+        self.adapters["notes"].records["note-1"]["secret"] = "hidden"
+        record = self.broker.read(self.local(("notes", "read")), "notes", "note-1")
+        self.assertNotIn("secret", record)
 
     def test_second_principal_cannot_bypass_confirmation(self) -> None:
         external = self.external(("books", "create"))
@@ -497,7 +538,7 @@ class BrokerTests(unittest.TestCase):
             capability="create",
             targets=("note-2",),
             base_revision=None,
-            field_diff=(),
+            field_diff=(FieldChange(field="title", before=None, after="Draft"),),
             idempotency_key="vacuous-create",
         )
         self.broker.propose(claims, write)

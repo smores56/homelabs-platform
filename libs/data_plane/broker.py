@@ -34,7 +34,7 @@ from .errors import (
     ValidationError,
 )
 from .identity import LOCAL_PROFILE, IdentityIssuer, WorkloadClaims
-from .model import Capability, EffectClass, IntentState, SourceContract, Visibility
+from .model import Authority, Capability, EffectClass, IntentState, SourceContract, Visibility
 
 Clock = Callable[[], float]
 
@@ -181,7 +181,8 @@ class Broker:
         """Authorize ``read`` on ``source_id`` and return one record."""
 
         self._authorize(claims, source_id, "read")
-        return self._adapter(source_id).read(target)
+        contract = self._contract(source_id)
+        return self._visible(contract, self._adapter(source_id).read(target))
 
     def search(
         self, claims: WorkloadClaims | str, source_id: str, query: str
@@ -189,7 +190,11 @@ class Broker:
         """Authorize ``search`` on ``source_id`` and return matching records."""
 
         self._authorize(claims, source_id, "search")
-        return self._adapter(source_id).search(query)
+        contract = self._contract(source_id)
+        return [
+            self._visible(contract, record)
+            for record in self._adapter(source_id).search(query)
+        ]
 
     # -- writes --------------------------------------------------------
 
@@ -291,6 +296,9 @@ class Broker:
         self._require_same_operation(intent.operation, operation)
 
         if intent.state is IntentState.APPLIED:
+            # The effect append is idempotent, so a replay repairs a crash that
+            # lost the ledger entry after the intent was saved.
+            self._record(intent)
             return dict(intent.effect or {})
         if intent.state is IntentState.OUTCOME_UNKNOWN:
             raise OutcomeUnknown(
@@ -470,6 +478,20 @@ class Broker:
                 raise ValidationError(
                     f"field name {change.field!r} contains control characters"
                 )
+            try:
+                authority = contract.field_authority(change.field)
+            except ContractError as exc:
+                raise ValidationError(str(exc)) from exc
+            if authority.authority is Authority.HUMAN:
+                raise ValidationError(
+                    f"field {change.field!r} is human-authoritative; an agent cannot write it"
+                )
+        capability = contract.capability(request.capability)
+        if capability.effect in {EffectClass.CREATE, EffectClass.UPDATE}:
+            if not request.field_diff:
+                raise ValidationError(
+                    f"{capability.effect.value} for {contract.source_id!r} needs a field diff"
+                )
 
     @staticmethod
     def _build(
@@ -521,6 +543,13 @@ class Broker:
             raise IdempotencyConflict(
                 f"intent {rebuilt.intent_id!r} was proposed for another operation"
             )
+
+    @staticmethod
+    def _visible(
+        contract: SourceContract, record: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        hidden = {item.field for item in contract.authority if not item.exportable}
+        return {key: value for key, value in record.items() if key not in hidden}
 
     @staticmethod
     def _observed_matches(

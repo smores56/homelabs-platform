@@ -3,7 +3,7 @@
   "title": "brave.history collector record",
   "type": "object",
   "additionalProperties": false,
-  "required": ["source_id", "tombstone", "entry_id", "revision", "url", "visited_at"],
+  "required": ["source_id", "tombstone", "entry_id", "revision"],
   "properties": {
     "source_id": {"const": "brave.history"},
     "tombstone": {"type": "boolean"},
@@ -11,10 +11,20 @@
     "revision": {"type": "string", "minLength": 1},
     "url": {"type": "string", "format": "uri"},
     "title": {"type": "string"},
-    "visited_at": {"type": "string", "format": "date-time"}
+    "visited_at": {"type": "string", "format": "date-time"},
+    "transition": {"type": "string"}
   },
   "x-relay": {
     "max_bytes": 262144,
     "max_records_per_second": 10
+  },
+  "x-contract": {
+    "stable_id_fields": ["entry_id"],
+    "revision_field": "revision",
+    "tombstone_field": "tombstone",
+    "attachment_hash_fields": [],
+    "fidelity_limits": [
+      {"field": "server_side_favicons", "reason": "Derived assets are rebuilt from the URL."}
+    ]
   }
 }

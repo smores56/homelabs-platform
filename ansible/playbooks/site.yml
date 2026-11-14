@@ -9,6 +9,7 @@
 
 - name: Install and prove the independent rescue paths
   ansible.builtin.import_playbook: rescue.yml
+  tags: [always]
 
 - name: Validate the inventory and the destructive gate before any role runs
   hosts: all

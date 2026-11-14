@@ -134,6 +134,36 @@
   changed_when: false
   failed_when: restic_version not in restic_version_check.stdout
 
+- name: Derive the local repository roots
+  ansible.builtin.set_fact:
+    restic_local_roots: >-
+      {{ backup_repositories | map(attribute='repository') | select('match', '^/')
+         | map('regex_replace', '/[^/]+$', '') | unique | list }}
+
+- name: Check each local repository root
+  ansible.builtin.command:
+    argv: [findmnt, -rn, -o, TARGET, --target, "{{ item }}"]
+  loop: "{{ restic_local_roots }}"
+  loop_control:
+    label: "{{ item }}"
+  register: restic_root_checks
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Refuse to initialise a repository on the root filesystem
+  ansible.builtin.assert:
+    that:
+      - item.rc == 0
+      - item.stdout == item.item
+    fail_msg: >-
+      {{ item.item }} is not its own mount point; mount the backup disk before
+      applying, or a repository would land on the root filesystem
+    quiet: true
+  loop: "{{ restic_root_checks.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+
 - name: Check whether each repository exists
   ansible.builtin.command:
     argv:

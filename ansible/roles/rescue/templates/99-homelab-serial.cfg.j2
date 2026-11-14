@@ -1,0 +1,4 @@
+# Managed by ansible/roles/rescue. The serial console is independent of k3s,
+# the data plane, and every tunnel; it is the last local path when the root
+# unlock or the network fails.
+GRUB_CMDLINE_LINUX="$GRUB_CMDLINE_LINUX console={{ rescue_serial_device }},{{ rescue_serial_baud }}n8"

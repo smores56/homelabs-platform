@@ -140,6 +140,14 @@
   failed_when: false
   tags: [destructive]
 
+- name: Note that a created pool is already imported
+  ansible.builtin.set_fact:
+    zfs_pool_present: true
+  when:
+    - zfs_pool_create is defined
+    - zfs_pool_create is changed
+  tags: [destructive]
+
 - name: Import the existing pool from its pinned device without mounting it
   ansible.builtin.command:
     argv: [zpool, import, -N, -d, "{{ zfs_pool_device }}", "{{ zfs_pool }}"]

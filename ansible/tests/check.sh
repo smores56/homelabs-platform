@@ -420,5 +420,30 @@ else
   bad "recover.yml does not restore to scratch before re-enabling writers"
 fi
 
+if grep -qF "console=" roles/rescue/templates/99-homelab-serial.cfg.j2 && \
+  grep -qF "serial-getty@" roles/rescue/tasks/main.yml; then
+  ok "rescue keeps a local serial console independent of the network"
+else
+  bad "rescue has no serial console path"
+fi
+if grep -qF "dropbear-initramfs" roles/rescue/tasks/main.yml && \
+  grep -qF "rescue_initramfs_ssh: false" roles/rescue/defaults/main.yml; then
+  ok "initramfs SSH is available and disabled until a key is supplied"
+else
+  bad "initramfs SSH is missing or not fail-closed"
+fi
+if grep -qF "linux-image-*" group_vars/all.yml && \
+  grep -qF "zfsutils-linux" group_vars/all.yml; then
+  ok "kernel and ZFS upgrades are pinned out of unattended upgrades"
+else
+  bad "kernel or ZFS upgrades can drift unattended"
+fi
+if grep -qF "tags: [always]" playbooks/site.yml && \
+  grep -qF "rescue.yml" playbooks/site.yml; then
+  ok "the rescue path is re-proven on every tagged run"
+else
+  bad "tagged runs can skip the rescue proof"
+fi
+
 printf '\n%d passed, %d failed, %d skipped\n' "$pass" "$fail" "$skip"
 [[ $fail -eq 0 ]]

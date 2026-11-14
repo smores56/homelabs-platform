@@ -353,3 +353,74 @@
     - rescue_vpn != 'wireguard'
     - rescue_wireguard_unit_file.stat.exists
     - not ansible_check_mode
+
+- name: Keep a local serial console and console-getty independent of the network
+  when: rescue_serial_console | bool
+  block:
+    - name: Install the GRUB serial-console drop-in
+      ansible.builtin.template:
+        src: 99-homelab-serial.cfg.j2
+        dest: /etc/default/grub.d/99-homelab-serial.cfg
+        owner: root
+        group: root
+        mode: "0644"
+      notify: Update GRUB
+
+    - name: Enable the serial getty
+      ansible.builtin.systemd_service:
+        name: "serial-getty@{{ rescue_serial_device }}.service"
+        enabled: true
+        state: started
+
+- name: Install an initramfs SSH unlock path
+  when: rescue_initramfs_ssh | bool
+  block:
+    - name: Inspect the initramfs authorized-keys file
+      ansible.builtin.stat:
+        path: "{{ rescue_initramfs_authorized_keys_file }}"
+      register: rescue_initramfs_keys
+
+    - name: Fail closed when initramfs SSH has no key
+      ansible.builtin.assert:
+        that:
+          - rescue_initramfs_keys.stat.exists
+          - rescue_initramfs_keys.stat.isreg
+          - rescue_initramfs_keys.stat.size > 0
+        fail_msg: >-
+          rescue_initramfs_ssh is true but
+          {{ rescue_initramfs_authorized_keys_file }} is missing, not a regular
+          file, or empty. Provision a public key or disable the path.
+        quiet: true
+
+    - name: Install dropbear-initramfs
+      ansible.builtin.apt:
+        name: dropbear-initramfs
+        state: present
+
+    - name: Install the initramfs network configuration
+      ansible.builtin.template:
+        src: 99-rescue-network.conf.j2
+        dest: /etc/initramfs-tools/conf.d/99-rescue-network.conf
+        owner: root
+        group: root
+        mode: "0644"
+      notify: Update initramfs
+
+    - name: Install the dropbear options
+      ansible.builtin.template:
+        src: dropbear-initramfs.conf.j2
+        dest: /etc/dropbear/initramfs/dropbear.conf
+        owner: root
+        group: root
+        mode: "0600"
+      notify: Update initramfs
+
+    - name: Authorize the operator key in the initramfs
+      ansible.builtin.copy:
+        src: "{{ rescue_initramfs_authorized_keys_file }}"
+        dest: /etc/dropbear/initramfs/authorized_keys
+        owner: root
+        group: root
+        mode: "0600"
+      no_log: true
+      notify: Update initramfs

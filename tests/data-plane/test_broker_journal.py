@@ -13,8 +13,10 @@ from data_plane.errors import OutcomeUnknown
 from data_plane.identity import EXTERNAL_PROFILE, IdentityIssuer
 from data_plane.intents import IntentStore
 from data_plane.model import (
+    Authority,
     Capability,
     EffectClass,
+    FieldAuthority,
     IntentState,
     SourceContract,
     Visibility,
@@ -41,6 +43,7 @@ def contract() -> SourceContract:
                 requires_confirmation=True,
             ),
         ),
+        authority=(FieldAuthority(field="title", authority=Authority.PORTABLE_FILE),),
         revision_field="rev",
         tombstone_field="deleted_at",
     )

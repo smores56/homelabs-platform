@@ -3,7 +3,7 @@
   "title": "immich.photos collector record",
   "type": "object",
   "additionalProperties": false,
-  "required": ["source_id", "tombstone", "asset_id", "revision", "captured_at", "checksum"],
+  "required": ["source_id", "tombstone", "asset_id", "revision"],
   "properties": {
     "source_id": {"const": "immich.photos"},
     "tombstone": {"type": "boolean"},
@@ -11,10 +11,22 @@
     "revision": {"type": "string", "minLength": 1},
     "captured_at": {"type": "string", "format": "date-time"},
     "checksum": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
-    "album_ids": {"type": "array", "items": {"type": "string", "minLength": 1}, "default": []}
+    "album_ids": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    "original_filename": {"type": "string"},
+    "media_type": {"type": "string"}
   },
   "x-relay": {
-    "max_bytes": 262144,
+    "max_bytes": 268435456,
     "max_records_per_second": 20
+  },
+  "x-contract": {
+    "stable_id_fields": ["asset_id"],
+    "revision_field": "revision",
+    "tombstone_field": "tombstone",
+    "attachment_hash_fields": ["checksum"],
+    "fidelity_limits": [
+      {"field": "face_embeddings", "reason": "Derived model output is not exported; it is rebuilt by the indexer."},
+      {"field": "derived_thumbnails", "reason": "Renditions are regenerated from the preserved original."}
+    ]
   }
 }

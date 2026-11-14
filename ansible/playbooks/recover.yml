@@ -49,19 +49,23 @@
         - homelab_recovery_apply | bool
         - item.stat.exists
 
-    - name: Check whether the backup timer is installed
+    - name: Check which backup timers are installed
       ansible.builtin.stat:
-        path: "/etc/systemd/system/{{ homelab_backup_timer }}"
-      register: recovery_backup_timer_file
+        path: "/etc/systemd/system/{{ item }}"
+      loop: "{{ homelab_backup_timer_units }}"
+      register: recovery_backup_timer_files
 
-    - name: Fence the backup timer
+    - name: Fence every backup timer and path unit
       ansible.builtin.systemd_service:
-        name: "{{ homelab_backup_timer }}"
+        name: "{{ item.item }}"
         enabled: false
         state: stopped
+      loop: "{{ recovery_backup_timer_files.results }}"
+      loop_control:
+        label: "{{ item.item }}"
       when:
         - homelab_recovery_apply | bool
-        - recovery_backup_timer_file.stat.exists
+        - item.stat.exists
 
     - name: Ensure the fence directory exists
       ansible.builtin.file:
@@ -233,15 +237,18 @@
         - homelab_recovery_resume_writers | bool
         - item.stat.exists
 
-    - name: Restart the backup timer
+    - name: Restart every installed backup timer
       ansible.builtin.systemd_service:
-        name: "{{ homelab_backup_timer }}"
+        name: "{{ item.item }}"
         enabled: true
         state: started
+      loop: "{{ recovery_backup_timer_files.results }}"
+      loop_control:
+        label: "{{ item.item }}"
       when:
         - homelab_recovery_apply | bool
         - homelab_recovery_resume_writers | bool
-        - recovery_backup_timer_file.stat.exists
+        - item.stat.exists
 
     - name: Remove the writer fence marker
       ansible.builtin.file:

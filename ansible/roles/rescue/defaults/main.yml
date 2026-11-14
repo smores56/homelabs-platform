@@ -36,3 +36,13 @@ rescue_tailscale_auth_key_file: "{{ rescue_state_dir }}/tailscale-auth.key"
 rescue_tailscale_hostname: "{{ inventory_hostname }}-rescue"
 rescue_wireguard_interface: wg-rescue
 rescue_wireguard_config_file: "/etc/wireguard/{{ rescue_wireguard_interface }}.conf"
+
+# Out-of-band access. A failed root unlock or a broken userspace leaves every
+# network rescue path unreachable, so the local console and an initramfs SSH
+# unlock are the last resort.
+rescue_serial_console: true
+rescue_serial_device: ttyS0
+rescue_serial_baud: 115200
+rescue_initramfs_ssh: false
+rescue_initramfs_authorized_keys_file: "{{ rescue_state_dir }}/initramfs.keys"
+rescue_initramfs_netconf: "IP=dhcp"

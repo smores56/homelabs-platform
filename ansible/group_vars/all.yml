@@ -78,7 +78,16 @@ homelab_unattended_origins:
   - "${distro_id}:${distro_codename}-security"
   - "${distro_id}ESMApps:${distro_codename}-apps-security"
   - "${distro_id}ESM:${distro_codename}-infra-security"
-homelab_unattended_package_blacklist: []
+homelab_unattended_package_blacklist:
+  - "linux-image-*"
+  - "linux-headers-*"
+  - "linux-generic*"
+  - "linux-modules-*"
+  - "zfsutils-linux"
+  - "zfs-dkms"
+  - "zfs-zed"
+  - "nvidia-driver-*"
+  - "nvidia-utils-*"
 
 # --------------------------------------------------------------------------
 # Destructive disk gate
@@ -110,6 +119,14 @@ homelab_writer_units:
   - homelab-event-service.service
   - homelab-collector-relay.service
 homelab_backup_timer: homelab-backup-controller.timer
+# Every scheduled backup writer the recovery playbook fences. Missing units
+# are skipped, so this list can name a timer a host has not adopted yet.
+homelab_backup_timer_units:
+  - homelab-backup-controller.timer
+  - homelab-snapshot.timer
+  - homelab-snapshot.path
+  - homelab-snapshot-small.timer
+  - homelab-snapshot-media.timer
 homelab_writer_fence: "{{ data_plane_run_root }}/writers-fenced"
 
 # Recovery playbook knobs. Restores always go to a scratch directory; the live

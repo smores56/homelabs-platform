@@ -209,9 +209,12 @@ class FanoutController:
             selected.append(destination)
 
         created_at = float(self._clock() if now is None else now)
-        generation_id = (
-            f"{_generation_slug(group_id)}-{int(created_at * 1000)}"
-        )
+        base_id = f"{_generation_slug(group_id)}-{int(created_at * 1000)}"
+        generation_id = base_id
+        suffix = 0
+        while (self._manifest_store / f"{generation_id}.json").exists():
+            suffix += 1
+            generation_id = f"{base_id}-{suffix}"
 
         self._snapshotter.fence(group_id)
         try:

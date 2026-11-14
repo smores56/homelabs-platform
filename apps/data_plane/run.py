@@ -317,7 +317,13 @@ class JournalRecorder:
         self._log = log
 
     def record(self, event: Mapping[str, Any]) -> None:
-        self._log.append("broker.effect", str(event.get("intent_id", "")), dict(event))
+        intent_id = str(event.get("intent_id", ""))
+        self._log.append(
+            "broker.effect",
+            intent_id,
+            dict(event),
+            idempotency_key=f"effect:{intent_id}",
+        )
 
 
 class FixtureSnapshotter:
@@ -390,7 +396,7 @@ def _run_broker(args: argparse.Namespace) -> int:
     sources = _load_catalog(args.catalog)
     db = Path(_required(args.db, "--db (DATA_PLANE_DB)"))
     journal = IntentStore(db)
-    event_path = db if str(db) == ":memory:" else db.with_suffix(db.suffix + ".events")
+    event_path = db
     event_log = EventLog(event_path)
     approval_store = None
     approval_verifier = None

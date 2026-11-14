@@ -74,7 +74,8 @@ condition and never raises for missing fields, so every gap is visible at once.
     "device": "/dev/disk/by-id/nvme-Samsung_SSD_970_EVO_1TB",
     "present": true,
     "boot_tested": true,
-    "converted": false
+    "converted": false,
+    "released": false
   },
   "ssh_paths": [
     {
@@ -105,7 +106,7 @@ What each check proves:
 | --- | --- |
 | `backup_freshness` | Every required group has a fresh (`backup_max_age_hours`), `verified: true`, `complete: true` capture on **every** required destination. A future-dated, stale, incomplete, or unverified capture does not count. |
 | `restore_verification` | A generation was restored and verified on `storage: "scratch"` recently (`restore_max_age_hours`), and the generation id is named. A production restore is not proof. |
-| `rollback_disk` | The 970 is `present`, `boot_tested`, named by an absolute device path, and neither `converted` nor `wiped`. |
+| `rollback_disk` | The 970 is `present`, `boot_tested`, named by an absolute device path, and neither `converted` nor `wiped`. `released: true` is the separate fact Ansible reads before it will let the 970 appear as a destructive target. |
 | `ssh_paths` | At least two distinct paths are freshly verified, `independent_of_data_plane: true`, and not stale (`ssh_max_age_hours`). Two entries for the same route, or one path that rides the data plane, do not count. |
 | `operator_confirmation` | Every phase with an irreversible or confirmation-required gate has `confirmed: true`, an operator (`by`), and a time (`at`). Unknown phases are rejected as typos. |
 
@@ -194,6 +195,39 @@ old ones.
   Tailscale unit uses `--auth-key=file:<path>` so the key never enters argv.
 - `PasswordAuthentication yes` is never written; password authentication stays
   off from the base hardening drop-in.
+
+## Ansible enforcement
+
+The offline gates above are not advisory. Ansible re-runs the same preflight
+module and refuses the corresponding host actions:
+
+- A destructive run needs **all** of `--tags destructive`, a per-host
+  `homelab_destructive_device_ids` allow-list of `/dev/disk/by-id/` paths, and
+  `-e homelab_migration_evidence=<raw evidence.json>`. The Ansible gate invokes
+  `python3 -m data_plane.migration preflight` and requires `fresh_backup`,
+  `restore_verified`, `rollback_disk_boot_tested`, and
+  `ssh_paths_independent`. Operator confirmations stay with the phase gates.
+  The retired global boolean is rejected, not ignored.
+- LUKS resolves every target to one canonical disk and refuses the root disk,
+  the 970 unless the evidence says `rollback_disk.released: true`, and any
+  device with an existing filesystem or pool unless the volume sets
+  `allow_existing: true`. A second keyslot (offline passphrase) and a root-only
+  header backup are required before any inner filesystem or pool is created.
+  The managed `/etc/crypttab` block never repeats an autoinstall-owned name.
+- ZFS imports only with `zpool import -N -d <pinned mapper>`, and only when the
+  mapper's by-id device is allow-listed and the pool is absent. Both
+  `zfs-import-cache.service` and `zfs-import-scan.service` require
+  `systemd-cryptsetup@…`.
+- A plain `site.yml` never starts `homelab-write-broker.service` or
+  `homelab-backup-controller.timer`; `--tags writers` and `--tags backup` are
+  separate, evidenced steps.
+- `recover.yml` fences every writer first, restores the signed generation into a
+  scratch target, verifies its content hashes, and only then re-enables the
+  writers. A restore target that is a live mount or holds
+  `.homelab-writer-active` is refused unless `--allow-live` is passed after
+  fencing. `zfs receive` never uses `-F` on the default path. The recovery
+  portal is not a prerequisite; a missing backup mount or a stopped portal is
+  only a warning.
 
 ## Commands
 

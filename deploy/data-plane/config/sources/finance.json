@@ -3,19 +3,36 @@
   "title": "finance.ledger collector record",
   "type": "object",
   "additionalProperties": false,
-  "required": ["source_id", "tombstone", "transaction_id", "revision", "account_alias", "amount_minor", "currency", "posted_at"],
+  "required": ["source_id", "tombstone", "transaction_id", "revision"],
   "properties": {
     "source_id": {"const": "finance.ledger"},
     "tombstone": {"type": "boolean"},
     "transaction_id": {"type": "string", "minLength": 1},
     "revision": {"type": "string", "minLength": 1},
-    "account_alias": {"type": "string", "minLength": 1},
-    "amount_minor": {"type": "integer"},
+    "account_alias": {"type": "string"},
+    "amount_minor": {"type": "integer", "description": "Minor units, never a float."},
     "currency": {"type": "string", "pattern": "^[A-Z]{3}$"},
-    "posted_at": {"type": "string", "format": "date-time"}
+    "posted_at": {"type": "string", "format": "date-time"},
+    "description": {"type": "string"},
+    "merchant": {"type": "string"},
+    "pending": {"type": "boolean"},
+    "attachment_sha256": {
+      "type": "array",
+      "items": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+    }
   },
   "x-relay": {
     "max_bytes": 131072,
     "max_records_per_second": 5
+  },
+  "x-contract": {
+    "stable_id_fields": ["transaction_id"],
+    "revision_field": "revision",
+    "tombstone_field": "tombstone",
+    "attachment_hash_fields": ["attachment_sha256"],
+    "fidelity_limits": [
+      {"field": "statement_pdf", "reason": "The provider keeps the original statement; only normalized rows are replicated."},
+      {"field": "provider_category_taxonomy", "reason": "Provider categories are proprietary and change without an export revision."}
+    ]
   }
 }

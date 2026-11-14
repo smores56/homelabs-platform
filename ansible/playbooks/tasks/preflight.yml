@@ -104,7 +104,7 @@
         quiet: true
 
     - name: Run the shared migration evidence gate
-      ansible.builtin.include_tasks: migration-gate.yml
+      ansible.builtin.include_tasks: tasks/migration-gate.yml
       tags: [always]
 
 - name: Validate the encrypted volume layout on storage hosts

@@ -190,6 +190,14 @@ class SourceContract:
                 return capability
         raise ContractError(f"source {self.source_id!r} has no capability {name!r}")
 
+    def field_authority(self, field: str) -> FieldAuthority:
+        for item in self.authority:
+            if item.field == field:
+                return item
+        raise ContractError(
+            f"source {self.source_id!r} declares no authority for field {field!r}"
+        )
+
     @property
     def writable(self) -> bool:
         return any(
