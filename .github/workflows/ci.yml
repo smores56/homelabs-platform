@@ -89,6 +89,21 @@ jobs:
       - name: entrypoint syntax
         run: bash -n images/nanobot/entrypoint.sh
 
+  data-plane:
+    name: data-plane unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          persist-credentials: false
+      # Stdlib only. Contracts, authority, identity, confirmation, event log,
+      # intents, the write broker, backup generations, collectors, file memory,
+      # restore planning, and the CLI are asserted with fixtures. No cluster,
+      # provider, restic, or live data is touched.
+      - name: run data-plane unit tests
+        run: tests/data-plane/check.sh
+
   kubeconform:
     name: kubeconform
     runs-on: ubuntu-latest
