@@ -1,0 +1,115 @@
+# The notify namespace is default-deny in both directions. Three flows in, one
+# flow out, all explicit:
+#
+#   cloudflared -> ntfy:8080   the public hostname, the only route a phone has
+#   notifyrelay -> ntfy:8080   cluster alerts, in-cluster so they do not depend
+#                              on the tunnel they may be reporting on
+#   prometheus  -> ntfy:9090   the metrics port, so a silent bus is visible
+#
+# Egress is DNS only: ntfy has no upstream, no FCM and no SMTP.
+#
+# The other ends of the first two live in platform/network/notify-flows.yaml and
+# observability/network, because neither namespace may write its own isolation.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+  labels:
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: notify
+spec:
+  podSelector: {}
+  policyTypes: ["Ingress", "Egress"]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns-egress
+  labels:
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: notify
+spec:
+  podSelector: {}
+  policyTypes: ["Egress"]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-cloudflared
+  labels:
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: notify
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: ntfy
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: cloudflared
+      ports:
+        - protocol: TCP
+          port: 8080
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-notifyrelay
+  labels:
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: notify
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: ntfy
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: observability
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: notifyrelay
+      ports:
+        - protocol: TCP
+          port: 8080
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-prometheus
+  labels:
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: notify
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: ntfy
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: observability
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: prometheus
+      ports:
+        - protocol: TCP
+          port: 9090

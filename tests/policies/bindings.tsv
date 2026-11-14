@@ -1,7 +1,7 @@
 # policy	namespaces (sorted, comma separated)
 # The intended selector outcome, asserted against the namespace labels in
 # clusters/homelab (kustomize build, so the flux-system patch is included).
-no-host-access	broker,graphiti,immich,navidrome,opdshelf,tenant-apps,webhook
+no-host-access	broker,graphiti,immich,navidrome,notify,opdshelf,tenant-apps,webhook
 tenant-gvisor	tenant-apps
 tenant-images	tenant-apps
 tenant-scratch-pvc	tenant-apps
@@ -15,5 +15,6 @@ data-pvc-storage	graphiti,immich,navidrome,opdshelf
 agent-identity	tenant-apps
 broker-runtime	broker
 webhook-runtime	webhook
+notify-runtime	notify
 nanobot-policy	tenant-apps
 nanobot-policy-write	tenant-apps

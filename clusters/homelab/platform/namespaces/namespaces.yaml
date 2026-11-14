@@ -70,6 +70,25 @@ metadata:
     pod-security.kubernetes.io/audit: restricted
     pod-security.kubernetes.io/warn: restricted
 ---
+# The notification bus (SDLC #649). Its own tier: no policy that selects
+# `tenant`, `broker`, `data` or `webhook` widens to it, and `notify-runtime`
+# pins gVisor, non-root, a read-only rootfs and the digest pin at admission.
+#
+# `restricted` like every other non-platform namespace. The pod runs as 65532
+# with an fsGroup on its claim, so the profile is satisfied without a relaxation.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: notify
+  labels:
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tenant: notify
+    homelabs.dev/tier: notify
+    homelabs.dev/managed-by: platform
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted
+---
 # data tier, one namespace per app. `immich` mounts /mnt/data/immich in the
 # cluster guest; the PV claimRef in platform/storage/ pins the mapping.
 apiVersion: v1

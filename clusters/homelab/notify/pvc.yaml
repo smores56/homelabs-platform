@@ -1,0 +1,22 @@
+# One claim for both databases: `cache.db` holds the message cache and
+# `auth.db` holds the provisioned users, tokens and ACL. Losing it loses the
+# cache and re-provisions auth from the Secret on the next start, so the claim
+# is a cache with a credential in it, not a backup target.
+#
+# Local-path is the class the webhook receiver and the backup CronJob use; the
+# claim is small and must survive a pod restart so a subscriber that reconnects
+# still finds the messages it missed.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ntfy-data
+  labels:
+    app.kubernetes.io/name: ntfy
+    homelabs.dev/tier: notify
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 1Gi

@@ -198,11 +198,11 @@ else
 fi
 
 # ----------------------------------------------------------------- image pins
-if grep -rhoE '^\s+image: \S+' clusters/homelab/observability clusters/homelab/data |
+if grep -rhoE '^\s+image: \S+' clusters/homelab/observability clusters/homelab/data clusters/homelab/notify |
   grep -vE '(:v?[0-9][0-9A-Za-z._-]*(@sha256:[0-9a-f]{64})?|@sha256:[0-9a-f]{64})$' >"$work/unpinned"; then
   bad "an observability image is not pinned to a version or digest" "$(cat "$work/unpinned")"
 else
-  ok "every observability and data image is version- or digest-pinned"
+  ok "every observability, data and notify image is version- or digest-pinned"
 fi
 
 # ---------------------------------------------------------- network allowlists
