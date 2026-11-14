@@ -1197,6 +1197,21 @@ sudo cluster-kubectl -n notify create secret generic ntfy-auth-sops \
   --from-file=users --from-file=tokens --from-file=access
 ```
 
+The Secret is created after Flux has already applied the Deployment, so the
+first reconcile of `ntfy-auth` fails with `could not get secret data from
+provider` and the pod sits `Pending` on `secret "ntfy-auth" not found`. The
+ExternalSecret retries on `refreshInterval: 1h`; force it rather than waiting:
+
+```sh
+sudo cluster-kubectl -n notify annotate externalsecret ntfy-auth \
+  force-sync="$(date +%s)" --overwrite
+sudo cluster-kubectl -n notify rollout status deployment/ntfy --timeout=120s
+```
+
+`delete secret ntfy-auth` does not help at this point: `creationPolicy: Owner`
+and the Secret was never created, so there is nothing to delete. That lever is
+for a rotation, where the Secret exists and still holds the old value.
+
 Then hand the `agent` token to the broker and restart it — it reads credentials
 once at start:
 
@@ -1243,9 +1258,10 @@ message. Failures, by status:
 | `413` | the body is over the 4 KiB cap; raise `max_body_bytes` deliberately |
 
 The body is never logged or echoed, and the bus's response is redacted like
-every other host's. Rotation: replace the key in `ntfy-auth-sops`, wait for the
-ESO refresh (1h) or delete `ntfy-auth` so it is recreated, then restart the
-Deployment — provisioned users are immutable through the CLI, so the Secret is
+every other host's. Rotation: replace the key in `ntfy-auth-sops`, then either
+wait for the ESO refresh (1h) or delete `ntfy-auth` so it is recreated — the
+Secret exists by then, so the delete is the faster lever — and restart the
+Deployment. Provisioned users are immutable through the CLI, so the Secret is
 the only path. `broker-credentials-contract` already lists `notify-token`, and
 `tests/policies/check.sh` fails if the enrollment and that contract drift apart.
 
