@@ -20,7 +20,8 @@ Job `fork-pr-secret-boundary` in `.github/workflows/ci.yml`:
   - every `pull_request` workflow except `tofu-plan-pr.yml` references no
     `secrets.<NAME>` other than `secrets.GITHUB_TOKEN`;
   - `tofu-plan-pr.yml` may reference only the read-only plan pair
-    (`CLOUDFLARE_PLAN_API_TOKEN`, `R2_STATE_READONLY_*`) and must carry the four
+    (`CLOUDFLARE_PLAN_API_TOKEN`, `R2_STATE_READONLY_*`) from the `cloudflare-plan`
+    environment and must carry the four
     guard markers (fork-only, CI-change refusal, executable-HCL label,
     read-only credentials), so deleting a guard fails CI on the same diff;
   - no workflow uses `pull_request_target`, which runs with base-repo secrets and

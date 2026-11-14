@@ -366,7 +366,12 @@ fi
 # read-only credentials because on a pull_request the head workflow runs.
 pr=.github/workflows/tofu-plan-pr.yml
 if grep -qE '^[[:space:]]*pull_request:' "$pr"; then ok "the pre-merge plan runs on pull requests"; else bad "the pre-merge plan runs on pull requests"; fi
-if grep -q 'environment: cloudflare' "$pr"; then ok "the pre-merge plan uses the cloudflare environment"; else bad "the pre-merge plan uses the cloudflare environment"; fi
+if grep -q 'environment: cloudflare-plan' "$pr"; then ok "the pre-merge plan uses the read-only environment"; else bad "the pre-merge plan uses the read-only environment"; fi
+if grep -qE 'environment: cloudflare$' "$pr"; then
+  bad "the pre-merge plan never enters the write-token environment"
+else
+  ok "the pre-merge plan never enters the write-token environment"
+fi
 if grep -q 'secrets.CLOUDFLARE_PLAN_API_TOKEN' "$pr"; then ok "the pre-merge plan holds the read-only token"; else bad "the pre-merge plan holds the read-only token"; fi
 if grep -qE 'secrets\.(CLOUDFLARE_API_TOKEN|R2_STATE_ACCESS_KEY_ID|R2_STATE_SECRET_ACCESS_KEY)\b' "$pr"; then
   bad "the pre-merge plan never holds the write credentials"
@@ -390,6 +395,7 @@ fi
 drift=.github/workflows/tofu-drift.yml
 if grep -qE '^[[:space:]]*- cron:' "$drift"; then ok "drift detection is scheduled"; else bad "drift detection is scheduled"; fi
 if grep -qE 'tofu .*apply' "$drift"; then bad "drift detection never applies"; else ok "drift detection never applies"; fi
+if grep -q 'environment: cloudflare-plan' "$drift"; then ok "drift uses the read-only environment"; else bad "drift uses the read-only environment"; fi
 if grep -q 'secrets.CLOUDFLARE_API_TOKEN' "$drift"; then
   bad "drift detection holds no write token"
 else

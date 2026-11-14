@@ -11,8 +11,10 @@ name: tofu-plan-pr
 #
 #   1. fork PRs receive no environment secrets at all; the job says so and
 #      stops before anything reads a credential;
-#   2. `cloudflare`'s deployment-branch policy allows `main` and `smores/*`
-#      only, so an agent-owned branch cannot reach the environment;
+#   2. the job uses `cloudflare-plan`, not `cloudflare`: a separate environment
+#      holding only the read-only pair, restricted to `main` and `smores/*`. A
+#      branch edit that declares `environment: cloudflare` is refused before any
+#      secret is injected, so the write token is unreachable from a branch;
 #   3. a PR touching `.github/` or `scripts/` fails closed: the head workflow
 #      is the one holding the token, so CI changes need an owner bypass after a
 #      human read, never an automatic plan;
@@ -39,7 +41,7 @@ jobs:
     name: tofu plan (read-only)
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    environment: cloudflare
+    environment: cloudflare-plan
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:

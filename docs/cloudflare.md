@@ -118,9 +118,12 @@ What the backend means for the workflows:
 - `tofu-drift.yml` is a weekly read-only plan for changes that came from outside
   the repository, and reports them through one `tofu-drift` issue.
 
-The write token lives only in `tofu-apply.yml`; the two read-only credentials live
-only in the other two. `docs/manual-steps.md` steps 3, 3a and 4 provision them and
-restrict the environment to `main` and `smores/*`.
+Two environments carry the split. `cloudflare` holds the write token and the
+write R2 pair and allows `main` only; `cloudflare-plan` holds the read-only pair
+and allows `main` and `smores/*`, because the pre-merge plan runs on a PR
+branch. A branch therefore cannot reach the write token even if its workflow
+declares `environment: cloudflare`: the policy refuses it before any secret is
+injected. `docs/manual-steps.md` steps 3a and 4 provision both.
 
 The one-time move from the local file to R2 is `docs/manual-steps.md` step 14:
 back up the file, `init -migrate-state`, compare `tofu state list` before and
