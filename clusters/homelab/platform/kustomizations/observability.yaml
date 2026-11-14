@@ -1,7 +1,8 @@
 # Stage 5b. Prometheus, Loki, Vector, the status exporter and the Loki gateway.
 # After policies so every workload here is already covered by the namespace
-# guards; before tenants, because a tenant Kustomization must never be the thing
-# that brings up the log pipeline it is audited through.
+# guards; after notify, because the alert relay posts to the notification bus;
+# before tenants, because a tenant Kustomization must never be the thing that
+# brings up the log pipeline it is audited through.
 apiVersion: kustomize.toolkit.fluxcd.io/v1
 kind: Kustomization
 metadata:
@@ -17,6 +18,7 @@ spec:
   prune: true
   path: ./clusters/homelab/observability
   dependsOn:
+    - name: platform-notify
     - name: platform-policies
   sourceRef:
     kind: GitRepository

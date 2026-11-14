@@ -7,6 +7,7 @@ GitRepository flux-system (https, token auth)
 └── Kustomization flux-system        path ./clusters/homelab   SA kustomize-controller
     ├── flux-system/                 gotk-components.yaml + gotk-sync.yaml
     │                               (Deployments patched by clusters/homelab/kustomization.yaml)
+    │                               + image-automation/ and alerts/ (ours)
     └── platform/                    Flux Kustomizations only — see "Stage ordering"
 ```
 
@@ -128,6 +129,21 @@ not regenerate:
 | `ImagePolicy nanobot` | flux-system | `^build-(?P<run>[0-9]+)$` → numerical, ascending |
 | `GitRepository homelabs-apps` | flux-system | SSH 443, `homelabs-apps-write` (SOPS-managed) |
 | `ImageUpdateAutomation nanobot` | flux-system | Setters, `./`, pushes `main` |
+
+## Flux's own alerting
+
+`clusters/homelab/flux-system/alerts/` holds one `Provider` (`type: generic`,
+`http://notifyrelay.observability.svc.cluster.local:8080/flux`) and one `Alert`
+(`eventSeverity: error` on every Kustomization, HelmRelease and GitRepository in
+`flux-system`). It is applied by the root Kustomization, so it needs no stage of
+its own; the relay it posts to is applied later by `platform-observability`, and
+the notification controller retries until it exists. `flux bootstrap` does not
+regenerate this directory, the same as `image-automation/`.
+
+`error` is the whole filter: `info` would publish every successful reconcile,
+which is a notification per ten minutes and therefore no notification at all.
+The relay formats the generic payload and publishes it to ntfy topic `alerts`
+(`docs/notify.md`).
 
 `publish-nanobot.yml` tags every build `build-<run_number>`, so the policy picks
 the highest run number and Flux commits the resolved digest to
@@ -266,7 +282,7 @@ policy bindings treat it like the rest of the platform tier.
 
 ## Stage ordering
 
-`clusters/homelab/platform/kustomization.yaml` applies fourteen Flux Kustomizations;
+`clusters/homelab/platform/kustomization.yaml` applies twenty Flux Kustomizations;
 each one's `dependsOn` is asserted by `tests/policies/check.sh`.
 
 ```text
@@ -278,8 +294,13 @@ platform-secrets      sops contract ConfigMap    (dependsOn namespaces, policies
     └── platform-secrets-eso   ESO objects (needs the operator)
 platform-broker       broker Deployment/Service  (dependsOn namespaces, rbac,
                       policies, network, secrets)
+platform-agent-control   agent-control Service/RBAC (dependsOn namespaces, rbac,
+                      policies, network)
 platform-webhook      inbound webhook receiver  (dependsOn namespaces,
                       network, policies, secrets)
+platform-notify       ntfy Deployment/Service/claim (dependsOn namespaces,
+                      network, policies)
+    └── platform-notify-secrets   ntfy ExternalSecret (needs the operator)
 platform-storage      StorageClass + static PVs  (dependsOn namespaces)
 platform-backup       repository mirror CronJob/PVC (dependsOn namespaces,
                       policies)
@@ -288,7 +309,9 @@ platform-digest       cluster digest CronJob + PV/PVC (dependsOn namespaces,
 platform-data-apps    Immich, Navidrome, OPDShelf, Graphiti
                       (dependsOn policies, network, storage)
 platform-ingress      cloudflared + routing contract (dependsOn namespaces, network)
-platform-observability
+platform-observability   Prometheus, Loki, Alertmanager (dependsOn notify,
+                      policies)
+    └── platform-observability-secrets   ESO objects (needs the operator)
 platform-nanobot-policy   nanobot-policy ConfigMap in tenant-apps
                       (dependsOn namespaces, policies)
 platform-tenants      GitRepository + tenant Kustomization

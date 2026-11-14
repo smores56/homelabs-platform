@@ -4,12 +4,11 @@
 # notification log so a restart does not re-send or forget anything.
 #
 # It receives alerts from Prometheus only (the alerts are evaluated there and
-# sent over `/api/v2/alerts`) and forwards them to `mailrelay`, which speaks the
-# Cloudflare Email Service API. Two hops on purpose: Alertmanager's own SMTP
-# receiver would need a relay with a host and a set of credentials that no host
-# in this cluster runs, and the host already has a working sender
-# (`cloudflare-email@`), so the small HTTP shim reuses that API instead of
-# introducing an SMTP server.
+# sent over `/api/v2/alerts`) and forwards them to `notifyrelay`, which publishes
+# them to the ntfy bus. Two hops on purpose: Alertmanager's own SMTP receiver
+# would need a relay with a host and a set of credentials that no host in this
+# cluster runs, and the relay is also where Flux's reconcile failures land, so
+# both sources share one publish path and one token.
 apiVersion: apps/v1
 kind: Deployment
 metadata:

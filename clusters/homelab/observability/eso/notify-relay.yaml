@@ -1,0 +1,33 @@
+# The ntfy `publisher` token the relay posts with. Never in a ConfigMap, never
+# in git: `notify-relay-sops` is a SOPS+age Secret in this namespace (created by
+# hand, docs/manual-steps.md step 29), and this projection gives the Deployment
+# the `notifyrelay-token` name and the `token` key its `notifyrelay-contract`
+# ConfigMap records.
+#
+# It is a separate Secret from the broker's `notify-token` on purpose: the relay
+# publishes to `alerts` and the agent publishes to `agent`, so revocation is per
+# source. Rotation is: replace the SOPS Secret, let ESO re-read it (1h) or delete
+# the projected Secret so it is recreated — nothing restarts, because the relay
+# reads the file on every POST.
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: notifyrelay-token
+  namespace: observability
+  labels:
+    app.kubernetes.io/name: notifyrelay
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: observability
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: sops-contract
+    kind: SecretStore
+  target:
+    name: notifyrelay-token
+    creationPolicy: Owner
+  data:
+    - secretKey: token
+      remoteRef:
+        key: notify-relay-sops
+        property: token

@@ -1,0 +1,125 @@
+# The notification bus. One replica: the cache is SQLite on a ReadWriteOnce
+# claim and ntfy's clustering is experimental, so a second pod would either
+# fight for the claim or duplicate every message.
+#
+# The image has no USER, no /etc/ntfy and no /var/lib/ntfy, and its entrypoint is
+# `ntfy` with no default command — without `args: ["serve"]` it prints usage and
+# exits 0. It also never creates the parent directory of `cache-file`, so a fresh
+# root-owned claim needs `fsGroup` or the first start fails on
+# `unable to open database file`.
+#
+# `serve` needs no /tmp, so there is no emptyDir: a write that should not happen
+# fails loudly instead of landing in a scratch volume.
+#
+# The pod opts into the annotation scrape on its metrics port, so a silent bus is
+# visible: `NtfyDown` fires when Prometheus stops reaching 9090, and the ingress
+# half of that flow is `allow-ingress-prometheus` in networkpolicy.yaml.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ntfy
+  labels:
+    app.kubernetes.io/name: ntfy
+    homelabs.dev/tier: notify
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ntfy
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: ntfy
+        homelabs.dev/tier: notify
+        homelabs.dev/managed-by: platform
+      annotations:
+        # The metrics port, not the message port: 8080 is the API the tunnel and
+        # the relay use, and scraping it would count as traffic.
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+    spec:
+      serviceAccountName: ntfy
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      runtimeClassName: gvisor
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: ntfy
+          # docker.io/binwiederhier/ntfy v2.37.2, the linux/amd64 child digest
+          # (the cluster is amd64-only). Bump the tag and the digest together.
+          image: docker.io/binwiederhier/ntfy:v2.37.2@sha256:e5d978c57b5a6a1095c8a74fd1cfe846dabef14369f2ff7a0d16456e727d40ec
+          imagePullPolicy: IfNotPresent
+          args: ["serve"]
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+            - name: metrics
+              containerPort: 9090
+              protocol: TCP
+          env:
+            - name: NTFY_CONFIG_FILE
+              value: /etc/ntfy/server.yml
+            # Provisioned at startup and written into auth.db; entries removed
+            # from the Secret are deleted from the database on the next start.
+            - name: NTFY_AUTH_USERS
+              valueFrom:
+                secretKeyRef:
+                  name: ntfy-auth
+                  key: users
+            - name: NTFY_AUTH_TOKENS
+              valueFrom:
+                secretKeyRef:
+                  name: ntfy-auth
+                  key: tokens
+            - name: NTFY_AUTH_ACCESS
+              valueFrom:
+                secretKeyRef:
+                  name: ntfy-auth
+                  key: access
+          resources:
+            requests:
+              cpu: 20m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          readinessProbe:
+            httpGet:
+              path: /v1/health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 15
+          livenessProbe:
+            httpGet:
+              path: /v1/health
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 30
+          volumeMounts:
+            - name: config
+              mountPath: /etc/ntfy
+              readOnly: true
+            - name: data
+              mountPath: /var/lib/ntfy
+      volumes:
+        - name: config
+          configMap:
+            name: ntfy-config
+        - name: data
+          persistentVolumeClaim:
+            claimName: ntfy-data

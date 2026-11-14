@@ -1,12 +1,12 @@
-# Alert rules (SDLC #620). Prometheus evaluates them and pushes firing alerts to
-# Alertmanager, which routes them to the mail relay.
+# Alert rules (SDLC #620, #649). Prometheus evaluates them and pushes firing
+# alerts to Alertmanager, which routes them to the notify relay and the bus.
 #
 # What is alertable is bounded by what is scraped: Prometheus itself, the
 # human-owned status exporter (the only sanctioned view of the data tier, which
-# now also reports CronJob success), and any pod annotated
-# `prometheus.io/scrape: "true"`. There is no kube-state-metrics and no
-# node-exporter, so these rules never claim to see a restarted container or a
-# full disk.
+# now also reports CronJob success), the notification bus's metrics port, and any
+# pod annotated `prometheus.io/scrape: "true"`. There is no kube-state-metrics
+# and no node-exporter, so these rules never claim to see a restarted container
+# or a full disk.
 #
 # The backup rules are the replacement for the host's `cloudflare-email@` hook
 # on a moved tree: a CronJob that stops succeeding for 26 hours is a missed
@@ -49,6 +49,20 @@ groups:
           description: >-
             The Deployment or StatefulSet reports zero ready replicas against a
             non-zero desired count for fifteen minutes.
+
+      - alert: NtfyDown
+        expr: up{job="kubernetes-pods", namespace="notify"} == 0
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "the notification bus is not being scraped"
+          description: >-
+            Prometheus has failed to reach ntfy's metrics port for ten minutes.
+            The bus is the only notification path: host units, cluster alerts,
+            Flux and the agent all publish to it, so a silent bus is a silent
+            cluster. `TargetDown` fires for the same target; this one names the
+            consequence. Check `kubectl -n notify get pods` and the pod's log.
 
       - alert: ResticBackupStale
         expr: >-

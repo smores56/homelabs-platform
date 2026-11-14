@@ -1,0 +1,55 @@
+# Stage 5c. The notification bus: ntfy in the `notify` namespace, plus the
+# ExternalSecret that projects its users, tokens and ACL from a SOPS Secret.
+#
+# After policies so the namespace guards already cover it, and after network so
+# the default-deny exists before the first pod does. Before observability,
+# because the relay posts to it, and before ingress, because the tunnel route
+# points at its Service.
+#
+# The secrets half is a second object in this file on purpose: the operator's
+# CRDs are installed by hand (docs/manual-steps.md step 8), so it is a
+# precondition rather than something to gate the stage on. `suspend: true` here
+# would not be durable — this spec is reconciled from git.
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: platform-notify
+  namespace: flux-system
+  labels:
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: platform
+spec:
+  interval: 10m
+  retryInterval: 1m
+  timeout: 5m
+  prune: true
+  path: ./clusters/homelab/notify
+  dependsOn:
+    - name: platform-namespaces
+    - name: platform-network
+    - name: platform-policies
+  sourceRef:
+    kind: GitRepository
+    name: flux-system
+  serviceAccountName: kustomize-controller
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: platform-notify-secrets
+  namespace: flux-system
+  labels:
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: platform
+spec:
+  interval: 10m
+  retryInterval: 1m
+  timeout: 5m
+  prune: true
+  path: ./clusters/homelab/notify/eso
+  dependsOn:
+    - name: platform-notify
+  sourceRef:
+    kind: GitRepository
+    name: flux-system
+  serviceAccountName: kustomize-controller

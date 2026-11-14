@@ -6,10 +6,10 @@ kind: Kustomization
 # Resuming the stage is a manual step (docs/manual-steps.md).
 #
 # Two credential kinds: the Loki gateway token is a Password generator (minted
-# here), and the mail relay token is a projection of a SOPS Secret the operator
+# here), and the notify relay token is a projection of a SOPS Secret the operator
 # creates (docs/manual-steps.md step 29).
 resources:
   - secretstore.yaml
   - password-generator.yaml
   - externalsecret.yaml
-  - alertmanager-mail.yaml
+  - notify-relay.yaml

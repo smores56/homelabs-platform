@@ -96,7 +96,7 @@ eq "$bypass_uses" "1" "the bypass policy is attached to exactly one resource (th
 
 public_app=$(extract cloudflare_zero_trust_access_application.public)
 if grep -q 'for_each = local.public_apps' <<<"$public_app"; then ok "public applications iterate local.public_apps"; else bad "public applications iterate local.public_apps"; fi
-for host in recovery photos music opds; do
+for host in recovery photos music opds ntfy; do
   if grep -qE "^[[:space:]]*\"${host}\",$" "$work/code.tf"; then ok "public application: $host"; else bad "public application: $host"; fi
 done
 

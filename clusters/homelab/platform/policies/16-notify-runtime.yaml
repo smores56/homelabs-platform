@@ -1,0 +1,73 @@
+# The notification bus is the cluster's second public ingress to a service with
+# its own login, so its runtime is pinned at admission as well as in the
+# Deployment: gVisor, non-root, read-only rootfs, digest-pinned image. A drifted
+# Deployment is rejected rather than reviewed after the fact.
+#
+# The digest rule is repeated from 03-tenant-images because that binding selects
+# `tier: tenant` only, and `notify` is its own tier.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: notify-runtime
+  labels:
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: platform
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["pods"]
+  variables:
+    - name: bus
+      expression: >-
+        has(object.metadata.labels)
+        && 'app.kubernetes.io/name' in object.metadata.labels
+        && object.metadata.labels['app.kubernetes.io/name'] == 'ntfy'
+    - name: containers
+      expression: >-
+        object.spec.containers
+        + (has(object.spec.initContainers) ? object.spec.initContainers : [])
+        + (has(object.spec.ephemeralContainers) ? object.spec.ephemeralContainers : [])
+  validations:
+    - expression: >-
+        !variables.bus
+        || (has(object.spec.runtimeClassName) && object.spec.runtimeClassName == 'gvisor')
+      message: "ntfy pods must run on gvisor"
+    - expression: >-
+        !variables.bus
+        || (has(object.spec.securityContext)
+          && has(object.spec.securityContext.runAsNonRoot)
+          && object.spec.securityContext.runAsNonRoot)
+      message: "ntfy pods must set runAsNonRoot: true"
+    - expression: >-
+        !variables.bus
+        || variables.containers.all(c,
+          has(c.securityContext)
+          && has(c.securityContext.readOnlyRootFilesystem)
+          && c.securityContext.readOnlyRootFilesystem)
+      message: "ntfy containers must set readOnlyRootFilesystem: true"
+    - expression: >-
+        !variables.bus
+        || variables.containers.all(c,
+          c.image.matches('^[A-Za-z0-9._/-]+(:[A-Za-z0-9._-]+)?@sha256:[a-f0-9]{64}$'))
+      message: "ntfy images must be pinned by @sha256 digest"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: notify-runtime
+  labels:
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: platform
+spec:
+  policyName: notify-runtime
+  validationActions: [Deny]
+  matchResources:
+    namespaceSelector:
+      matchExpressions:
+        - key: homelabs.dev/tier
+          operator: In
+          values: ["notify"]

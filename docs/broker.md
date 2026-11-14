@@ -80,7 +80,7 @@ each request's logical host (see "GitHub App identity" below).
 | `tinyfish` | `https://api.search.tinyfish.ai:443` | `X-Api-Key: <token>` | `tinyfish-api-key` | no |
 | `loki` | `http://loki-gateway.observability.svc.cluster.local:3100` | `Authorization: Bearer`, fixed `X-Scope-OrgID: data` | `loki-gateway-token` | yes |
 | `memory` | `http://memory-mcp.graphiti.svc.cluster.local:8182` | `Authorization: Bearer` | `memory-mcp-token` (optional) | yes |
-| `notify` | `https://notify.invalid:443` (placeholder) | `Authorization: Bearer` | `notify-token` | no |
+| `notify` | `https://ntfy.sammohr.dev:443` | `Authorization: Bearer` | `notify-token` (optional) | no |
 | `self` | `http://agent-control.tenant-apps.svc.cluster.local:8081` (prefix `/self`) | none | — | yes |
 | `cluster` | `http://agent-control.tenant-apps.svc.cluster.local:8081` (prefix `/cluster`) | none | — | yes |
 | `status` | `http://status-exporter.observability.svc.cluster.local:9101` | none (metrics text) | — | yes |
@@ -163,17 +163,24 @@ Every repository named on a host goes into a single token request, so one name
 that is not in the app installation fails the whole host with a 422. Add a
 repository only after confirming it is in the installation.
 
-`notify` (SDLC #640) ships as a deliberate placeholder. `notify.invalid` is a
-reserved name (RFC 2606) that never resolves, so every call fails closed as
-`dns_failure` (502) until an operator sets the real provider endpoint
-(docs/manual-steps.md step 24). It admits only `POST /v1/notify` with a body of
-at most 4 KiB and injects `Authorization: Bearer <notify-token>`; it never
-reaches a private address. The provider is undecided (ntfy, an email relay or a
-Slack webhook), so the host, port, path and header kind are configuration, not
-code — the placeholder is where that decision lands. The enrollment sets
-`optional_secret`, so an absent `notify-token` denies that host with
-`credential_unavailable` (503) instead of aborting the broker at startup; a
-request is never forwarded without the credential.
+`notify` (SDLC #640, #649) is the ntfy bus at `https://ntfy.sammohr.dev`. The
+path is the topic, the message is the plain-text body, and `title`, `priority`
+and `tags` ride in the query string — the broker matches `allow_paths` against
+the path only, so the query is forwarded untouched. It admits `POST` on a
+single-segment topic of at most 64 characters, caps the body at 4 KiB and
+injects `Authorization: Bearer <notify-token>`. `allow_private` stays `false`:
+the broker resolves the hostname to Cloudflare edge addresses, so the request
+leaves through the tunnel and comes back, and the broker never becomes a path
+into the cluster network.
+
+The token is the ntfy `agent` user's, which is write-only on the `agent` topic.
+That is deliberate: `allow_paths` is a path regex, not a topic allowlist, so a
+`publisher` token would let the agent page `alerts`. The bus enforces the
+boundary, not the broker. The enrollment sets `optional_secret`, so an absent
+`notify-token` denies that host with `credential_unavailable` (503) instead of
+aborting the broker at startup — the broker also serves GitHub, SDLC, memory
+and Loki, and a missing notification token must not take those down. A request
+is never forwarded without the credential.
 
 `self` (SDLC #637) is the platform's `agent-control` service in `tenant-apps`:
 plain HTTP inside the cluster, `allow_private: true` and no credential. The
@@ -476,7 +483,8 @@ Live-gated (need the cluster, the real tokens and the operator):
 - the broker's first real call to each logical host (GitHub push, platform PR,
   the `sdlc` registry push/issues, Neuralwatt, TinyFish, Loki, memory, notify,
   agent-control);
-- the notify provider decision and endpoint (the enrollment is a placeholder);
+- the notify bus's first real publish (the enrollment now names
+  `ntfy.sammohr.dev`; the token is the `agent` user's);
 - agent-control's Service, RBAC and tenant-side ingress
   (`tenant-apps` -> port 8081);
 - tunnel/Access routing and the `nanobot.sammohr.dev` retirement;

@@ -14,7 +14,7 @@ the operator's CRDs are not shipped by this repository.
 | --- | --- | --- | --- | --- |
 | Prometheus | `prom/prometheus:v3.16.0` | metrics, 7d / 8GB retention, local PVC, alert rules | 100m / 384Mi | 1 / 1200Mi |
 | Alertmanager | `prom/alertmanager:v0.35.0` | one route, one receiver, silences and nflog on a 1 Gi claim | 20m / 64Mi | 200m / 256Mi |
-| mailrelay | `python:3.13.12-slim` + `mailrelay.py` | Alertmanager webhook → Cloudflare Email Service | 10m / 32Mi | 100m / 96Mi |
+| notifyrelay | `python:3.13.12-slim` + `notifyrelay.py` | Alertmanager and Flux webhooks → ntfy topic `alerts` | 10m / 32Mi | 100m / 96Mi |
 | Loki | `grafana/loki:3.7.9` | single-binary log store, 168h retention, `auth_enabled: true` | 100m / 256Mi | 1 / 1024Mi |
 | Vector | `timberio/vector:0.61.0-debian` | one DaemonSet, two sinks | 50m / 64Mi | 500m / 256Mi |
 | status-exporter | `python:3.13.12-slim` + `exporter.py` | read-only ready/restarts/versions for `data` | 10m / 32Mi | 100m / 96Mi |
@@ -289,7 +289,7 @@ full set is asserted by `tests/observability/check.sh`:
 | File | Flow |
 | --- | --- |
 | `dns-egress.yaml` | every pod → `kube-system` 53 (UDP/TCP) |
-| `alerting-flows.yaml` | Prometheus → Alertmanager 9093; Alertmanager → mailrelay 8080; mailrelay → Cloudflare API 443 (global unicast only) |
+| `alerting-flows.yaml` | Prometheus → Alertmanager 9093; Alertmanager → notifyrelay 8080; `flux-system` → notifyrelay 8080; notifyrelay → `notify`/ntfy 8080 |
 | `loki-flows.yaml` | Vector → Loki 3100 (writes); gateway → Loki 3100 (reads); Loki ingress from exactly those two pods |
 | `prometheus-flows.yaml` | Prometheus → `observability` 8686/9090/9101 and `flux-system` 8080 (the annotated targets); Vector ingress from Prometheus 8686; exporter ingress from Prometheus 9101 |
 | `kubernetes-api-egress.yaml` | Vector, Prometheus, exporter → k3s service range `10.43.0.0/16` 443 and the node address `10.77.1.0/30` 6443 (the post-DNAT packet) |
@@ -297,12 +297,13 @@ full set is asserted by `tests/observability/check.sh`:
 | `status-exporter-from-broker.yaml`, `broker-to-status-exporter.yaml` | broker → exporter 9101 (both directions) |
 | digest stage | digest → gateway/exporter, and the two `*-from-digest` ingress policies |
 
-The mail relay is the one pod with public egress: `0.0.0.0/0` on 443 with every
-non-global IPv4 range excluded, which is the same shape the broker uses. Nothing
-else in the namespace has public egress, and no rule omits its destination.
-Prometheus selects targets by annotation, which NetworkPolicy cannot express, so
-its egress is a namespace+port allowlist: a new annotated workload means adding
-its namespace and port; an unlisted one fails closed as a down target.
+Nothing in the namespace has public egress. The relay used to be the exception
+(`0.0.0.0/0` on 443 to reach Cloudflare's API); it now publishes to the bus's
+Service, so the namespace has no route to the internet at all and no rule omits
+its destination. Prometheus selects targets by annotation, which NetworkPolicy
+cannot express, so its egress is a namespace+port allowlist: a new annotated
+workload means adding its namespace and port; an unlisted one fails closed as a
+down target.
 
 The only mounted Secret is `loki-gateway-token` (key `password`, projected as
 the file `token`). It is the ESO `Password` generator's value, scoped by the
@@ -311,31 +312,38 @@ gateway to the `data` tenant; the pod never mounts a Kubernetes token
 
 ## Alerting
 
-Cluster alerts leave the cluster the same way host failures do: through
-Cloudflare's Email Service. Four hops, each with one job:
+Cluster alerts and Flux reconcile failures leave through the notification bus
+(SDLC #649). Four hops, each with one job:
 
 ```
-prometheus (rules)  ->  alertmanager (route, silence, nflog)  ->  mailrelay (webhook)  ->  api.cloudflare.com
+prometheus (rules)  ->  alertmanager (route, silence, nflog)  ->  notifyrelay (webhook)  ->  ntfy topic `alerts`
+flux-system (Alert)  ---------------------------------------->  notifyrelay (webhook)  ->  ntfy topic `alerts`
 ```
 
 - **Rules** live in `prometheus/rules.yaml`, mounted beside the scrape config.
   Prometheus evaluates them and pushes firing alerts to
   `alertmanager.observability.svc.cluster.local:9093` (`/api/v2/alerts`).
-- **Alertmanager** has one route, whose default receiver is the mail receiver —
+- **Alertmanager** has one route, whose default receiver is the notify receiver —
   no matcher, no child route, nothing that can silently drop an alert — and one
   inhibit rule: a failing status exporter suppresses the data-tier alerts it
   would otherwise cause. `send_resolved: true` closes the loop.
-- **The mail relay** is a ~150-line stdlib HTTP shim, not an SMTP client. The
-  cluster has no SMTP server; the host's `cloudflare-email@` units already POST
-  to Cloudflare's Email Service API, so the relay speaks that API with the same
-  sender (`alerts@send.sammohr.dev`), recipient and domain onboarding. It returns
-  200 only when Cloudflare answers `success: true`, so a rejected sender or an
-  unverified recipient is a 502, and Alertmanager retries from its notification
-  log instead of dropping the mail.
-- **The token** is `alertmanager-mail-sops` (SOPS+age, created by hand) projected
-  as `mailrelay-token` by the `platform-observability-secrets` stage; the relay
-  reads the mounted file on every delivery, so a rotation needs no restart. See
-  `docs/manual-steps.md` step 29.
+- **The notify relay** is a ~200-line stdlib HTTP shim. It accepts Alertmanager's
+  webhook payload on `/alert` and Flux's generic-provider payload on `/flux`, and
+  turns each into one ntfy publish: the title names the alert family or the
+  failing object, the body carries every alert in full, and the priority is
+  `high` while anything is firing and `default` once it has resolved. It posts to
+  `ntfy.notify.svc.cluster.local:8080`, not the public hostname, so a cluster
+  alert does not depend on the tunnel it may be reporting on. A non-2xx makes the
+  sender retry (Alertmanager from its notification log, Flux on the next event).
+- **The token** is `notify-relay-sops` (SOPS+age, created by hand) projected as
+  `notifyrelay-token` by the `platform-observability-secrets` stage; it is the
+  bus's `publisher` user, write-only on `alerts`. The relay reads the mounted file
+  on every delivery, so a rotation needs no restart. See `docs/manual-steps.md`
+  step 29.
+- **Flux's own failures** are the `Provider`/`Alert` pair in
+  `clusters/homelab/flux-system/alerts/`: `eventSeverity: error` on every
+  Kustomization, HelmRelease and GitRepository in `flux-system`. Before it, a
+  reconcile that had been failing for a week notified nobody.
 
 | Alert | Expression | For | Severity |
 | --- | --- | --- | --- |
@@ -357,22 +365,32 @@ alert. The staleness rules are therefore also a dead-man switch for the exporter
 if `homelabs_data_cronjob_last_successful_timestamp_seconds` disappears entirely
 (the exporter is gone), `TargetDown`/`StatusExporterFailing` fires instead.
 
-**What is not alerting.** Host-only units keep the thin `cloudflare-email@`
-sender until a host → cluster ingest exists; that residual is recorded in
-`docs/kanbei-split.md`. Nothing here reads cluster logs for patterns, and there
-is no on-call rotation: one recipient, one mail per alert family.
+**What is not alerting.** Nothing here reads cluster logs for patterns, and there
+is no on-call rotation: one bus, one topic per audience, one notification per
+alert family. The two Cloudflare notification policies (tunnel health, service
+token expiry) stay on email by design — they detect the tunnel the bus is
+reached through.
 
 ### Testing the path
 
 ```sh
 kubectl -n observability port-forward svc/alertmanager 9093:9093 &
 curl -s -XPOST localhost:9093/api/v2/alerts -H 'Content-Type: application/json' -d '[{
-  "labels": {"alertname": "MailPathTest", "severity": "warning", "namespace": "observability"},
+  "labels": {"alertname": "NotifyPathTest", "severity": "warning", "namespace": "observability"},
   "annotations": {"summary": "manual test of the alert path"}}]'
-kubectl -n observability logs deploy/mailrelay --tail=20   # expect "sent"
+kubectl -n observability logs deploy/notifyrelay --tail=20   # expect "sent"
 ```
 
-The alert resolves itself after `resolve_timeout` (5m) and sends a second mail.
+The alert resolves itself after `resolve_timeout` (5m) and sends a second
+notification. A Flux event can be exercised the same way, without waiting for a
+real failure:
+
+```sh
+kubectl -n observability port-forward svc/notifyrelay 8080:8080 &
+curl -s -XPOST localhost:8080/flux -H 'Content-Type: application/json' -d '{
+  "involvedObject": {"kind": "Kustomization", "namespace": "flux-system", "name": "platform-observability"},
+  "severity": "error", "reason": "ReconciliationFailed", "message": "manual test"}'
+```
 
 ## Postgres guidance for data apps
 

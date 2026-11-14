@@ -173,7 +173,7 @@
     },
     "notify": {
       "scheme": "https",
-      "host": "notify.invalid",
+      "host": "ntfy.sammohr.dev",
       "port": 443,
       "allow_private": false,
       "secret": "notify-token",
@@ -182,7 +182,7 @@
         "kind": "bearer"
       },
       "allow_methods": ["POST"],
-      "allow_paths": ["^/v1/notify$"],
+      "allow_paths": ["^/[a-z0-9_-]{1,64}$"],
       "max_body_bytes": 4096
     },
     "loki": {

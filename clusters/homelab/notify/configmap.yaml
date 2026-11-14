@@ -1,0 +1,42 @@
+# Everything here is non-secret. Users, tokens and ACL are provisioned from the
+# `ntfy-auth` Secret as NTFY_AUTH_USERS / NTFY_AUTH_TOKENS / NTFY_AUTH_ACCESS,
+# so no credential is ever in this file.
+#
+# `cache-duration` is raised from the 12h default: a phone offline overnight
+# would otherwise lose the alerts the bus exists to deliver. `keepalive` stays
+# under Cloudflare's ~100s idle timeout or the tunnel drops the stream.
+#
+# `message-size-limit` is raised from the 4 KiB default because an Alertmanager
+# batch with `max_alerts: 0` is one message that lists every firing alert; the
+# relay truncates at 16 KiB, so the two numbers are the same on purpose. The
+# broker's own 4 KiB cap on the agent path is separate and unchanged.
+#
+# The request limiter is raised rather than exempted. `visitor-request-limit-
+# exempt-hosts` matches hostnames and IPs, and the relay reaches ntfy over the
+# Service ClusterIP, so its source is a pod IP that changes on every restart —
+# there is nothing static to exempt. A grouped Alertmanager batch is small, but
+# a Flux reconcile loop is not, and a 429 is not retried by either sender.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ntfy-config
+  labels:
+    app.kubernetes.io/name: ntfy
+    homelabs.dev/tier: notify
+data:
+  server.yml: |
+    base-url: "https://ntfy.sammohr.dev"
+    listen-http: ":8080"
+    behind-proxy: true
+    cache-file: "/var/lib/ntfy/cache.db"
+    cache-duration: "72h"
+    message-size-limit: "16k"
+    auth-file: "/var/lib/ntfy/auth.db"
+    auth-default-access: "deny-all"
+    enable-signup: false
+    enable-login: true
+    enable-metrics: true
+    metrics-listen-http: ":9090"
+    keepalive-interval: "45s"
+    visitor-request-limit-burst: 120
+    visitor-request-limit-replenish: "2s"

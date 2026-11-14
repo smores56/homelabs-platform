@@ -178,17 +178,18 @@ class ShippedConfigTest(unittest.TestCase):
         secrets = load_secrets(self.config.hosts, directory)
         self.assertNotIn("memory-mcp-token", secrets)
 
-    def test_notify_is_a_public_placeholder_with_a_body_limit(self) -> None:
-        # The provider is undecided (SDLC #640): the endpoint is a deliberate
-        # `.invalid` placeholder, documented in docs/manual-steps.md step 24.
+    def test_notify_is_the_ntfy_bus_with_a_body_limit(self) -> None:
+        # The provider is ntfy (SDLC #640, #649): the path is the topic, the
+        # message is the plain-text body, and title/priority/tags ride in the
+        # query string, which the broker forwards without matching it.
         notify = self.config.hosts["notify"]
-        self.assertEqual(notify.host, "notify.invalid")
+        self.assertEqual(notify.host, "ntfy.sammohr.dev")
         self.assertEqual(notify.scheme, "https")
-        self.assertFalse(notify.allow_private)
+        self.assertFalse(notify.allow_private, "the broker must not become a path into the cluster network")
         self.assertEqual(notify.secret_name, "notify-token")
-        self.assertTrue(notify.optional_secret, "the provider is undecided; a missing token must not crashloop the broker")
+        self.assertTrue(notify.optional_secret, "the broker serves GitHub and SDLC too; a missing notify token must not abort every host")
         self.assertEqual(notify.injection.kind, "bearer")
-        self.assertEqual(notify.allow_methods, ("POST",))
+        self.assertEqual(notify.allow_methods, ("POST",), "GET would subscribe with the publisher token")
         self.assertEqual(len(notify.allow_paths), 1)
         self.assertIsNotNone(notify.max_body_bytes)
         self.assertLessEqual(notify.max_body_bytes, 64 * 1024)

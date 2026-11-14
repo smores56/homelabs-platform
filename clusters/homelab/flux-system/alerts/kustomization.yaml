@@ -1,0 +1,11 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Flux's own alerting: one generic Provider pointing at the notify relay and one
+# Alert that subscribes to `error` events. Applied by the root Kustomization
+# (path ./clusters/homelab), so it needs no stage of its own; the relay it posts
+# to is applied later by `platform-observability`, and the notification
+# controller retries until it exists.
+namespace: flux-system
+resources:
+  - provider.yaml

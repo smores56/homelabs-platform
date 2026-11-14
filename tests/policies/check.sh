@@ -796,8 +796,8 @@ eq "$(jq -r "$enrollment | .logical_hosts | keys | sort | join(\",\")" "$work/br
 eq "$(jq -r "$enrollment | [.logical_hosts | to_entries[] | select(.value.allow_private) | .key] | sort | join(\",\")" "$work/broker.json")" \
   "cluster,loki,memory,self,status" "only the in-cluster hosts are private enrollments"
 eq "$(jq -r "$enrollment | .logical_hosts.notify | [.host, .allow_private, .inject.kind, .secret, (.optional_secret | tostring), (.allow_methods | join(\",\")), (.allow_paths | join(\";\")), (.max_body_bytes | tostring)] | join(\":\")" "$work/broker.json")" \
-  "notify.invalid:false:bearer:notify-token:true:POST:^/v1/notify$:4096" \
-  "notify is a public placeholder, POST-only, bearer, body-capped, optional token"
+  "ntfy.sammohr.dev:false:bearer:notify-token:true:POST:^/[a-z0-9_-]{1,64}$:4096" \
+  "notify is the ntfy bus, POST-only, bearer, body-capped, optional token"
 eq "$(jq -r "$enrollment | .logical_hosts.self | [.host, .port, .allow_private, (.secret // \"-\"), (.inject.kind // \"none\"), .path_prefix] | join(\":\")" "$work/broker.json")" \
   "agent-control.tenant-apps.svc.cluster.local:8081:true:-:none:/self" \
   "self is a credential-free private enrollment with its route prefix"
@@ -1039,12 +1039,13 @@ declare -A stage_edges=(
   [platform-broker]="platform-namespaces,platform-network,platform-policies,platform-rbac,platform-secrets"
   [platform-agent-control]="platform-namespaces,platform-network,platform-policies,platform-rbac"
   [platform-webhook]="platform-namespaces,platform-network,platform-policies,platform-secrets"
+  [platform-notify]="platform-namespaces,platform-network,platform-policies"
   [platform-storage]="platform-namespaces"
   [platform-backup]="platform-namespaces,platform-policies"
   [platform-digest]="platform-namespaces,platform-observability,platform-policies,platform-storage"
   [platform-data-apps]="platform-network,platform-policies,platform-storage"
   [platform-ingress]="platform-namespaces,platform-network"
-  [platform-observability]="platform-policies"
+  [platform-observability]="platform-notify,platform-policies"
   [platform-nanobot-policy]="platform-namespaces,platform-policies"
   [platform-tenants]="platform-network,platform-policies,platform-secrets"
 )
@@ -1071,7 +1072,7 @@ done
 
 listed=$(yq -o=json -I=0 '.' clusters/homelab/platform/kustomization.yaml |
   jq -r '[.resources[] | sub("^kustomizations/"; "") | sub("\\.yaml$"; "")] | .[]')
-eq "$listed" "$(printf '%s\n' namespaces rbac policies network secrets broker agent-control webhook storage backup digest data ingress observability nanobot-policy tenants)" \
+eq "$listed" "$(printf '%s\n' namespaces rbac policies network secrets broker agent-control webhook notify storage backup digest data ingress observability nanobot-policy tenants)" \
   "platform/kustomization.yaml lists every stage in apply order"
 missing=$(comm -23 <(find "$stages_dir" -maxdepth 1 -name '*.yaml' -printf '%f\n' | sed 's|\.yaml$||' | sort) \
   <(yq -o=json -I=0 '.' clusters/homelab/platform/kustomization.yaml |

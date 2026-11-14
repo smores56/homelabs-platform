@@ -1,0 +1,16 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Applied by the `platform-notify-secrets` stage, after `platform-notify` has
+# created the namespace. The operator's CRDs are installed by hand
+# (docs/manual-steps.md step 8), so this tree is a precondition, not something
+# the workload stage can gate on.
+namespace: notify
+labels:
+  - includeSelectors: false
+    pairs:
+      app.kubernetes.io/part-of: homelabs
+      homelabs.dev/tier: notify
+resources:
+  - secretstore.yaml
+  - externalsecret.yaml

@@ -1,0 +1,54 @@
+# Flux's own failures, on the same bus as everything else (SDLC #649).
+#
+# Before this, a failed reconcile notified nobody: the controllers emit events,
+# but nothing subscribed to them, so a Kustomization that had been failing for a
+# week looked exactly like one that had not changed. The `Alert` below turns
+# `error` events into a webhook to `notifyrelay`, which publishes them to ntfy
+# topic `alerts`.
+#
+# `type: generic` posts the event as JSON (`involvedObject`, `severity`,
+# `reason`, `message`, `metadata.revision`), which is what the relay formats. No
+# `secretRef`: the endpoint is in-cluster and the relay authenticates to the bus
+# with its own token, so an HMAC here would protect nothing.
+#
+# This directory is ours, like `image-automation/`: `flux bootstrap` regenerates
+# gotk-components.yaml and gotk-sync.yaml and never writes here.
+apiVersion: notification.toolkit.fluxcd.io/v1beta3
+kind: Provider
+metadata:
+  name: notifyrelay
+  namespace: flux-system
+  labels:
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: platform
+spec:
+  type: generic
+  address: http://notifyrelay.observability.svc.cluster.local:8080/flux
+  timeout: 30s
+---
+apiVersion: notification.toolkit.fluxcd.io/v1beta3
+kind: Alert
+metadata:
+  name: cluster
+  namespace: flux-system
+  labels:
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: platform
+spec:
+  providerRef:
+    name: notifyrelay
+  # `error` only, and that is the whole filter: `info` would publish every
+  # successful reconcile, which is a notification per ten minutes and therefore
+  # no notification at all. Flux's own `DependencyNotReady` is a warning, so it
+  # is filtered here rather than by a regex that would need maintaining.
+  eventSeverity: error
+  eventSources:
+    # Every Kustomization and HelmRelease in flux-system, plus the GitRepository
+    # they read: a source that stops fetching is the failure that makes every
+    # downstream reconcile fail for a reason that is not in their own diff.
+    - kind: Kustomization
+      name: "*"
+    - kind: HelmRelease
+      name: "*"
+    - kind: GitRepository
+      name: "*"

@@ -21,3 +21,4 @@ resources:
   - 14-webhook-runtime.yaml
   - 14-nanobot-policy.yaml
   - 15-nanobot-policy-write.yaml
+  - 16-notify-runtime.yaml

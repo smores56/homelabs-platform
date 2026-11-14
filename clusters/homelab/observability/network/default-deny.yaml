@@ -9,12 +9,13 @@
 #   cluster-digest    -> loki-gateway / status-exporter (platform stage)
 #   vector, prometheus, status-exporter -> Kubernetes API 443
 #   prometheus        -> alertmanager 9093            (alert push)
-#   alertmanager      -> mailrelay 8080               (webhook)
-#   mailrelay         -> Cloudflare API 443           (the one public path)
+#   alertmanager      -> notifyrelay 8080             (webhook)
+#   flux-system       -> notifyrelay 8080             (reconcile failures)
+#   notifyrelay       -> notify/ntfy 8080             (one publish per batch)
 #
-# Loki, the gateway, the exporter and Alertmanager have no egress beyond the
-# above. Only the mail relay reaches the internet, and only on 443: this
-# namespace never reaches GitHub, Neuralwatt or R2.
+# Loki, the gateway, the exporter, Alertmanager and the relay have no egress
+# beyond the above. Nothing in this namespace reaches the internet: this
+# namespace never reaches GitHub, Neuralwatt, R2 or Cloudflare.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:

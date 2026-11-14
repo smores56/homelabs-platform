@@ -1,0 +1,31 @@
+# The tunnel's half of the notify ingress pair. `ingress` is default-deny in
+# both directions, so without this rule `ntfy.sammohr.dev` answers 502 at the
+# edge even though the Service is healthy.
+#
+# The notify-side rule is in clusters/homelab/notify/networkpolicy.yaml; both
+# ends are stated so neither depends on the other's file being applied first
+# (webhook-flows.yaml precedent).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: egress-notify
+  namespace: ingress
+  labels:
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: ingress
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: cloudflared
+  policyTypes: ["Egress"]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: notify
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: ntfy
+      ports:
+        - protocol: TCP
+          port: 8080
