@@ -215,11 +215,14 @@ Runs triggered by the bootstrap pushes, state read from the Actions API:
 
 The `tofu-apply` failure is the intended loud signal until
 `docs/manual-steps.md` step 2 stores the token: with the environment secret
-absent, the workflow cannot apply and must not pretend it did. (This snapshot
-predates SDLC #622, which removed the push trigger: `tofu-apply` no longer runs
-on a merge, only on dispatch.) It also ran
-without an approval prompt because the environment has no protection rules,
-which is why the missing `main` branch policy in the section above matters.
+absent, the workflow cannot apply and must not pretend it did. This snapshot
+predates SDLC #622 twice over: the push trigger was removed and then restored as
+the *intended* path, so `tofu-apply` now runs on a merge to `main` and an apply
+follows the plan unless the plan replaces or destroys something. It also ran
+without an approval prompt because the environment has no protection rules, which
+is why the missing `main` branch policy in the section above matters: the
+environment is now restricted to `main` and `smores/*` instead of relying on a
+reviewer.
 
 `ci` on the first push (`4d1229f`) has no run entry; the workflow files landed
 in that same commit, so the first observable run is on `c5a6dca`.
@@ -364,11 +367,12 @@ or a tunnel error means the name is unprotected. Verify the CAA pin with
 appends for Universal SSL.
 
 State now lives in the `homelabs-tofu-state` R2 bucket (`tofu/backend.tf`,
-`docs/cloudflare.md` "State"), so `tofu-apply.yml` is `workflow_dispatch` only:
-a plan-only run for review, then a run with `apply: true` to apply that plan.
-It fails loudly when the zone token or the R2 state pair is missing from the
-`cloudflare` environment. `docs/manual-steps.md` step 14 has the one-time
-`-migrate-state` procedure.
+`docs/cloudflare.md` "State"). Since SDLC #622 the merge is the approval:
+`tofu-plan-pr.yml` is the required plan on every PR, a merge to `main` applies
+(additive plans only), `tofu-apply.yml` keeps the owner dispatch for everything
+else, and `tofu-drift.yml` reports weekly differences that came from outside the
+repository. The write token is referenced by `tofu-apply.yml` alone.
+`docs/manual-steps.md` step 14 has the one-time `-migrate-state` procedure.
 
 ### 8. Repository mirror
 

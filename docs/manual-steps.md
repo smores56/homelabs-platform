@@ -106,56 +106,44 @@ gh api repos/smores56/homelabs-platform/environments/cloudflare/secrets \
   --jq '.secrets[].name'
 ```
 
-Expect `CLOUDFLARE_API_TOKEN`. An environment with no secret is why
-`tofu-plan.yml` logs `CLOUDFLARE_API_TOKEN absent; skipping plan` instead of
-failing; `tofu-apply.yml` fails loudly in that state.
+Expect `CLOUDFLARE_API_TOKEN`. An environment with no secret makes
+`tofu-apply.yml` fail loudly; `tofu-plan-pr.yml` also fails rather than skipping,
+because a silent skip would let a PR merge with no plan.
 
 The state backend's R2 pair is a second pair of environment secrets
 (`R2_STATE_ACCESS_KEY_ID`, `R2_STATE_SECRET_ACCESS_KEY`); step 14 creates the
-bucket and sets both, and `tofu-plan.yml` skips with a notice until they exist.
+bucket and sets both. Step 3a adds the read-only pair the pre-merge plan uses.
 
-## 3. Scope the Cloudflare API token
-
-Create the token in the Cloudflare dashboard under My Profile → API Tokens →
-Create Custom Token, then store it in the password manager and in the
-environment secret from step 2.
-
-- Permissions (least privilege for `tofu/`):
-  - Account → **Access: Apps and Policies: Edit** (applications, policies,
-    bypass and service-auth decisions)
-  - Account → **Access: Organizations, Identity Providers, and Groups: Read**
-  - Account → **Cloudflare Tunnel: Edit** (the cluster tunnel's hostname routes)
-  - Account → **Cloudflare One Networks: Edit** (same routes)
-  - Account → **Cloudflare Pages: Edit** (the recovery project and its domain)
-  - Account → **Workers R2 Storage: Edit** (the bucket CORS policy the recovery
-    page needs)
-  - Account → **Notifications: Edit** (tunnel health, service-token expiry)
-  - Zone → **DNS: Edit** (records, wildcard, CAA)
-  - Zone → **Zone: Read** (zone lookup)
-  - Zone → **Zone Rulesets: Edit** (the public-app rate-limit ruleset)
-- Account resources: Include → the owner's account only.
-- Zone resources: Include → Specific zone → `sammohr.dev`.
-- Client IP filtering: leave unset. GitHub-hosted runners have no stable
-  egress address, so the token is protected by the `cloudflare` environment
-  being restricted to `main` with no bypass, not by an IP allowlist.
-- TTL: 90 days. Rotate by creating the replacement, updating the environment
-  secret, and deleting the old token after the next successful `tofu-apply`.
-
-A token that can repoint `kanbei.sammohr.dev` is why diffing `*.tf` and
-`.github/` is Kanbei-critical (`docs/kanbei-critical.md`).
-
-## 4. Create the `cloudflare` environment and apply repo settings
+## 4. Create the environments and apply repo settings
 
 Both need **Administration: write** on the repository, which the bootstrap token
 lacked (HTTP 403, recorded in `docs/runbook.md`). Run as the owner with a
 classic `repo`-scoped PAT or a fine-grained PAT carrying Administration and
 Actions write:
 
-1. `docs/runbook.md` → "Environment `cloudflare`": the environment object
-   already exists but has no deployment branch policy
-   (`deployment_branch_policy: null`, branch-policy list 404). Set
-   `custom_branch_policies: true` and add the `main` branch policy before any
-   secret lands. No required reviewers.
+1. Environments: two, with different branch policies.
+   - `cloudflare` holds the write token and the write R2 pair. Policy: `main`
+     only. `tofu-apply.yml` is the only reader.
+   - `cloudflare-plan` holds the read-only pair from step 3a. Policy: `main` and
+     `smores/*`, because the pre-merge plan runs on a PR branch.
+   Neither lists `agent/*`, so a branch the bot can push reaches no environment.
+   That is deliberate even for the read-only pair: reading the zone enumerates
+   every DNS record, Access application and ingress rule. A PR from `agent/*`
+   that touches `tofu/` therefore fails the plan check, and a human re-pushes the
+   same diff onto a `smores/*` branch to plan it. The environment is declared on
+   the job (GitHub accepts it nowhere else), so such a PR fails the required check
+   outright rather than receiving a credential-free pass.
+   Neither has required reviewers: that reviewer was the click this design
+   removes, and the merge plus the required plan check are the approval now.
+
+   ```sh
+   printf '%s' '{"deployment_branch_policy":{"protected_branches":false,"custom_branch_policies":true}}' |
+     gh api -X PUT /repos/smores56/homelabs-platform/environments/cloudflare-plan --input -
+   for p in main 'smores/*'; do
+     gh api -X POST /repos/smores56/homelabs-platform/environments/cloudflare-plan/deployment_branch_policies \
+       -f name="$p" -f type=branch
+   done
+   ```
 2. `docs/runbook.md` → "Repo settings": read-only default `GITHUB_TOKEN`,
    SHA-pinning required, only GitHub-owned and verified actions, fork PRs need
    owner approval, private vulnerability reporting on.

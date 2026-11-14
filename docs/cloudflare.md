@@ -107,12 +107,23 @@ What the backend means for the workflows:
 
 - `ci.yml` runs `tofu init -backend=false` + `tofu validate`, so PRs need no
   credential and no bucket;
-- `tofu-apply.yml` is `workflow_dispatch` only. It inits against R2, runs
-  `plan -detailed-exitcode -out=tfplan`, publishes the plan to the job summary
-  and applies that saved plan only when the dispatch asked for it — never
-  `-auto-approve`, and never on push;
-- `tofu-plan.yml` is a read-only drift check on main and says in its log when
-  the credentials are absent.
+- `tofu-plan-pr.yml` runs on every pull request and is the required check: it
+  refuses forks, CI-touching diffs and executable HCL, then plans with the
+  read-only credentials and comments the result on the PR. The merge is the
+  approval, so this is the plan the reviewer reads;
+- `tofu-apply.yml` runs on a merge to `main` (and on an owner dispatch). It inits
+  against R2, runs `plan -detailed-exitcode -out=tfplan`, publishes the plan and
+  applies that saved plan — never an auto-approve flag, and never from a plan that
+  replaces or destroys a resource; those fail the run and wait for a dispatch;
+- `tofu-drift.yml` is a weekly read-only plan for changes that came from outside
+  the repository, and reports them through one `tofu-drift` issue.
+
+Two environments carry the split. `cloudflare` holds the write token and the
+write R2 pair and allows `main` only; `cloudflare-plan` holds the read-only pair
+and allows `main` and `smores/*`, because the pre-merge plan runs on a PR
+branch. A branch therefore cannot reach the write token even if its workflow
+declares `environment: cloudflare`: the policy refuses it before any secret is
+injected. `docs/manual-steps.md` steps 3a and 4 provision both.
 
 The one-time move from the local file to R2 is `docs/manual-steps.md` step 14:
 back up the file, `init -migrate-state`, compare `tofu state list` before and

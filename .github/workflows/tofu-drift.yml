@@ -1,0 +1,104 @@
+name: tofu-drift
+
+# Out-of-band drift: someone edited DNS, an Access policy or the tunnel in the
+# dashboard. A merge is planned and applied by `tofu-apply.yml`, so this job
+# exists only for changes that did not come through a merge. It never applies.
+#
+# It uses the read-only pair on purpose: detection is a read, and a scheduled
+# job is the least-attended thing in this repository. The result lands in one
+# issue labelled `tofu-drift`, updated in place, so a clean week closes it.
+on:
+  schedule:
+    # Mondays, 05:17 UTC: the weekly preflight/backup wave is done, and the
+    # reviewer is awake for whatever it finds.
+    - cron: "17 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: tofu
+  cancel-in-progress: false
+
+jobs:
+  drift:
+    name: drift check (cloudflare)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: cloudflare-plan
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          persist-credentials: false
+
+      - name: install pinned tools
+        run: |
+          scripts/install-ci-tools.sh "$RUNNER_TEMP/bin"
+          echo "$RUNNER_TEMP/bin" >>"$GITHUB_PATH"
+
+      - name: plan
+        id: plan
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_PLAN_API_TOKEN }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_STATE_READONLY_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_STATE_READONLY_SECRET_ACCESS_KEY }}
+        run: |
+          set -o pipefail
+          for name in CLOUDFLARE_API_TOKEN AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY; do
+            if [[ -z ${!name:-} ]]; then
+              echo "::error::$name absent from the cloudflare environment (docs/manual-steps.md step 14)"
+              exit 1
+            fi
+          done
+          export AWS_DEFAULT_REGION=auto
+          tofu -chdir=tofu init -input=false -no-color
+          status=0
+          # -lock=false: a read must never block an operator's apply.
+          tofu -chdir=tofu plan -input=false -lock=false -no-color \
+            -detailed-exitcode >plan.txt 2>&1 || status=$?
+          case "$status" in
+            0) echo "drift=false" >>"$GITHUB_OUTPUT" ;;
+            2) echo "drift=true" >>"$GITHUB_OUTPUT" ;;
+            *) echo "::error::tofu plan failed (exit $status)"; exit 1 ;;
+          esac
+          {
+            echo '## drift check'
+            echo
+            echo '```'
+            tail -n 200 plan.txt
+            echo '```'
+          } >>"$GITHUB_STEP_SUMMARY"
+
+      - name: open or update the drift issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DRIFT: ${{ steps.plan.outputs.drift }}
+        run: |
+          set -euo pipefail
+          number=$(gh issue list --repo "$GITHUB_REPOSITORY" --label tofu-drift \
+            --state open --json number --jq '.[0].number // empty')
+          if [[ $DRIFT != true ]]; then
+            if [[ -n $number ]]; then
+              gh issue close "$number" --repo "$GITHUB_REPOSITORY" \
+                --comment "The weekly drift check found no difference between the repository and the zone; closing."
+            fi
+            exit 0
+          fi
+          {
+            echo "The weekly plan against \`main\` finds changes nobody merged: the zone and the repository disagree."
+            echo
+            echo '```'
+            tail -n 150 plan.txt
+            echo '```'
+            echo
+            echo "Either make the change in \`tofu/\` (a merge then applies it) or revert it in the dashboard."
+            echo "Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          } >issue.md
+          if [[ -n $number ]]; then
+            gh issue comment "$number" --repo "$GITHUB_REPOSITORY" --body-file issue.md
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "Cloudflare drift detected" \
+              --label tofu-drift --body-file issue.md
+          fi

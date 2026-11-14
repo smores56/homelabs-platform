@@ -10,8 +10,10 @@
 - Every GitHub Action reference is pinned to a 40-character commit SHA. CI fails
   otherwise (`scripts/check-action-pins.sh`).
 - A workflow triggered by `pull_request` must not reference `secrets.*` other
-  than `secrets.GITHUB_TOKEN`, and must never use `pull_request_target`
-  (`scripts/check-pr-secret-boundary.sh`).
+  than `secrets.GITHUB_TOKEN`. `tofu-plan-pr.yml` is the single, checked
+  exception: read-only plan credentials only, with the four guard markers
+  `scripts/check-pr-secret-boundary.sh` requires. Never use
+  `pull_request_target` (blocked by default in public repos from 2026-12-02).
 - `*.tf` and `.github/` are Kanbei-critical (`docs/kanbei-critical.md`). Keep
   `CODEOWNERS`, that document, and `scripts/check-codeowners.sh` in sync.
 - Anything an operator must do by hand goes in `docs/manual-steps.md` with the
@@ -32,6 +34,7 @@ tests/backup/check.sh                   # mirror script args/URLs, no network
 tests/observability/check.sh            # vector unit tests, config drift, exporter tests
 tests/digest/check.sh                   # digest builder fixtures, egress and reverse-path contract
 nix run nixpkgs#yamllint -- .
+nix run nixpkgs#actionlint -- .              # a workflow GitHub cannot parse never runs, silently
 nix run nixpkgs#shellcheck -- scripts/*.sh tests/policies/*.sh tests/tofu/*.sh \
   tests/access/*.sh tests/backup/*.sh tests/digest/*.sh tests/observability/*.sh \
   tests/agent-control/*.sh clusters/homelab/flux-system/bootstrap.sh \
