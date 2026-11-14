@@ -93,11 +93,12 @@ jobs:
         run: |
           set -o pipefail
           export AWS_DEFAULT_REGION=auto
-          status=0
           # pipefail matters: without it `tee` would mask a failed plan as exit 0
           # (no changes) and the apply step would be skipped instead of stopped.
+          # -parallelism=3: the zone is ~15 resources and Cloudflare answers 429
+          # (code 10429) long before the default of 10 is useful.
           tofu -chdir=tofu plan -input=false -lock=false -no-color \
-            -detailed-exitcode -out=tfplan | tee plan.txt || status=$?
+            -detailed-exitcode -out=tfplan -parallelism=3 | tee plan.txt || status=$?
           {
             echo '## plan'
             echo

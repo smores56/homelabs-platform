@@ -57,7 +57,7 @@ jobs:
           status=0
           # -lock=false: a read must never block an operator's apply.
           tofu -chdir=tofu plan -input=false -lock=false -no-color \
-            -detailed-exitcode >plan.txt 2>&1 || status=$?
+            -detailed-exitcode -parallelism=3 2>&1 | tee plan.txt || status=$?
           case "$status" in
             0) echo "drift=false" >>"$GITHUB_OUTPUT" ;;
             2) echo "drift=true" >>"$GITHUB_OUTPUT" ;;
