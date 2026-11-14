@@ -97,6 +97,10 @@ jobs:
           # (no changes) and the apply step would be skipped instead of stopped.
           # -parallelism=3: the zone is ~15 resources and Cloudflare answers 429
           # (code 10429) long before the default of 10 is useful.
+          # status=0: `|| status=$?` only assigns on failure, so without this the
+          # case below sees an empty string and reports a successful plan as an
+          # error ("tofu plan failed (exit )").
+          status=0
           tofu -chdir=tofu plan -input=false -lock=false -no-color \
             -detailed-exitcode -out=tfplan -parallelism=3 | tee plan.txt || status=$?
           {

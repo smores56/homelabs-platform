@@ -407,6 +407,16 @@ else
   ok "drift detection holds no write token"
 fi
 if grep -q 'tofu-drift' "$drift"; then ok "drift detection reports through one issue"; else bad "drift detection reports through one issue"; fi
+
+# `|| status=$?` only assigns on failure, so every plan needs the initializer or
+# a successful plan falls into the error branch and reports "exit ".
+for workflow in "$apply" "$pr" "$drift"; do
+  if grep -qE '^[[:space:]]*status=0$' "$workflow"; then
+    ok "$workflow initialises the plan status"
+  else
+    bad "$workflow initialises the plan status"
+  fi
+done
 if git ls-files | grep -q '\.tfstate'; then
   bad "no state file is tracked"
 else
