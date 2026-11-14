@@ -1,0 +1,30 @@
+{% set groups = [] %}
+{% for group_id in backup_groups %}
+{% set spec = backup_group_specs[group_id] %}
+{% set inventory_key = group_id | replace('-', '_') %}
+{% if inventory_key in recovery_inventory %}
+{% set visibility = recovery_inventory[inventory_key].visibility %}
+{% set ns = namespace(members=[]) %}
+{% for row in zfs_datasets | selectattr('recovery_group', 'equalto', inventory_key) | list %}
+{% set _ = ns.members.append({'name': row.name.split('/')[-1], 'dataset': row.name, 'mount': row.mountpoint, 'writer': spec.writer}) %}
+{% endfor %}
+{% else %}
+{% set visibility = spec.visibility %}
+{% set ns = namespace(members=spec.members) %}
+{% endif %}
+{% set datasets = ns.members | map(attribute='dataset') | list %}
+{% set paths = {} %}
+{% for dataset in datasets %}
+{% set _ = paths.update({dataset: backup_dataset_paths[dataset]}) %}
+{% endfor %}
+{% set destinations = [] %}
+{% for tier in spec.destination_tiers %}
+{% set _ = destinations.append(tier ~ '-' ~ visibility) %}
+{% endfor %}
+{% set _ = groups.append({'id': group_id, 'datasets': datasets, 'destinations': destinations, 'dataset_paths': paths, 'fence': spec.get('fence', []), 'checkpoint': spec.get('checkpoint', []), 'resume': spec.get('resume', []), 'databases': spec.get('databases', []), 'cadence': spec.cadence}) %}
+{% endfor %}
+{% set repositories = [] %}
+{% for repository in backup_repositories %}
+{% set _ = repositories.append({'name': repository.name, 'repository': repository.repository, 'password_file': repository.password_file, 'host': repository.host | default('smortress'), 'tag': repository.tag | default('data-plane')}) %}
+{% endfor %}
+{{ {'schema_version': 1, 'manifest_dir': backup_manifest_dir, 'groups': groups, 'repositories': repositories} | to_nice_json }}

@@ -1,0 +1,72 @@
+---
+# The shared destructive/writer gate. Imported by preflight.yml for a
+# destructive run and by the site.yml `writers`/`backup` steps. It never trusts
+# a hand-typed boolean: it re-runs `libs/data_plane/migration` over the raw
+# evidence file and requires the protection facts the module computes.
+#
+# The evidence must prove fresh verified backups on every required destination,
+# a scratch restore, a boot-tested and non-wiped 970, and two independent
+# verified SSH paths. Operator confirmations are carried by the evidence but are
+# enforced by the phase gates, not by this disk-level gate.
+
+- name: Require a raw migration evidence path
+  ansible.builtin.assert:
+    that:
+      - homelab_migration_evidence is defined
+      - homelab_migration_evidence | length > 0
+      - homelab_migration_evidence is match('^/')
+    fail_msg: >-
+      Pass -e homelab_migration_evidence=/abs/path/evidence.json produced from
+      `python3 -m data_plane.migration preflight evidence.json`.
+    quiet: true
+  tags: [always]
+
+- name: Run the shared migration preflight over the evidence file
+  ansible.builtin.command:
+    argv:
+      - python3
+      - -m
+      - data_plane.migration
+      - preflight
+      - "{{ homelab_migration_evidence }}"
+  environment:
+    PYTHONPATH: "{{ homelab_migration_libs_dir }}"
+  delegate_to: localhost
+  changed_when: false
+  check_mode: false
+  failed_when: false
+  register: homelab_migration_preflight
+  tags: [always]
+
+- name: Require the migration protection facts to hold
+  vars:
+    report: "{{ (homelab_migration_preflight.stdout or '{}') | from_json }}"
+  ansible.builtin.assert:
+    that:
+      - report is mapping
+      - report.get('checked', []) is sequence
+      - "'backup_freshness' in report.get('checked', [])"
+      - "'restore_verification' in report.get('checked', [])"
+      - "'rollback_disk' in report.get('checked', [])"
+      - "'ssh_paths' in report.get('checked', [])"
+      - report.get('evidence', {}).get('fresh_backup', false) | bool
+      - report.get('evidence', {}).get('restore_verified', false) | bool
+      - report.get('evidence', {}).get('rollback_disk_boot_tested', false) | bool
+      - report.get('evidence', {}).get('ssh_paths_independent', false) | bool
+    fail_msg: >-
+      The migration evidence does not prove fresh verified backups on every
+      required destination, a scratch restore, a boot-tested non-wiped 970, and
+      two independent SSH paths. Fix every preflight failure before touching a
+      disk or enabling a writer. {{ homelab_migration_preflight.stderr | default('') }}
+    quiet: true
+  tags: [always]
+
+- name: Record the rollback-disk decision from the evidence
+  vars:
+    evidence_doc: "{{ lookup('file', homelab_migration_evidence) | from_json }}"
+  ansible.builtin.set_fact:
+    homelab_migration_rollback_device: >-
+      {{ evidence_doc.get('rollback_disk', {}).get('device', '') }}
+    homelab_migration_rollback_released: >-
+      {{ evidence_doc.get('rollback_disk', {}).get('released', false) | bool }}
+  tags: [always]

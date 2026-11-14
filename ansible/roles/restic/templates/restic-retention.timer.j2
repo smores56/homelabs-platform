@@ -1,0 +1,11 @@
+[Unit]
+Description=Weekly restic retention sweep
+
+[Timer]
+OnCalendar={{ restic_retention_calendar }}
+Persistent=true
+RandomizedDelaySec=600
+Unit=restic-retention.service
+
+[Install]
+WantedBy=timers.target

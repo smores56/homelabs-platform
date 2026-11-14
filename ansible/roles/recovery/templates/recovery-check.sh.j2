@@ -1,10 +1,16 @@
 #!/usr/bin/env bash
 # Verify that the live host still matches the recovery sentinel. Read-only.
+#
+# Hard failures are limited to the host shape the restore depends on: the
+# sentinel itself, every served mount, and the pool. The portal is a view, not
+# a prerequisite, and backup freshness is a warning: a restore must not be
+# blocked by the portal being down or by a mount the recovery playbook is about
+# to open.
 set -euo pipefail
 
 sentinel="{{ recovery_sentinel }}"
 portal_unit="{{ recovery_portal_unit }}"
-require_backups=0
+check_backups=0
 quiet=0
 
 usage() {
@@ -13,7 +19,7 @@ usage() {
 
 for arg in "$@"; do
   case "$arg" in
-    --require-backups) require_backups=1 ;;
+    --require-backups | --check-backups) check_backups=1 ;;
     --quiet) quiet=1 ;;
     *) usage; exit 2 ;;
   esac
@@ -21,6 +27,7 @@ done
 
 failures=0
 fail() { printf 'FAIL %s\n' "$1" >&2; failures=$((failures + 1)); }
+warn() { printf 'WARN %s\n' "$1" >&2; }
 ok() { if [[ $quiet -eq 0 ]]; then printf 'ok   %s\n' "$1"; fi; }
 
 if [[ ! -r $sentinel ]]; then
@@ -93,16 +100,22 @@ else
   fail "pool $pool is missing or degraded"
 fi
 
-if [[ $require_backups -eq 1 ]]; then
+if [[ $check_backups -eq 1 ]]; then
   while IFS= read -r mount; do
-    check_mount "$mount"
+    target=$(findmnt -rn -o TARGET --target "$mount" 2>/dev/null || true)
+    if [[ $target == "$mount" ]]; then
+      ok "backup mount available: $mount"
+    else
+      warn "backup mount missing (freshness unverified): $mount"
+    fi
   done <"$work/backups"
 fi
 
 if systemctl is-active --quiet "$portal_unit"; then
   ok "$portal_unit is active"
 else
-  fail "$portal_unit is not active"
+  # The portal is a read-only convenience; a restore never depends on it.
+  warn "$portal_unit is not active; restore does not require the portal"
 fi
 
 if [[ $failures -gt 0 ]]; then

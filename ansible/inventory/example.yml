@@ -13,6 +13,11 @@ all:
         smortress:
           ansible_host: 192.0.2.10
           ansible_user: ansible
+          # Destructive runs may only touch these stable by-id paths on this
+          # host. Empty means no disk may be created or formatted. A by-id
+          # name carries the serial or WWN; the luks_volumes entries below
+          # additionally declare the expected hardware identity.
+          homelab_destructive_device_ids: []
           k3s_role: agent
           k3s_server_url: https://192.0.2.20:6443
           k3s_enable_nvidia_runtime: true
@@ -20,6 +25,8 @@ all:
           k3s_enable_gvisor_runtime: true
           # Replace each by-id path with the disk's stable identifier. The
           # root entry may be omitted when autoinstall already owns crypttab.
+          # A destructive run requires serial (or wwn) and size_bytes on every
+          # entry, and the device in homelab_destructive_device_ids above.
           luks_volumes:
             - name: luks-root
               device: /dev/disk/by-id/REPLACE-root
@@ -45,6 +52,11 @@ all:
       hosts:
         smortress:
     data_plane_hosts:
+      hosts:
+        smortress:
+    # group_vars/backup.yml binds to this group name. A real hosts.yml must
+    # declare it too, or the backup plan variables are undefined.
+    backup:
       hosts:
         smortress:
     k3s_agents:

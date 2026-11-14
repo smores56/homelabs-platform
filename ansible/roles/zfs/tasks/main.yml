@@ -1,13 +1,16 @@
 ---
 # ZFS-on-LUKS: the pool lives on /dev/mapper/luks-data. Structural parents are
-# canmount=off; every recovery group mounts at its /srv path. Import is
-# idempotent and dataset creation only adds or updates properties.
+# canmount=off; every recovery group mounts at its /srv path. Create and import
+# are gated: the pool may only be created under `--tags destructive` with an
+# allow-listed encrypted volume, and an import is always scoped to that same
+# device.
 
-- name: Require the pool to be defined
+- name: Require the pool to be defined and pinned to its encrypted mapper
   ansible.builtin.assert:
     that:
       - zfs_pool | length > 0
       - zfs_pool_luks_volume in (luks_volumes | selectattr('auto') | map(attribute='name') | list)
+      - zfs_pool_device == '/dev/mapper/' ~ zfs_pool_luks_volume
       - zfs_pool_device is match('^/dev/mapper/luks-[a-z0-9-]+$')
       - zfs_datasets | length > 0
     fail_msg: "Define zfs_pool, zfs_pool_device, and zfs_datasets in group_vars/all.yml"
@@ -31,13 +34,69 @@
   failed_when: false
   tags: [always]
 
-- name: Require explicit confirmation to create the pool
+- name: Note whether the pool is already imported
+  ansible.builtin.set_fact:
+    zfs_pool_present: "{{ zfs_pool in zfs_pools.stdout_lines }}"
+  tags: [always]
+
+- name: Resolve the pool's encrypted volume to its stable by-id device
+  ansible.builtin.set_fact:
+    zfs_pool_underlying_device: >-
+      {{ luks_volumes | selectattr('name', 'equalto', zfs_pool_luks_volume)
+         | map(attribute='device') | first | default('') }}
+  tags: [always]
+
+# An unscoped `zpool import <pool>` can grab a same-named pool off any visible
+# disk. Every import and creation below is pinned to this one device, and that
+# device must be in the host's allow-list.
+- name: Require the pool device to be allow-listed before creation or import
   ansible.builtin.assert:
     that:
-      - homelab_destructive_confirm | bool
+      - zfs_pool_underlying_device is match('^/dev/disk/by-id/')
+      - zfs_pool_underlying_device in homelab_destructive_device_ids
     fail_msg: >-
-      Refusing to create {{ zfs_pool }}. Re-run with --tags destructive and
-      -e homelab_destructive_confirm=true after verifying {{ zfs_pool_device }}.
+      Refusing to create or import {{ zfs_pool }}: its encrypted device
+      {{ zfs_pool_underlying_device }} is not in homelab_destructive_device_ids
+      for {{ inventory_hostname }}.
+    quiet: true
+  when: not zfs_pool_present | bool
+  tags: [always]
+
+- name: Read the data volume keyslot metadata
+  ansible.builtin.command:
+    argv: [cryptsetup, luksDump, --dump-json-metadata, "{{ zfs_pool_device }}"]
+  register: zfs_luks_dump
+  changed_when: false
+  check_mode: false
+  failed_when: false
+  when:
+    - "'destructive' in ansible_run_tags"
+    - not zfs_pool_present | bool
+  tags: [destructive]
+
+- name: Check the data volume header backup
+  ansible.builtin.stat:
+    path: "{{ luks_keyfile_dir }}/{{ zfs_pool_luks_volume }}.header"
+  register: zfs_luks_header
+  when:
+    - "'destructive' in ansible_run_tags"
+    - not zfs_pool_present | bool
+  tags: [destructive]
+
+- name: Require a second keyslot and header backup before creating the pool
+  ansible.builtin.assert:
+    that:
+      - ((zfs_luks_dump.stdout | default('') or '{}') | from_json).get('keyslots', {}) | length >= 2
+      - zfs_luks_header.stat.exists | default(false) | bool
+      - zfs_luks_header.stat.mode | default('') == '0400'
+    fail_msg: >-
+      {{ zfs_pool_device }} needs a second keyslot (the offline passphrase) and
+      a root-only header backup at {{ luks_keyfile_dir }}/{{ zfs_pool_luks_volume }}.header
+      before the pool is created.
+    quiet: true
+  when:
+    - "'destructive' in ansible_run_tags"
+    - not zfs_pool_present | bool
   tags: [destructive]
 
 - name: Create the pool on the encrypted device
@@ -62,8 +121,9 @@
       - "{{ zfs_pool }}"
       - "{{ zfs_pool_device }}"
   when:
-    - homelab_destructive_confirm | bool
-    - zfs_pool not in zfs_pools.stdout_lines
+    - "'destructive' in ansible_run_tags"
+    - not zfs_pool_present | bool
+    - not ansible_check_mode
   register: zfs_pool_create
   changed_when: true
   tags: [destructive]
@@ -80,10 +140,12 @@
   failed_when: false
   tags: [destructive]
 
-- name: Import the existing pool without mounting it early
+- name: Import the existing pool from its pinned device without mounting it
   ansible.builtin.command:
-    argv: [zpool, import, -N, "{{ zfs_pool }}"]
-  when: zfs_pool not in zfs_pools.stdout_lines
+    argv: [zpool, import, -N, -d, "{{ zfs_pool_device }}", "{{ zfs_pool }}"]
+  when:
+    - not zfs_pool_present | bool
+    - zfs_pool_underlying_device in homelab_destructive_device_ids
   register: zfs_import
   changed_when: true
 
@@ -149,23 +211,27 @@
     group: root
     mode: "0755"
   loop:
-    - "{{ zfs_import_service }}"
+    - "{{ zfs_import_cache_service }}"
+    - "{{ zfs_import_scan_service }}"
     - "{{ zfs_mount_service }}"
   notify: Reload systemd
 
-- name: Make pool import wait for the encrypted boot volumes
+# Both import units must wait for the encrypted volume. Making only the cache
+# unit wait lets a scan import run before LUKS is open on a host that uses it.
+- name: Make every pool import wait for the encrypted boot volume
   ansible.builtin.copy:
-    dest: "{{ zfs_systemd_dir }}/{{ zfs_import_service }}.d/10-luks.conf"
+    dest: "{{ zfs_systemd_dir }}/{{ item }}.d/10-luks.conf"
     owner: root
     group: root
     mode: "0644"
     content: |
       # Managed by ansible/roles/zfs. The pool must never import before LUKS.
       [Unit]
-      {% for volume in luks_volumes if volume.name == zfs_pool_luks_volume %}
-      Requires=systemd-cryptsetup@{{ volume.name }}.service
-      After=systemd-cryptsetup@{{ volume.name }}.service
-      {% endfor %}
+      Requires=systemd-cryptsetup@{{ zfs_pool_luks_volume }}.service
+      After=systemd-cryptsetup@{{ zfs_pool_luks_volume }}.service
+  loop:
+    - "{{ zfs_import_cache_service }}"
+    - "{{ zfs_import_scan_service }}"
   notify: Reload systemd
 
 - name: Make dataset mounts depend on a successful pool import
@@ -177,6 +243,6 @@
     content: |
       # Managed by ansible/roles/zfs. Mounting before import is a hard failure.
       [Unit]
-      Requires={{ zfs_import_service }}
-      After={{ zfs_import_service }}
+      Requires={{ zfs_import_cache_service }}
+      After={{ zfs_import_cache_service }}
   notify: Reload systemd

@@ -40,7 +40,7 @@
   loop_control:
     label: "{{ item.name }}"
 
-- name: Install the operators' SSH public keys
+- name: Install inline SSH public keys
   ansible.posix.authorized_key:
     user: "{{ item.0.name }}"
     key: "{{ item.1 }}"
@@ -49,7 +49,68 @@
   loop: "{{ homelab_admin_users | selectattr('ssh_authorized_keys', 'defined') | subelements('ssh_authorized_keys') | list }}"
   loop_control:
     label: "{{ item.0.name }}"
-  when: homelab_admin_users | selectattr('ssh_authorized_keys', 'defined') | list | length > 0
+
+- name: Install operator-supplied SSH public-key files
+  ansible.posix.authorized_key:
+    user: "{{ item.name }}"
+    key: "{{ lookup('file', item.authorized_keys).splitlines()
+             | reject('match', '^\\s*(#|$)') | list }}"
+    state: present
+    manage_dir: true
+  loop: "{{ homelab_admin_users | selectattr('authorized_keys', 'defined') | list }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Read each administrator's authorized-key file
+  ansible.builtin.stat:
+    path: "~{{ item.name }}/.ssh/authorized_keys"
+  loop: "{{ homelab_admin_users }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: homelab_admin_key_files
+
+# The drop-in is only written once at least one operator can still log in.
+- name: Require at least one administrator to hold a usable SSH key
+  ansible.builtin.assert:
+    that:
+      - homelab_admin_key_files.results
+        | selectattr('stat.exists') | selectattr('stat.size', 'gt', 0) | list | length > 0
+    fail_msg: >-
+      No administrator has a non-empty ~/.ssh/authorized_keys. Writing the
+      hardening drop-in now would lock every operator out.
+    quiet: true
+
+- name: Derive the SSH allow-list from the administrators' real groups
+  ansible.builtin.set_fact:
+    homelab_admin_user_groups: >-
+      {{ homelab_admin_users
+         | map(attribute='groups', default=[homelab_admin_group])
+         | flatten | unique }}
+    homelab_ssh_effective_allow_groups: >-
+      {{ homelab_ssh_allow_groups
+         | select('in', homelab_admin_users
+                     | map(attribute='groups', default=[homelab_admin_group])
+                     | flatten | unique)
+         | list }}
+
+- name: Require the allow-list to match the administrators' groups
+  ansible.builtin.assert:
+    that:
+      - homelab_admin_group in homelab_admin_user_groups
+      - homelab_ssh_effective_allow_groups | length > 0
+      - homelab_ssh_effective_allow_groups | sort == homelab_ssh_allow_groups | sort
+    fail_msg: >-
+      homelab_ssh_allow_groups names a group no admin account holds. sshd would
+      allow nobody, so the drop-in is not written.
+    quiet: true
+
+- name: Create the sshd drop-in directory
+  ansible.builtin.file:
+    path: "{{ homelab_ssh_dropin | dirname }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
 
 - name: Ensure sshd includes the drop-in directory
   ansible.builtin.lineinfile:
@@ -60,6 +121,75 @@
     state: present
     validate: /usr/sbin/sshd -t -f %s
 
+- name: Read the live SSH hardening drop-in
+  ansible.builtin.slurp:
+    src: "{{ homelab_ssh_dropin }}"
+  register: homelab_ssh_live
+  failed_when: false
+  check_mode: false
+
+- name: Render the desired SSH hardening drop-in
+  ansible.builtin.set_fact:
+    homelab_ssh_desired: "{{ lookup('template', '99-hardening.conf.j2') }}"
+
+- name: Decide whether the SSH configuration must change
+  ansible.builtin.set_fact:
+    homelab_ssh_dropin_change_required: >-
+      {{ (homelab_ssh_live.content | default('') | b64decode | trim)
+         != (homelab_ssh_desired | trim) }}
+
+- name: Install the timed SSH revert helper
+  ansible.builtin.template:
+    src: ssh-revert.sh.j2
+    dest: "{{ homelab_ssh_revert_script }}"
+    owner: root
+    group: root
+    mode: "0750"
+
+# A marker left by an earlier login would let the new revert unit exit without
+# restoring anything. Clear it before scheduling another change.
+- name: Clear a stale SSH confirmation marker
+  ansible.builtin.file:
+    path: "{{ homelab_ssh_confirmation_marker }}"
+    state: absent
+  when: homelab_ssh_dropin_change_required | bool
+
+- name: Back up the current SSH hardening drop-in
+  ansible.builtin.copy:
+    src: "{{ homelab_ssh_dropin }}"
+    dest: "{{ homelab_ssh_backup }}"
+    remote_src: true
+    owner: root
+    group: root
+    mode: "0400"
+    force: false
+  when:
+    - homelab_ssh_dropin_change_required | bool
+    - homelab_ssh_live.content is defined
+
+# Schedule the revert before the drop-in is written: if sshd refuses to restart
+# or the new rules lock the operator out, the previous config comes back
+# automatically unless a login touches the marker.
+- name: Schedule the transient SSH revert
+  ansible.builtin.command:
+    argv:
+      - systemd-run
+      - --quiet
+      - --collect
+      - --unit=homelab-ssh-revert
+      - --on-active={{ homelab_ssh_revert_seconds }}
+      - "{{ homelab_ssh_revert_script }}"
+  register: homelab_ssh_revert_unit
+  changed_when: false
+  check_mode: false
+  # A unit already pending from a run seconds ago is exactly what we want.
+  failed_when: >-
+    homelab_ssh_revert_unit.rc != 0
+    and 'already exists' not in (homelab_ssh_revert_unit.stderr | default(''))
+  when:
+    - homelab_ssh_dropin_change_required | bool
+    - not ansible_check_mode
+
 - name: Harden the SSH daemon
   ansible.builtin.template:
     src: 99-hardening.conf.j2
@@ -68,7 +198,19 @@
     group: root
     mode: "0644"
     validate: /usr/sbin/sshd -t -f %s
+  when: homelab_ssh_dropin_change_required | bool
   notify: Restart ssh
+
+- name: Report the SSH confirmation deadline
+  ansible.builtin.debug:
+    msg: >-
+      SSH hardening changed. Log in over SSH now and run
+      `sudo touch {{ homelab_ssh_confirmation_marker }}` within
+      {{ homelab_ssh_revert_seconds }} seconds, or the previous configuration
+      is restored and sshd restarts.
+  when:
+    - homelab_ssh_dropin_change_required | bool
+    - not ansible_check_mode
 
 - name: Limit the journal's disk footprint
   ansible.builtin.template:

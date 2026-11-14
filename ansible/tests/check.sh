@@ -233,5 +233,192 @@ else
   ok "no per-dataset mode override is applied"
 fi
 
+# --------------------------------------------------------------------------
+# Destructive gate
+# --------------------------------------------------------------------------
+
+# The single global boolean is retired: a leftover value must stop the run.
+if grep -rqF 'homelab_destructive_confirm is not defined' playbooks/tasks/preflight.yml; then
+  ok "a boolean destructive confirmation is rejected"
+else
+  bad "a boolean destructive confirmation is not rejected"
+fi
+output=$(grep -rn 'homelab_destructive_confirm' --include='*.yml' . 2>/dev/null \
+  | grep -vF 'is not defined' || true)
+if [[ -n $output ]]; then
+  bad "the retired homelab_destructive_confirm is still referenced" "$output"
+else
+  ok "the retired destructive boolean is not referenced"
+fi
+
+# A per-host, per-device allow-list drives every destructive task.
+for needle in \
+  'homelab_destructive_device_ids' \
+  "item.device in homelab_destructive_device_ids"; do
+  if grep -rqF "$needle" roles/luks/tasks/main.yml roles/zfs/tasks/main.yml playbooks/tasks/preflight.yml; then
+    ok "destructive allow-list: $needle"
+  else
+    bad "destructive allow-list missing: $needle"
+  fi
+done
+if grep -qF "'destructive' in ansible_run_tags" roles/luks/tasks/main.yml &&
+  grep -qF "'destructive' in ansible_run_tags" roles/zfs/tasks/main.yml; then
+  ok "disk creation only runs under --tags destructive"
+else
+  bad "a disk task can run without --tags destructive"
+fi
+
+# The evidence file is re-run through the shared migration module.
+for needle in \
+  'homelab_migration_evidence' \
+  'data_plane.migration' \
+  'backup_freshness' \
+  'restore_verification' \
+  'rollback_disk_boot_tested' \
+  'ssh_paths_independent'; do
+  if grep -rqF "$needle" playbooks/tasks/migration-gate.yml; then
+    ok "migration evidence gate: $needle"
+  else
+    bad "migration evidence gate missing: $needle"
+  fi
+done
+if grep -qF 'tasks/migration-gate.yml' playbooks/site.yml; then
+  ok "writers/backup steps require the migration gate"
+else
+  bad "site.yml never includes the migration gate"
+fi
+
+# LUKS refuses root, the 970, existing data, and demands a second keyslot +
+# header backup before formatting; crypttab never duplicates autoinstall names.
+for needle in \
+  'luks_root_disks' \
+  'homelab_rollback_disk_device' \
+  'homelab_migration_rollback_released' \
+  'allow_existing' \
+  'keyslots' \
+  '.header' \
+  'luks_crypttab_managed' \
+  "rejectattr('name', 'in'"; do
+  if grep -qF "$needle" roles/luks/tasks/main.yml; then
+    ok "luks safety: $needle"
+  else
+    bad "luks safety missing: $needle"
+  fi
+done
+
+# ZFS imports are scoped to the pinned device, and both import units wait for
+# systemd-cryptsetup.
+if grep -qF 'argv: [zpool, import, -N, -d, "{{ zfs_pool_device }}", "{{ zfs_pool }}"]' roles/zfs/tasks/main.yml; then
+  ok "zpool import is scoped to the pinned device"
+else
+  bad "zpool import is not scoped with -d"
+fi
+if grep -qF 'argv: [zpool, import, -N, "{{ zfs_pool }}"' roles/zfs/tasks/main.yml; then
+  bad "an unscoped zpool import still exists"
+else
+  ok "no unscoped zpool import"
+fi
+if grep -qF 'zfs_import_scan_service' roles/zfs/tasks/main.yml &&
+  grep -qF 'systemd-cryptsetup@{{ zfs_pool_luks_volume }}.service' roles/zfs/tasks/main.yml; then
+  ok "both zfs import units require systemd-cryptsetup"
+else
+  bad "a zfs import unit can run before LUKS"
+fi
+if grep -qF 'zfs_pool_underlying_device in homelab_destructive_device_ids' roles/zfs/tasks/main.yml; then
+  ok "the pool device must be allow-listed before import/create"
+else
+  bad "the pool import is not tied to the device allow-list"
+fi
+
+# Writers and the backup timer are not started by ordinary convergence.
+if grep -qF 'writer: true' roles/data_plane/defaults/main.yml &&
+  grep -qF 'not (item.writer | default(false))' roles/data_plane/tasks/main.yml &&
+  grep -qF "item.short != 'backup-controller'" roles/data_plane/tasks/main.yml; then
+  ok "write-broker and the backup timer stay stopped by default"
+else
+  bad "a writer or the backup timer starts by default"
+fi
+if grep -qF 'tags: [writers]' playbooks/site.yml &&
+  grep -qF 'tags: [backup]' playbooks/site.yml; then
+  ok "writers and backup are explicit tagged steps"
+else
+  bad "writers/backup are not explicit tagged steps"
+fi
+
+# --------------------------------------------------------------------------
+# SSH lockout safety
+# --------------------------------------------------------------------------
+
+count=$(grep -cF 'validate: /usr/sbin/sshd -t -f %s' roles/base/tasks/main.yml)
+if [[ ${count:-0} -ge 2 ]]; then
+  ok "sshd configuration is validated before it is installed"
+else
+  bad "sshd validation is missing from roles/base"
+fi
+for needle in \
+  'systemd-run' \
+  '--on-active=' \
+  'homelab_ssh_confirmation_marker' \
+  'homelab_ssh_backup'; do
+  if grep -qF -- "$needle" roles/base/tasks/main.yml; then
+    ok "sshd revert safety: $needle"
+  else
+    bad "sshd revert safety missing: $needle"
+  fi
+done
+if [[ -f roles/base/templates/ssh-revert.sh.j2 ]] &&
+  grep -qF '/run/homelab-ssh-confirmed' README.md; then
+  ok "the login-confirmation marker is installed and documented"
+else
+  bad "the SSH revert marker is not installed/documented"
+fi
+if grep -qF 'homelab_admin_group in' playbooks/tasks/preflight.yml &&
+  grep -qF 'Require at least one administrator to hold a usable SSH key' roles/base/tasks/main.yml; then
+  ok "admin-key and sudo membership checks exist"
+else
+  bad "the admin-key/sudo lockout check is missing"
+fi
+if grep -qF 'homelab_ssh_effective_allow_groups' roles/base/templates/99-hardening.conf.j2; then
+  ok "AllowGroups is derived from the groups the admins hold"
+else
+  bad "AllowGroups is not derived from real admin groups"
+fi
+
+# --------------------------------------------------------------------------
+# Restore safety
+# --------------------------------------------------------------------------
+
+for needle in \
+  'manifest_hash' \
+  'content hash' \
+  '--allow-live' \
+  'zfs receive' \
+  'findmnt' \
+  'writer marker'; do
+  if grep -qF -- "$needle" roles/recovery/templates/clean-room-restore.sh.j2; then
+    ok "restore safety: $needle"
+  else
+    bad "restore safety missing: $needle"
+  fi
+done
+if grep -qF 'flags=(-u)' roles/recovery/templates/clean-room-restore.sh.j2 &&
+  grep -qF 'flags=(-F -u)' roles/recovery/templates/clean-room-restore.sh.j2; then
+  ok "zfs receive only uses -F behind the explicit allow-live flag"
+else
+  bad "zfs receive -F is not gated by --allow-live"
+fi
+if grep -qF 'restore does not require the portal' roles/recovery/templates/recovery-check.sh.j2; then
+  ok "a stopped portal only warns; it is not a restore prerequisite"
+else
+  bad "the recovery portal is still a hard prerequisite"
+fi
+if grep -qF 'homelab_recovery_scratch_target' playbooks/recover.yml &&
+  grep -qF 'HOMELAB_RESTORE_ROOT' playbooks/recover.yml &&
+  grep -qF 'Re-enable the writers only after a verified scratch restore' playbooks/recover.yml; then
+  ok "recover fences writers, restores to scratch, then re-enables"
+else
+  bad "recover.yml does not restore to scratch before re-enabling writers"
+fi
+
 printf '\n%d passed, %d failed, %d skipped\n' "$pass" "$fail" "$skip"
 [[ $fail -eq 0 ]]

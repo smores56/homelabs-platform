@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# Restore the pre-Ansible sshd configuration unless an operator confirmed a
+# successful login within the deadline. Installed by ansible/roles/base and
+# scheduled by a transient `systemd-run --on-active` unit before the drop-in is
+# replaced. It never touches host keys or the main sshd_config.
+set -euo pipefail
+
+marker="{{ homelab_ssh_confirmation_marker }}"
+backup="{{ homelab_ssh_backup }}"
+dropin="{{ homelab_ssh_dropin }}"
+
+if [[ -e "$marker" ]]; then
+  logger -t homelab-ssh-revert "login confirmed; keeping the hardened sshd configuration"
+  exit 0
+fi
+
+if [[ -f "$backup" ]]; then
+  install -m 0644 -o root -g root "$backup" "$dropin"
+else
+  rm -f "$dropin"
+fi
+
+if /usr/sbin/sshd -t; then
+  systemctl restart "{{ homelab_ssh_service }}.service" || true
+  logger -t homelab-ssh-revert "no login confirmation; restored the previous sshd configuration"
+else
+  logger -t homelab-ssh-revert "restored configuration failed sshd validation; sshd was not restarted"
+  exit 1
+fi

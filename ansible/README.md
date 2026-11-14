@@ -44,9 +44,12 @@ arrive from the operator or the private inventory.
   the host. Units run podman with `--pull=never`, so a digest cannot drift.
 - On k3s agents, `/etc/rancher/k3s/node-token` is provisioned by the operator
   (path only in git; never the token value).
-- `homelab_admin_users` contains at least one account with an SSH public key;
-  otherwise the base role creates none. The provisioning account must already
-  be in the `sudo` group because SSH hardening allows only `homelab_ssh_allow_groups`.
+- `homelab_admin_users` contains at least one account, every account is in
+  `sudo` (`homelab_admin_group`), and every account carries either an inline
+  `ssh_authorized_keys` list or an `authorized_keys` path to a public-key file on
+  the controller. The playbooks fail closed when no account has a usable key,
+  and they derive `AllowGroups` from the groups the accounts actually hold.
+  Never list a group in `homelab_ssh_allow_groups` that no admin belongs to.
 - Collections `community.general`, `community.crypto`, and `ansible.posix` are
   supplied by the `ansible` package used below.
 - Rescue access is optional but fail-closed. When
@@ -82,16 +85,18 @@ $EDITOR inventory/hosts.yml
 ```
 
 ```sh
-# 3. First boot only: initialise the LUKS2 containers, format the empty backup
-#    disks, and create the ZFS pool. Both the explicit tag and the confirmation
-#    value are required; either one missing stops before a disk is touched.
+# 3. First boot only: initialise the LUKS2 containers. A destructive run needs
+#    all three of: --tags destructive, a per-host device allow-list, and a
+#    reviewed migration evidence file. There is no global boolean.
 #    (Review the inventory first; --check cannot review a pool that does not
 #    exist yet.)
 ansible-playbook -i inventory/hosts.yml playbooks/site.yml \
-  --tags destructive -e homelab_destructive_confirm=true
+  --tags destructive \
+  -e homelab_migration_evidence=/abs/path/evidence.json
 
 # 4. Apply every non-destructive role: crypttab, volume open, pool import,
-#    datasets, /srv layout, k3s, data-plane units.
+#    datasets, /srv layout, k3s, data-plane units. Writers and the backup timer
+#    stay stopped.
 ansible-playbook -i inventory/hosts.yml playbooks/site.yml
 
 # 5. Drift gate. check.yml refuses to run without --check and then reviews the
@@ -100,12 +105,54 @@ ansible-playbook -i inventory/hosts.yml playbooks/check.yml --check --diff
 
 # 6. Same drift report for a single host while iterating.
 ansible-playbook -i inventory/hosts.yml playbooks/site.yml --check --diff --limit smortress
+
+# 7. Start the writers and the backup timer only after the evidence gate, one
+#    explicit step at a time.
+ansible-playbook -i inventory/hosts.yml playbooks/site.yml \
+  --tags writers -e homelab_migration_evidence=/abs/path/evidence.json
+ansible-playbook -i inventory/hosts.yml playbooks/site.yml \
+  --tags backup -e homelab_migration_evidence=/abs/path/evidence.json
 ```
 
-No playbook performs a destructive disk operation without **both**
-`--tags destructive` and `-e homelab_destructive_confirm=true`. `destructive`
-covers only LUKS container creation and `zpool create`; formatting backup
-filesystems uses the same gate and never runs untagged.
+No playbook performs a destructive disk operation without **all** of
+`--tags destructive`, a device in that host's `homelab_destructive_device_ids`,
+and a passing migration evidence gate. The evidence file is the raw input to
+`python3 -m data_plane.migration preflight`; Ansible re-runs the shared module
+and requires fresh verified backups on every required destination, a scratch
+restore, a boot-tested non-wiped 970, and two independent verified SSH paths.
+`destructive` covers LUKS container creation, inner-filesystem creation, and
+`zpool create`; formatting backup filesystems uses the same gate and never runs
+untagged.
+
+### Destructive device allow-list
+
+`homelab_destructive_device_ids` lives per host (inventory or `host_vars`) and
+contains stable `/dev/disk/by-id/` paths. The by-id name carries the serial or
+WWN; each `luks_volumes` entry additionally declares `serial` or `wwn` and the
+expected `size_bytes`. The LUKS role resolves every target to one canonical
+disk, refuses the running root disk, refuses the 970 rollback disk unless the
+evidence marks `rollback_disk.released: true`, and refuses a device with an
+existing filesystem or pool unless the entry sets `allow_existing: true`.
+Before any inner filesystem or pool is created, the container must carry a
+second keyslot (the offline passphrase) and a root-only header backup at
+`<luks_keyfile_dir>/<name>.header`.
+
+### SSH change safety window
+
+Replacing the hardening drop-in starts a transient
+`systemd-run --on-active=300` revert unit. After the change, log in over SSH and
+run:
+
+```sh
+sudo touch /run/homelab-ssh-confirmed
+```
+
+If the marker is still absent when the timer fires, the pre-Ansible drop-in is
+restored from `/etc/ssh/sshd_config.d/.99-homelab-hardening.conf.pre-ansible`
+(or removed if it did not exist) and `ssh.service` is restarted. The marker
+lives in `/run`, so every reboot starts a new confirmation window. The drop-in
+is always validated with `/usr/sbin/sshd -t -f %s` before it replaces the live
+file, and the prepended `Include` line is validated the same way.
 
 ## Pre-migration rescue sequence
 
@@ -153,9 +200,15 @@ the preflight records fresh, structured evidence that `protect_old` and
 ## What a host run produces
 
 - `/etc/crypttab`: keyfile unlock for boot volumes; `noauto` for both backup
-  disks. No `nofail` is ever written, so an unlock failure stops dependants.
-- systemd drop-ins make `zfs-import-cache.service` require the encrypted data
-  volume and `zfs-mount.service` require a successful import.
+  disks. The managed block never repeats a name the autoinstall already wrote
+  (`luks-root` stays autoinstall-owned), and the role asserts the finished file
+  has no duplicate names. No `nofail` is ever written, so an unlock failure
+  stops dependants.
+- systemd drop-ins make **both** `zfs-import-cache.service` and
+  `zfs-import-scan.service` require the encrypted data volume, and
+  `zfs-mount.service` require a successful import. Ansible imports the pool only
+  with `zpool import -N -d <pinned mapper>`, and only when that device is in the
+  host's allow-list.
 - Datasets: `tank/photos`, `tank/music`, `tank/books`, `tank/notes`,
   `tank/wallpapers`, `tank/memory/local`, `tank/memory/external`. The
   `tank/memory` parent is `canmount=off`; `compression=zstd`, `atime=off`, and
@@ -178,17 +231,49 @@ the preflight records fresh, structured evidence that `protect_old` and
 ## Recovery
 
 `recover.yml` assumes `site.yml` has already run on the clean host, so crypttab,
-fstab, the zfs units, and the restore scripts exist. The generation manifest is
-a local file outside git, copied to the host at the path passed to the playbook:
+fstab, the zfs units, and the restore scripts exist. It fences every writer
+(and the backup timer) first, restores into a scratch target, verifies the
+restored content hashes, and only then re-enables the writers. A dry run touches
+nothing. The recovery portal is never a prerequisite.
+
+The manifest is the JSON written by
+`data_plane.backup.generations.write_manifest` (all manifest fields plus
+`manifest_hash`) with one extra top-level `restore` list. `complete: true` alone
+is not accepted: the entrypoint recomputes the content hash, requires the schema
+and every required destination, and refuses a `latest` snapshot.
 
 ```json
 {
-  "complete": true,
+  "version": 1,
+  "generation_id": "notes-20261114T0530",
+  "group_id": "notes",
+  "created_at": 1800000000.0,
+  "datasets": [["tank/notes", "tank/notes@notes-20261114T0530"]],
+  "sqlite": [],
+  "app_versions": [],
+  "content_hashes": [["/srv/notes/index.db", "<64-hex sha256>"]],
+  "dependencies": [],
   "destinations": [
     {
+      "destination": "primary",
+      "snapshot_id": "<restic snapshot id>",
+      "created_at": 1800000000.0,
+      "group_id": "notes",
+      "dataset": "tank/notes",
+      "parent": null,
+      "verified": true
+    }
+  ],
+  "complete": true,
+  "schema_version": 1,
+  "release": "",
+  "manifest_hash": "<64-hex sha256>",
+  "restore": [
+    {
+      "kind": "restic",
       "repository": "/var/backups/primary/personal",
       "password_file": "/etc/restic/personal.key",
-      "snapshot": "<restic snapshot id>",
+      "snapshot": "<manifest snapshot id>",
       "target": "/srv"
     }
   ]
@@ -196,7 +281,7 @@ a local file outside git, copied to the host at the path passed to the playbook:
 ```
 
 ```sh
-# Dry run: opens storage, mounts backups, verifies the sentinel, prints the plan.
+# Dry run: opens storage, prints the plan. It does not fence writers.
 ansible-playbook -i inventory/hosts.yml playbooks/recover.yml \
   --tags destructive \
   -e homelab_recovery_confirm=true \
@@ -210,8 +295,17 @@ ansible-playbook -i inventory/hosts.yml playbooks/recover.yml \
   -e homelab_recovery_generation_manifest=/root/generation.json
 ```
 
+The restore target must be a scratch directory: the entrypoint refuses a live
+mount or a target holding `.homelab-writer-active` unless
+`homelab_recovery_allow_live=true` is passed after fencing. `zfs receive` never
+uses `-F` in the default path; the fenced override is the only way to enable
+it. The sentinel check warns, but does not fail, on a missing backup mount or a
+stopped portal.
+
 Writers stay disabled after restore until the old writer is fenced or revoked,
-a new epoch exists, old approvals are canceled, and anti-entropy completes.
+a new epoch exists, old approvals are canceled, and anti-entropy completes. Set
+`homelab_recovery_resume_writers=false` to leave them fenced after a verified
+restore.
 
 ## Pinned matrix
 

@@ -1,0 +1,252 @@
+---
+# Host-side backup ownership: copy the factory libraries, render the plan, and
+# install the fenced snapshot oneshot, timers, and request path. No pod, no
+# container, and no cluster credential participates in the snapshot itself.
+#
+# A group without a repository, a repository without a password file path, or a
+# dataset without a snapshot path stops the apply before any unit is written.
+
+- name: Require a complete, non-fixture backup inventory
+  ansible.builtin.assert:
+    that:
+      - backup_groups | length > 0
+      - backup_destinations | length > 0
+      - backup_repositories | length > 0
+      - backup_repositories | map(attribute='name') | unique | length == (backup_repositories | length)
+      - backup_destinations | sort == backup_repositories | map(attribute='name') | sort
+      - backup_destinations | sort == (backup_tiers | product(backup_domains) | map('join', '-') | list) | sort
+      - backup_repositories | selectattr('password_file', 'undefined') | list | length == 0
+      - backup_repositories | selectattr('repository', 'undefined') | list | length == 0
+      - backup_repositories | selectattr('password', 'defined') | list | length == 0
+      - "'fixture' not in (backup_repositories | to_json | lower)"
+      - "'inmemorydestination' not in (backup_group_specs | to_json | lower)"
+      - "'dryrunrunner' not in (backup_group_specs | to_json | lower)"
+    fail_msg: >-
+      backup.yml is incomplete: every group needs a repository, every
+      repository a password file path, and no group may fall back to a fixture.
+    quiet: true
+
+- name: Require every repository password file under the root-only secret root
+  ansible.builtin.assert:
+    that:
+      - item.password_file is match('^' ~ (backup_password_root | regex_escape) ~ '/[a-z0-9-]+\.password$')
+    fail_msg: "{{ item.password_file }} must live under {{ backup_password_root }}"
+    quiet: true
+  loop: "{{ backup_repositories }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Require every recovery group to declare repositories and a cadence
+  ansible.builtin.assert:
+    that:
+      - item in backup_group_specs
+      - backup_group_specs[item].destination_tiers | length > 0
+      - backup_group_specs[item].destination_tiers | difference(backup_tiers) | length == 0
+      - backup_group_specs[item].cadence in backup_cadences
+    fail_msg: "backup_group_specs.{{ item }} is missing destinations or a cadence"
+    quiet: true
+  loop: "{{ backup_groups }}"
+
+- name: Keep pending groups honest until the host inventory models them
+  ansible.builtin.assert:
+    that:
+      - item | replace('-', '_') not in recovery_inventory
+      - backup_group_specs[item].members | length > 0
+    fail_msg: >-
+      {{ item }} is already in recovery_inventory or has no members; remove it
+      from backup_pending_host_groups and let the inventory derive it
+    quiet: true
+  loop: "{{ backup_pending_host_groups }}"
+
+- name: Require every derived group to exist in the host inventory
+  ansible.builtin.assert:
+    that:
+      - item | replace('-', '_') in recovery_inventory
+    fail_msg: "{{ item }} is neither in recovery_inventory nor pending"
+    quiet: true
+  loop: "{{ backup_groups | difference(backup_pending_host_groups) }}"
+
+- name: Require every dataset path to target the frozen snapshot directory
+  ansible.builtin.assert:
+    that:
+      - item.value.startswith('/')
+      - "'{snapshot}' in item.value"
+    fail_msg: "backup_dataset_paths.{{ item.key }} must be absolute and use {snapshot}"
+    quiet: true
+  loop: "{{ backup_dataset_paths | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+
+- name: Require both data and backup mount inventories
+  ansible.builtin.assert:
+    that:
+      - zfs_datasets | length > 0
+      - backup_mounts | length > 0
+    fail_msg: "zfs_datasets and backup_mounts must be defined; both are asserted by the unit"
+    quiet: true
+
+- name: Derive the backup cryptsetup units
+  ansible.builtin.set_fact:
+    backup_crypt_units: >-
+      {{ backup_mounts | map(attribute='source')
+         | map('regex_replace', '^/dev/mapper/', 'systemd-cryptsetup@')
+         | map('regex_replace', '$', '.service') | list }}
+
+- name: Create the backup and library directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ backup_owner }}"
+    group: "{{ item.group | default(backup_group) }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - { path: /opt/data-plane, mode: "0755" }
+    - { path: "{{ backup_libs_dir }}", mode: "{{ backup_libs_mode }}" }
+    - { path: /etc/homelab, mode: "0755" }
+    - { path: "{{ backup_manifest_dir }}", mode: "0750", group: "{{ backup_state_gid }}" }
+    - { path: "{{ backup_request_dir }}", mode: "0770", group: "{{ backup_state_gid }}" }
+    - { path: "{{ backup_request_archive }}", mode: "0770", group: "{{ backup_state_gid }}" }
+    - { path: /var/cache/restic-backup, mode: "0700" }
+  loop_control:
+    label: "{{ item.path }}"
+
+- name: Install the data-plane Python libraries
+  ansible.builtin.command:
+    argv:
+      - rsync
+      - --archive
+      - --delete
+      - --exclude=__pycache__
+      - --exclude=*.pyc
+      - "{{ role_path }}/../../../libs/"
+      - "{{ backup_libs_dir }}/"
+  register: backup_libs_sync
+  changed_when: backup_libs_sync.stdout | length > 0
+
+- name: Install the snapshotter launcher
+  ansible.builtin.template:
+    src: snapshotter.py.j2
+    dest: "{{ backup_snapshotter }}"
+    owner: "{{ backup_owner }}"
+    group: "{{ backup_group }}"
+    mode: "0755"
+
+- name: Install the request consumer
+  ansible.builtin.template:
+    src: snapshot-request.py.j2
+    dest: "{{ backup_request_consumer }}"
+    owner: "{{ backup_owner }}"
+    group: "{{ backup_group }}"
+    mode: "0750"
+
+- name: Install the SQLite checkpoint helper
+  ansible.builtin.copy:
+    src: checkpoint-sqlite.py
+    dest: /usr/local/sbin/homelab-checkpoint-sqlite
+    owner: "{{ backup_owner }}"
+    group: "{{ backup_group }}"
+    mode: "0750"
+
+- name: Render the non-secret host backup plan
+  ansible.builtin.template:
+    src: backup.json.j2
+    dest: "{{ backup_config_file }}"
+    owner: "{{ backup_owner }}"
+    group: "{{ backup_group }}"
+    mode: "{{ backup_config_mode }}"
+
+- name: Install the all-group snapshot unit
+  ansible.builtin.template:
+    src: snapshot.service.j2
+    dest: /etc/systemd/system/homelab-snapshot.service
+    owner: "{{ backup_owner }}"
+    group: "{{ backup_group }}"
+    mode: "{{ backup_unit_mode }}"
+  vars:
+    snapshot_description: "Fenced ZFS snapshot fan-out (all groups)"
+    snapshot_exec_args: ""
+  notify: Reload systemd
+
+- name: Install the scoped snapshot unit template
+  ansible.builtin.template:
+    src: snapshot.service.j2
+    dest: /etc/systemd/system/homelab-snapshot@.service
+    owner: "{{ backup_owner }}"
+    group: "{{ backup_group }}"
+    mode: "{{ backup_unit_mode }}"
+  vars:
+    snapshot_description: "Fenced ZFS snapshot fan-out (group %i)"
+    snapshot_exec_args: " --group %i"
+  notify: Reload systemd
+
+- name: Install one snapshot service per cadence
+  ansible.builtin.template:
+    src: snapshot.service.j2
+    dest: "/etc/systemd/system/homelab-snapshot-{{ item.key }}.service"
+    owner: "{{ backup_owner }}"
+    group: "{{ backup_group }}"
+    mode: "{{ backup_unit_mode }}"
+  vars:
+    snapshot_description: "Fenced ZFS snapshot fan-out ({{ item.key }} cadence)"
+    snapshot_exec_args: " --cadence {{ item.key }}"
+  loop: "{{ backup_cadences | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+  notify: Reload systemd
+
+- name: Install the daily safety sweep timer
+  ansible.builtin.template:
+    src: snapshot.timer.j2
+    dest: /etc/systemd/system/homelab-snapshot.timer
+    owner: "{{ backup_owner }}"
+    group: "{{ backup_group }}"
+    mode: "{{ backup_unit_mode }}"
+  vars:
+    snapshot_description: "Daily fenced snapshot sweep"
+    snapshot_calendar: "{{ backup_full_sweep_calendar }}"
+    snapshot_delay: 600
+    snapshot_unit: homelab-snapshot.service
+  notify: Reload systemd
+
+- name: Install one timer per cadence
+  ansible.builtin.template:
+    src: snapshot.timer.j2
+    dest: "/etc/systemd/system/homelab-snapshot-{{ item.key }}.timer"
+    owner: "{{ backup_owner }}"
+    group: "{{ backup_group }}"
+    mode: "{{ backup_unit_mode }}"
+  vars:
+    snapshot_description: "Snapshot cadence {{ item.key }}"
+    snapshot_calendar: "{{ item.value.calendar }}"
+    snapshot_delay: "{{ item.value.delay }}"
+    snapshot_unit: "homelab-snapshot-{{ item.key }}.service"
+  loop: "{{ backup_cadences | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+  notify: Reload systemd
+
+- name: Install the request path and consumer
+  ansible.builtin.template:
+    src: "{{ item.src }}"
+    dest: "{{ item.dest }}"
+    owner: "{{ backup_owner }}"
+    group: "{{ backup_group }}"
+    mode: "{{ backup_unit_mode }}"
+  loop:
+    - { src: snapshot.path.j2, dest: /etc/systemd/system/homelab-snapshot.path }
+    - { src: snapshot-request.service.j2, dest: /etc/systemd/system/homelab-snapshot-request.service }
+  loop_control:
+    label: "{{ item.dest }}"
+  notify: Reload systemd
+
+- name: Enable the snapshot timers and the request path
+  ansible.builtin.systemd_service:
+    name: "{{ item }}"
+    enabled: true
+    state: started
+    daemon_reload: true
+  loop: >-
+    {{ ['homelab-snapshot.timer', 'homelab-snapshot.path']
+       + (backup_cadences.keys() | map('regex_replace', '^', 'homelab-snapshot-')
+          | map('regex_replace', '$', '.timer') | list) }}
+  when: backup_timers_enabled | bool

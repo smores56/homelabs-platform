@@ -1,0 +1,20 @@
+---
+# Host unit that owns ZFS and the restic repositories. Data-plane pods request a
+# generation; they never receive the pool, the snapshot tooling, or a backup
+# key. Everything here is path-based or argv-based, never shell-interpolated.
+backup_python: /usr/bin/python3
+backup_snapshotter: /usr/local/sbin/snapshotter.py
+backup_request_consumer: /usr/local/sbin/homelab-snapshot-request
+backup_owner: root
+backup_group: root
+backup_libs_mode: "0755"
+backup_config_mode: "0640"
+backup_unit_mode: "0644"
+backup_service_timeout: 12h
+# Install does not start a backup timer on a plain convergence; the
+# `--tags backup` play starts them only after the migration gate passes.
+backup_timers_enabled: false
+# Manifests are written by this root unit and read by the unprivileged portal.
+# Request files are written by the in-cluster controller, so that directory is
+# group-writable for the data-plane service account and no wider.
+backup_state_gid: "{{ data_plane_state_gid | default(65532) }}"

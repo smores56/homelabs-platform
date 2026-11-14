@@ -49,29 +49,30 @@
   register: recovery_portal_unit_file
   when: not ansible_check_mode
 
-- name: Require the portal unit before tightening it
-  ansible.builtin.assert:
-    that:
-      - recovery_portal_unit_file.stat.exists
-    fail_msg: "{{ recovery_portal_unit }} is missing; apply roles/data_plane first"
-  when: not ansible_check_mode
+# The portal is a read-only view over generations, never a prerequisite for a
+# restore. Tighten it when it exists; skip it when the data-plane role has not
+# installed one yet.
+- name: Tighten the recovery portal when it is installed
+  when:
+    - not ansible_check_mode
+    - recovery_portal_unit_file.stat.exists | default(false) | bool
+  block:
+    - name: Create the portal drop-in directory
+      ansible.builtin.file:
+        path: "/etc/systemd/system/{{ recovery_portal_unit }}.d"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
 
-- name: Create the portal drop-in directory
-  ansible.builtin.file:
-    path: "/etc/systemd/system/{{ recovery_portal_unit }}.d"
-    state: directory
-    owner: root
-    group: root
-    mode: "0755"
-
-- name: Make the portal fail closed on missing backup repositories
-  ansible.builtin.template:
-    src: portal-dropin.conf.j2
-    dest: "/etc/systemd/system/{{ recovery_portal_unit }}.d/20-recovery.conf"
-    owner: root
-    group: root
-    mode: "0644"
-  notify: Reload systemd after recovery changes
+    - name: Make the portal fail closed on missing backup repositories
+      ansible.builtin.template:
+        src: portal-dropin.conf.j2
+        dest: "/etc/systemd/system/{{ recovery_portal_unit }}.d/20-recovery.conf"
+        owner: root
+        group: root
+        mode: "0644"
+      notify: Reload systemd after recovery changes
 
 - name: Install the recovery check unit
   ansible.builtin.template:

@@ -1,4 +1,7 @@
 ---
-zfs_import_service: zfs-import-cache.service
+# Both import units run on some Ubuntu/OpenZFS combinations; the encrypted
+# volume must be open before either one scans.
+zfs_import_cache_service: zfs-import-cache.service
+zfs_import_scan_service: zfs-import-scan.service
 zfs_mount_service: zfs-mount.service
 zfs_systemd_dir: /etc/systemd/system

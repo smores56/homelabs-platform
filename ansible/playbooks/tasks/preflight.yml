@@ -1,15 +1,111 @@
 ---
 # Fail-closed inventory validation shared by site.yml and check.yml. Every
-# assertion runs before a role can touch a host.
+# assertion runs before a role can touch a host. Import the file with
+# `tags: [always]` so `--tags destructive`, `--tags writers`, and `--tags
+# backup` still pass through it.
 
-- name: Require a usable timezone and boolean gates
+- name: Require a usable timezone, an admin inventory, and the retired gate absent
   ansible.builtin.assert:
     that:
       - homelab_timezone | length > 0
-      - homelab_destructive_confirm is boolean
       - homelab_admin_users is sequence
-    fail_msg: "group_vars/all.yml is incomplete; see ansible/README.md"
+      - homelab_admin_users is not string
+      - homelab_admin_users | length > 0
+      # The old scalar unlocked every disk on every host. It is retired; a
+      # leftover value in group_vars must stop the run, not be ignored.
+      - homelab_destructive_confirm is not defined
+    fail_msg: >-
+      group_vars/all.yml is incomplete or still sets the retired destructive
+      boolean; use homelab_destructive_device_ids and the migration evidence.
     quiet: true
+
+- name: Require every administrator to be sudo-capable with a key source
+  ansible.builtin.assert:
+    that:
+      - item.name is defined and item.name is match('^[a-z_][a-z0-9_-]{0,31}$')
+      - item.groups is not defined or item.groups is sequence
+      - homelab_admin_group in (item.groups | default([homelab_admin_group]))
+      - (item.ssh_authorized_keys | default([])) | length > 0 or item.authorized_keys is defined
+      - item.authorized_keys is not defined or item.authorized_keys is match('^/')
+    fail_msg: >-
+      homelab_admin_users must name a sudo-capable account with either an
+      ssh_authorized_keys list or an authorized_keys file path.
+    quiet: true
+  loop: "{{ homelab_admin_users }}"
+  loop_control:
+    label: "{{ item.name | default('unnamed') }}"
+
+- name: Check the operator-supplied key files on the controller
+  ansible.builtin.stat:
+    path: "{{ item.authorized_keys }}"
+  delegate_to: localhost
+  loop: "{{ homelab_admin_users | selectattr('authorized_keys', 'defined') | list }}"
+  loop_control:
+    label: "{{ item.name | default('unnamed') }}"
+  register: homelab_admin_key_source_stat
+  when: item.authorized_keys is defined
+
+- name: Require every authorized_keys file to exist and hold a public key
+  ansible.builtin.assert:
+    that:
+      - item.stat.exists | default(false) | bool
+      - item.stat.size | default(0) | int > 0
+    fail_msg: >-
+      The public-key file on the controller is missing or empty; sshd would
+      enable no login path.
+    quiet: true
+  loop: "{{ homelab_admin_key_source_stat.results | default([]) }}"
+  when: not (item.skipped | default(false))
+
+- name: Require the SSH allow-list to name groups the administrators hold
+  ansible.builtin.assert:
+    that:
+      - homelab_ssh_allow_groups is sequence
+      - homelab_ssh_allow_groups is not string
+      - homelab_ssh_allow_groups | length > 0
+      - homelab_admin_group in (homelab_admin_users
+        | map(attribute='groups', default=[homelab_admin_group]) | flatten | unique)
+      - homelab_ssh_allow_groups | difference(homelab_admin_users
+        | map(attribute='groups', default=[homelab_admin_group]) | flatten | unique)
+        | length == 0
+    fail_msg: >-
+      homelab_ssh_allow_groups names a group no admin account belongs to; the
+      hardened sshd would allow nobody.
+    quiet: true
+
+- name: Validate the per-host destructive device allow-list
+  ansible.builtin.assert:
+    that:
+      - homelab_destructive_device_ids is sequence
+      - homelab_destructive_device_ids is not string
+      - homelab_destructive_device_ids | unique | length
+        == (homelab_destructive_device_ids | length)
+      - homelab_destructive_device_ids | select('string') | list | length
+        == (homelab_destructive_device_ids | length)
+      - homelab_destructive_device_ids | reject('match', '^/dev/disk/by-id/')
+        | list | length == 0
+    fail_msg: >-
+      homelab_destructive_device_ids must be a unique list of
+      /dev/disk/by-id/ paths on each host; no global boolean can replace it.
+    quiet: true
+
+- name: Require the migration evidence before a destructive run
+  when:
+    - "'destructive' in ansible_run_tags"
+    - inventory_hostname in groups.get('storage_hosts', [])
+  block:
+    - name: Require at least one allow-listed device
+      ansible.builtin.assert:
+        that:
+          - homelab_destructive_device_ids | length > 0
+        fail_msg: >-
+          A destructive run needs at least one homelab_destructive_device_ids
+          entry for {{ inventory_hostname }}.
+        quiet: true
+
+    - name: Run the shared migration evidence gate
+      ansible.builtin.include_tasks: migration-gate.yml
+      tags: [always]
 
 - name: Validate the encrypted volume layout on storage hosts
   when: inventory_hostname in groups.get('storage_hosts', [])
@@ -28,6 +124,11 @@
           - item.keyfile is match('^/')
           - item.auto is boolean
           - "'nofail' not in (item.options | default('luks,discard'))"
+          # A destructive entry must itself be allow-listed and describe the
+          # hardware it expects, so a swapped disk cannot be formatted.
+          - "'destructive' not in ansible_run_tags or item.device in homelab_destructive_device_ids"
+          - "'destructive' not in ansible_run_tags or item.size_bytes is defined"
+          - "'destructive' not in ansible_run_tags or item.serial is defined or item.wwn is defined"
         fail_msg: "Invalid luks_volumes entry {{ item.name | default('unnamed') }}; check README.md"
         quiet: true
       loop: "{{ luks_volumes }}"

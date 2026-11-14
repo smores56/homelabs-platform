@@ -119,6 +119,33 @@ class ZfsSnapshotterTests(unittest.TestCase):
         self.assertTrue(all(value.endswith("@dp-19700101T000000Z") for value in mapping.values()))
         self.assertEqual(runner.commands[0].argv[:3], ("zfs", "snapshot", "-r"))
 
+    def test_sibling_members_each_get_a_recursive_snapshot(self):
+        runner = ScriptedRunner([])
+        snapshotter = ZfsSnapshotter(
+            group_datasets={
+                "state": (
+                    "tank/data/events",
+                    "tank/data/manifests",
+                    "tank/data/events/wal",
+                )
+            },
+            runner=runner,
+            clock=lambda: 0.0,
+            snapshot_prefix="dp",
+        )
+        mapping = snapshotter.snapshot("state")
+        self.assertEqual(
+            set(mapping),
+            {"tank/data/events", "tank/data/manifests", "tank/data/events/wal"},
+        )
+        self.assertEqual(
+            [command.argv for command in runner.commands],
+            [
+                ("zfs", "snapshot", "-r", "tank/data/events@dp-19700101T000000Z"),
+                ("zfs", "snapshot", "-r", "tank/data/manifests@dp-19700101T000000Z"),
+            ],
+        )
+
     def test_hooks_run_and_fail_closed(self):
         runner = ScriptedRunner([])
         snapshotter = ZfsSnapshotter(

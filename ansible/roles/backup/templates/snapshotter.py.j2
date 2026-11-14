@@ -1,0 +1,15 @@
+#!/usr/bin/python3
+"""Install the fan-out factory as the host oneshot entrypoint.
+
+Thin launcher only: the implementation (and its tests) lives in
+``/opt/data-plane/libs/data_plane/backup/factory.py``, copied from libs/.
+"""
+
+import sys
+
+sys.path.insert(0, "{{ backup_libs_dir }}")
+
+from data_plane.backup.factory import main  # noqa: E402
+
+if __name__ == "__main__":
+    raise SystemExit(main())

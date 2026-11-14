@@ -1,0 +1,291 @@
+---
+# Backup inventory for the storage/data-plane host. This file is data, not code:
+# it names repositories, destinations, cadences, and argv-only hooks. No secret
+# ever belongs here; a repository references a root-only password *file*.
+#
+# One source for dataset layout: host group membership is derived from
+# `recovery_inventory` and `zfs_datasets` in group_vars/all.yml. This file only
+# adds backup policy (writer, destinations, cadence, argv). A group listed in
+# `backup_pending_host_groups` declares its own members because the host
+# inventory does not model those datasets yet; remove it from that list once
+# all.yml gains them, or the renderer refuses to run.
+#
+# `deploy/data-plane/config/recovery-groups.json` and the host
+# `/etc/homelab/backup.json` are both rendered from these variables by
+# scripts/render-recovery-groups.py and roles/backup; tests/data-plane/
+# test_inventory_contract.py fails when the checked-in JSON drifts.
+
+# Repositories are split by data domain: personal, general, and infrastructure
+# data never share a key, an administration policy, or a compromise boundary.
+# Paths under /var/backups are the LUKS-backed local tiers; r2 is the operational
+# off-site tier. Override the r2 URL and password files from inventory.
+backup_domains:
+  - personal
+  - general
+  - infrastructure
+
+backup_tiers:
+  - nvme
+  - hdd
+  - r2
+
+backup_repositories:
+  - name: nvme-personal
+    domain: personal
+    repository: /var/backups/primary/restic-personal
+    password_file: /etc/homelab/secrets/restic/nvme-personal.password
+    host: smortress
+    tag: data-plane
+  - name: nvme-general
+    domain: general
+    repository: /var/backups/primary/restic-general
+    password_file: /etc/homelab/secrets/restic/nvme-general.password
+    host: smortress
+    tag: data-plane
+  - name: nvme-infrastructure
+    domain: infrastructure
+    repository: /var/backups/primary/restic-infrastructure
+    password_file: /etc/homelab/secrets/restic/nvme-infrastructure.password
+    host: smortress
+    tag: data-plane
+  - name: hdd-personal
+    domain: personal
+    repository: /var/backups/secondary/restic-personal
+    password_file: /etc/homelab/secrets/restic/hdd-personal.password
+    host: smortress
+    tag: data-plane
+  - name: hdd-general
+    domain: general
+    repository: /var/backups/secondary/restic-general
+    password_file: /etc/homelab/secrets/restic/hdd-general.password
+    host: smortress
+    tag: data-plane
+  - name: hdd-infrastructure
+    domain: infrastructure
+    repository: /var/backups/secondary/restic-infrastructure
+    password_file: /etc/homelab/secrets/restic/hdd-infrastructure.password
+    host: smortress
+    tag: data-plane
+  - name: r2-personal
+    domain: personal
+    repository: s3:https://ACCOUNT.r2.cloudflarestorage.com/homelab-restic-personal
+    password_file: /etc/homelab/secrets/restic/r2-personal.password
+    host: smortress
+    tag: data-plane
+  - name: r2-general
+    domain: general
+    repository: s3:https://ACCOUNT.r2.cloudflarestorage.com/homelab-restic-general
+    password_file: /etc/homelab/secrets/restic/r2-general.password
+    host: smortress
+    tag: data-plane
+  - name: r2-infrastructure
+    domain: infrastructure
+    repository: s3:https://ACCOUNT.r2.cloudflarestorage.com/homelab-restic-infrastructure
+    password_file: /etc/homelab/secrets/restic/r2-infrastructure.password
+    host: smortress
+    tag: data-plane
+
+# Destination names are `<tier>-<domain>`: one restic repository per pair.
+backup_destinations: "{{ backup_repositories | map(attribute='name') | list }}"
+
+# Groups whose datasets are not in zfs_datasets yet. They are declared here with
+# explicit members so a host apply cannot silently skip them. Delete an entry
+# only when all.yml classifies the same datasets.
+backup_pending_host_groups:
+  - data-plane-state
+  - browsing
+  - finance
+  - mail
+
+# `backup_groups` is the ordered list of group ids the host unit and the cluster
+# controller reference. Host groups derive from recovery_inventory (hyphenated);
+# pending groups are appended in the order above.
+backup_groups: >-
+  {{ (recovery_inventory.keys() | list | map('regex_replace', '_', '-') | list)
+     + backup_pending_host_groups }}
+
+# Writer, cadence, and hooks per group. Derived groups take membership from
+# zfs_datasets; pending groups declare `members` explicitly. `databases` stays
+# empty until a checkpoint metadata provider ships with the host unit, because
+# declaring a database without metadata fails closed at snapshot time.
+backup_group_specs:
+  books:
+    writer: opdshelf
+    destination_tiers: [nvme, hdd, r2]
+    cadence: media
+    databases: []
+    fence: []
+    checkpoint: []
+    resume: []
+  memory-external:
+    writer: external-profile
+    destination_tiers: [nvme, hdd, r2]
+    cadence: small
+    databases: []
+    fence: []
+    checkpoint: []
+    resume: []
+  memory-local:
+    writer: local-profile
+    destination_tiers: [nvme, hdd, r2]
+    cadence: small
+    databases: []
+    fence: []
+    checkpoint: []
+    resume: []
+  music:
+    writer: navidrome
+    destination_tiers: [nvme, hdd, r2]
+    cadence: media
+    databases: []
+    fence: []
+    checkpoint: []
+    resume: []
+  notes:
+    writer: syncthing
+    destination_tiers: [nvme, hdd, r2]
+    cadence: small
+    databases: []
+    fence: []
+    checkpoint: []
+    resume: []
+  photos:
+    writer: immich-server
+    destination_tiers: [nvme, hdd, r2]
+    cadence: media
+    databases: []
+    fence: []
+    checkpoint: []
+    resume: []
+  wallpapers:
+    writer: syncthing
+    destination_tiers: [nvme, hdd, r2]
+    cadence: media
+    databases: []
+    fence: []
+    checkpoint: []
+    resume: []
+  data-plane-state:
+    visibility: infrastructure
+    writer: event-service
+    parent_dataset: tank/data-plane
+    destination_tiers: [nvme, hdd, r2]
+    cadence: small
+    databases: []
+    fence: []
+    checkpoint:
+      - [python3, /usr/local/sbin/homelab-checkpoint-sqlite, /var/lib/data-plane/events/events.sqlite]
+      - [python3, /usr/local/sbin/homelab-checkpoint-sqlite, /var/lib/data-plane/intents/intents.sqlite]
+    resume: []
+    members:
+      - name: event-log
+        dataset: tank/data-plane/event-log
+        mount: /var/lib/data-plane/events
+        writer: event-service
+      - name: manifests
+        dataset: tank/data-plane/manifests
+        mount: /var/lib/data-plane/manifests
+        writer: backup-controller
+      - name: intents
+        dataset: tank/data-plane/intents
+        mount: /var/lib/data-plane/intents
+        writer: write-broker
+  browsing:
+    visibility: personal
+    writer: collector-brave
+    parent_dataset: tank/browsing
+    destination_tiers: [nvme, hdd, r2]
+    cadence: small
+    databases: []
+    fence: []
+    checkpoint: []
+    resume: []
+    members:
+      - name: catalog
+        dataset: tank/browsing/catalog
+        mount: /var/lib/data-plane/browsing
+        writer: collector-brave
+      - name: raw
+        dataset: tank/browsing/raw
+        mount: /srv/browsing
+        writer: collector-brave
+  finance:
+    visibility: personal
+    writer: collector-finance
+    parent_dataset: tank/finance
+    destination_tiers: [nvme, hdd, r2]
+    cadence: small
+    databases: []
+    fence: []
+    checkpoint: []
+    resume: []
+    members:
+      - name: ledger
+        dataset: tank/finance/ledger
+        mount: /srv/finance
+        writer: collector-finance
+      - name: hledger
+        dataset: tank/finance/hledger
+        mount: /var/lib/data-plane/hledger
+        writer: finance-projection
+  mail:
+    visibility: personal
+    writer: collector-tuta
+    parent_dataset: tank/mail
+    destination_tiers: [nvme, hdd, r2]
+    cadence: small
+    databases: []
+    fence: []
+    checkpoint: []
+    resume: []
+    members:
+      - name: messages
+        dataset: tank/mail/messages
+        mount: /srv/mail
+        writer: collector-tuta
+      - name: index
+        dataset: tank/mail/index
+        mount: /var/cache/mail-index
+        writer: mail-indexer
+
+# Restic reads the frozen snapshot through the dataset's own hidden snapshot
+# directory. `{snapshot}` is substituted with the ZFS snapshot name per run;
+# never a static path, or two generations would read the same bytes.
+backup_dataset_paths:
+  tank/books: /srv/books/.zfs/snapshot/{snapshot}
+  tank/memory/external: /srv/memory/external/.zfs/snapshot/{snapshot}
+  tank/memory/local: /srv/memory/local/.zfs/snapshot/{snapshot}
+  tank/music: /srv/music/.zfs/snapshot/{snapshot}
+  tank/notes: /srv/notes/.zfs/snapshot/{snapshot}
+  tank/photos: /srv/photos/.zfs/snapshot/{snapshot}
+  tank/wallpapers: /srv/wallpapers/.zfs/snapshot/{snapshot}
+  tank/data-plane/event-log: /var/lib/data-plane/events/.zfs/snapshot/{snapshot}
+  tank/data-plane/manifests: /var/lib/data-plane/manifests/.zfs/snapshot/{snapshot}
+  tank/data-plane/intents: /var/lib/data-plane/intents/.zfs/snapshot/{snapshot}
+  tank/browsing/catalog: /var/lib/data-plane/browsing/.zfs/snapshot/{snapshot}
+  tank/browsing/raw: /srv/browsing/.zfs/snapshot/{snapshot}
+  tank/finance/ledger: /srv/finance/.zfs/snapshot/{snapshot}
+  tank/finance/hledger: /var/lib/data-plane/hledger/.zfs/snapshot/{snapshot}
+  tank/mail/messages: /srv/mail/.zfs/snapshot/{snapshot}
+  tank/mail/index: /var/cache/mail-index/.zfs/snapshot/{snapshot}
+
+# Host paths for the snapshot unit and its request consumer. The manifest
+# directory is the same claim the in-cluster backup-controller watches.
+backup_state_root: /var/lib/data-plane
+backup_manifest_dir: /var/lib/homelab/backup-controller/manifests
+backup_request_dir: /var/lib/data-plane/requests
+backup_request_archive: /var/lib/data-plane/requests-archive
+backup_config_file: /etc/homelab/backup.json
+backup_libs_dir: /opt/data-plane/libs
+backup_password_root: /etc/homelab/secrets/restic
+
+# Cadences are systemd OnCalendar expressions. Small control state lands inside
+# 15 minutes; media groups are hourly. The daily sweep is a catch-all.
+backup_cadences:
+  small:
+    calendar: "*-*-* *:00/15:00"
+    delay: 120
+  media:
+    calendar: "*-*-* *:05:00"
+    delay: 300
+backup_full_sweep_calendar: "*-*-* 03:30:00"

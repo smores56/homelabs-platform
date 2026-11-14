@@ -1,0 +1,11 @@
+[Unit]
+Description=Timer for {{ snapshot_description }}
+
+[Timer]
+OnCalendar={{ snapshot_calendar }}
+RandomizedDelaySec={{ snapshot_delay | default(300) }}
+Persistent=true
+Unit={{ snapshot_unit }}
+
+[Install]
+WantedBy=timers.target

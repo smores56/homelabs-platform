@@ -10,14 +10,19 @@
 homelab_timezone: Etc/UTC
 
 homelab_admin_group: sudo
-# Each entry: name, groups (optional), shell (optional), ssh_authorized_keys.
-# Public keys only. Example:
+# Each entry: name, groups (optional), shell (optional), and either an inline
+# ssh_authorized_keys list or an authorized_keys path to a public-key file on
+# the controller (public keys only, never a private key):
 # homelab_admin_users:
 #   - name: smores
 #     groups: [sudo]
 #     shell: /bin/bash
 #     ssh_authorized_keys:
 #       - ssh-ed25519 AAAA... operator@laptop
+#   - name: rescue
+#     authorized_keys: /etc/homelab/rescue/smores.pub
+# Every account must be in homelab_admin_group (sudo) and carry a usable key;
+# the playbooks fail closed before writing an AllowGroups drop-in otherwise.
 homelab_admin_users: []
 
 homelab_base_packages:
@@ -58,6 +63,9 @@ homelab_journald:
   SystemKeepFree: 4G
   SystemMaxUse: 1G
 
+# The drop-in only ever names groups the admin accounts actually hold; base
+# intersects this list with their real groups. A stale entry fails the run
+# instead of silently locking sshd down to a group nobody is in.
 homelab_ssh_port: 22
 homelab_ssh_allow_groups:
   - sudo
@@ -72,9 +80,48 @@ homelab_unattended_origins:
   - "${distro_id}ESM:${distro_codename}-infra-security"
 homelab_unattended_package_blacklist: []
 
-# The single gate for disk-destructive tasks. Playbooks require both
-# `--tags destructive` and `-e homelab_destructive_confirm=true`.
-homelab_destructive_confirm: false
+# --------------------------------------------------------------------------
+# Destructive disk gate
+# --------------------------------------------------------------------------
+# There is no global boolean. A host may only touch the specific devices its
+# own allow-list names, and only under `--tags destructive` with a reviewed
+# migration evidence file. Each entry is a stable /dev/disk/by-id path, whose
+# name already encodes the serial or WWN; LUKS volume entries additionally
+# declare the expected serial/WWN and size.
+homelab_destructive_device_ids: []
+
+# Raw evidence file for `python3 -m data_plane.migration preflight`, on the
+# controller. The Ansible gate re-runs the shared preflight over it and requires
+# fresh verified backups on every required destination, a scratch restore, a
+# boot-tested non-wiped 970, and two independent verified SSH paths. Pass it
+# with -e homelab_migration_evidence=/abs/path/evidence.json.
+homelab_migration_evidence: ""
+homelab_migration_libs_dir: "{{ (playbook_dir | dirname | dirname) ~ '/libs' }}"
+
+# The 970 rollback disk. Never a target while it is the rollback path; the
+# evidence must mark it released before it can appear in the allow-list.
+homelab_rollback_disk_device: ""
+
+# Units the recovery playbook fences and only re-enables after a verified
+# restore. The backup timer is fenced with them so no writer touches a target
+# mid-restore.
+homelab_writer_units:
+  - homelab-write-broker.service
+  - homelab-event-service.service
+  - homelab-collector-relay.service
+homelab_backup_timer: homelab-backup-controller.timer
+homelab_writer_fence: "{{ data_plane_run_root }}/writers-fenced"
+
+# Recovery playbook knobs. Restores always go to a scratch directory; the live
+# target is only reachable behind an explicit allow-live override, and writers
+# are re-enabled only after the scratch restore verifies.
+homelab_recovery_allow_live: false
+homelab_recovery_resume_writers: true
+homelab_recovery_scratch_target: /mnt/recovery-scratch
+homelab_recovery_required_destinations:
+  - primary
+  - secondary
+  - r2
 
 # --------------------------------------------------------------------------
 # Rescue access
@@ -102,6 +149,13 @@ rescue_verify_timeout: 10
 # prints a passphrase. Each container carries the keyfile slot (root-only) plus
 # an offline passphrase slot that the operator adds once from Bitwarden. The
 # `noauto` crypttab option is derived from `auto: false`.
+#
+# Destructive runs additionally require, per entry: serial or wwn, size_bytes,
+# and membership of `device` in homelab_destructive_device_ids. Optional keys:
+#   allow_existing: true   accept a device that already carries a filesystem
+#   manage_crypttab: false never write this volume into the managed block
+# Before any inner filesystem or pool is created, the container must carry at
+# least two keyslots and a root-only header backup at <luks_keyfile_dir>/<name>.header.
 luks_volumes: []
 luks_keyfile_dir: /etc/luks
 

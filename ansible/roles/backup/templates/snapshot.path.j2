@@ -1,0 +1,11 @@
+[Unit]
+Description=Watch for out-of-band snapshot and flush requests
+Documentation=file:{{ backup_config_file }}
+
+[Path]
+DirectoryNotEmpty={{ backup_request_dir }}
+Unit=homelab-snapshot-request.service
+MakeDirectory=no
+
+[Install]
+WantedBy=paths.target

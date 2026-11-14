@@ -1,6 +1,14 @@
 ---
 homelab_ssh_service: ssh
 homelab_ssh_dropin: /etc/ssh/sshd_config.d/99-homelab-hardening.conf
+# The pristine config captured before the first Ansible-managed change. force
+# stays false, so a later run cannot overwrite the pre-hardening rescue copy.
+homelab_ssh_backup: /etc/ssh/sshd_config.d/.99-homelab-hardening.conf.pre-ansible
+homelab_ssh_revert_script: /usr/local/sbin/homelab-ssh-revert
+homelab_ssh_revert_seconds: 300
+# Touch this after a successful login; the transient revert unit restores the
+# previous sshd configuration if it is still absent when the timer fires.
+homelab_ssh_confirmation_marker: /run/homelab-ssh-confirmed
 homelab_journald_dropin: /etc/systemd/journald.conf.d/90-homelab.conf
 homelab_unattended_auto_upgrades: /etc/apt/apt.conf.d/20auto-upgrades
 homelab_unattended_config: /etc/apt/apt.conf.d/50unattended-upgrades

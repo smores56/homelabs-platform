@@ -19,6 +19,7 @@
 
     - name: Import the fail-closed preflight assertions
       ansible.builtin.import_tasks: tasks/preflight.yml
+      tags: [always]
 
     - name: Report the host's provisioning state
       ansible.builtin.stat:

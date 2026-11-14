@@ -1,0 +1,74 @@
+#!/usr/bin/python3
+"""Apply the retention policy to every declared repository, argv only.
+
+Installed by roles/restic from the same variables Ansible validated. No
+password is ever placed on argv or in the environment: restic opens the
+root-only password file itself.
+"""
+
+from __future__ import annotations
+
+import os
+import subprocess
+import sys
+
+RESTIC = {{ restic_binary | to_json }}
+REPOSITORIES = {{ backup_repositories | to_json }}
+RETENTION = {{ restic_retention | to_json }}
+
+
+def forget_argv(repository: dict) -> list[str]:
+    """Build the exact retention argv. Kept pure so it is easy to inspect."""
+
+    return [
+        RESTIC,
+        "forget",
+        "--prune",
+        "--repo",
+        repository["repository"],
+        "--password-file",
+        repository["password_file"],
+        "--host",
+        repository.get("host", "data-plane"),
+        "--tag",
+        repository.get("tag", "data-plane"),
+        "--keep-daily",
+        str(RETENTION["daily"]),
+        "--keep-weekly",
+        str(RETENTION["weekly"]),
+        "--keep-monthly",
+        str(RETENTION["monthly"]),
+    ]
+
+
+def run(repository: dict) -> int:
+    environment = {
+        key: value
+        for key, value in os.environ.items()
+        if key not in {"RESTIC_PASSWORD", "RESTIC_REPOSITORY", "RESTIC_PASSWORD_FILE"}
+    }
+    completed = subprocess.run(
+        forget_argv(repository),
+        capture_output=True,
+        text=True,
+        check=False,
+        env=environment,
+    )
+    if completed.returncode != 0:
+        print(
+            f"restic-retention: {repository.get('name', '?')}: "
+            f"{completed.stderr.strip()[:400]}",
+            file=sys.stderr,
+        )
+    return completed.returncode
+
+
+def main() -> int:
+    failures = 0
+    for repository in REPOSITORIES:
+        failures += 1 if run(repository) else 0
+    return 1 if failures else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

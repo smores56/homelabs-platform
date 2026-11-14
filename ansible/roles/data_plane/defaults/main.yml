@@ -33,6 +33,9 @@ data_plane_services:
     description: Authoritative write broker for general sources
     image_key: write_broker
     type: simple
+    # Writers are never started by a plain convergence run. site.yml starts this
+    # unit only under `--tags writers` after the migration evidence gate.
+    writer: true
     args: ["broker"]
     ports:
       - "127.0.0.1:7102:7102"

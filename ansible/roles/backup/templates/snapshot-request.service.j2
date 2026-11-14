@@ -1,0 +1,23 @@
+[Unit]
+Description=Consume snapshot request files and start the scoped oneshot
+Documentation=file:{{ backup_config_file }}
+After=homelab-snapshot.path
+ConditionDirectoryNotEmpty={{ backup_request_dir }}
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+ExecStart={{ backup_python }} {{ backup_request_consumer }} --config {{ backup_config_file }} --request-dir {{ backup_request_dir }} --archive-dir {{ backup_request_archive }}
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictAddressFamilies=AF_UNIX AF_NETLINK
+ReadWritePaths={{ backup_request_dir }} {{ backup_request_archive }}
+StandardOutput=journal
+StandardError=journal

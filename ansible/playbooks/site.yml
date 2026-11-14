@@ -1,11 +1,19 @@
 ---
 # Bring a host from a signed Ubuntu autoinstall to the data-plane baseline.
-# Run `playbooks/check.yml --check --diff` first. Disk-destructive tasks carry
-# the `destructive` tag and additionally require homelab_destructive_confirm.
+#
+# Order is deliberate: prove SSH first, validate the inventory and the
+# destructive gate second, then touch base, storage, and k3s. A plain run never
+# starts the write broker or the backup timer; those are explicit, evidenced
+# steps (`--tags writers`, `--tags backup`). Run
+# `playbooks/check.yml --check --diff` before a real convergence.
 
-- name: Validate the inventory before any role runs
+- name: Install and prove the independent rescue paths
+  ansible.builtin.import_playbook: rescue.yml
+
+- name: Validate the inventory and the destructive gate before any role runs
   hosts: all
   gather_facts: true
+  tags: [always]
   tasks:
     - name: Import the fail-closed preflight assertions
       ansible.builtin.import_tasks: tasks/preflight.yml
@@ -35,6 +43,14 @@
   roles:
     - storage
 
+- name: Install the pinned restic repositories and the host snapshot units
+  hosts: storage_hosts
+  vars_files:
+    - ../group_vars/backup.yml
+  roles:
+    - restic
+    - backup
+
 - name: Install the pinned k3s node
   hosts: k3s_servers:k3s_agents
   roles:
@@ -45,8 +61,53 @@
   roles:
     - kata
 
-- name: Install the data-plane units and timers
+- name: Install the data-plane units and timers without starting the writers
   hosts: data_plane_hosts
+  vars_files:
+    - ../group_vars/backup.yml
   roles:
     - data_plane
     - recovery
+
+- name: Start the data-plane writers behind the migration gate
+  hosts: data_plane_hosts
+  gather_facts: false
+  tags: [writers]
+  tasks:
+    - name: Require the migration evidence before enabling writers
+      ansible.builtin.include_tasks: tasks/migration-gate.yml
+
+    - name: Start the write broker
+      ansible.builtin.systemd_service:
+        name: homelab-write-broker.service
+        enabled: true
+        state: started
+        daemon_reload: true
+
+- name: Start the backup timer behind the migration gate
+  hosts: data_plane_hosts
+  gather_facts: false
+  tags: [backup]
+  vars_files:
+    - ../group_vars/backup.yml
+  tasks:
+    - name: Require the migration evidence before enabling backups
+      ansible.builtin.include_tasks: tasks/migration-gate.yml
+
+    - name: Start the backup controller timer
+      ansible.builtin.systemd_service:
+        name: homelab-backup-controller.timer
+        enabled: true
+        state: started
+        daemon_reload: true
+
+    - name: Start the host snapshot timers and request path
+      ansible.builtin.systemd_service:
+        name: "{{ item }}"
+        enabled: true
+        state: started
+        daemon_reload: true
+      loop: >-
+        {{ ['homelab-snapshot.timer', 'homelab-snapshot.path']
+           + (backup_cadences.keys() | map('regex_replace', '^', 'homelab-snapshot-')
+              | map('regex_replace', '$', '.timer') | list) }}

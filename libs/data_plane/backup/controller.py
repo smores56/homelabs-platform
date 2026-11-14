@@ -13,7 +13,7 @@ import math
 import re
 import time
 from collections.abc import Iterable, Mapping
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Protocol
 
@@ -26,6 +26,70 @@ from .generations import (
     SnapshotRef,
     write_manifest,
 )
+
+
+@dataclass(frozen=True)
+class GroupMetadata:
+    """Consistency and provenance facts captured at the checkpoint boundary.
+
+    ``sqlite`` rows are ``(database, epoch, position)``: the writer epoch and
+    durable cursor at the moment the group was checkpointed. A group that
+    declares a database must supply one row per declaration, otherwise restore
+    cannot tell which epoch a snapshot belongs to.
+    """
+
+    sqlite: tuple[tuple[str, int, int], ...] = ()
+    content_hashes: tuple[tuple[str, str], ...] = ()
+    app_versions: tuple[tuple[str, str], ...] = ()
+    dependencies: tuple[str, ...] = ()
+
+
+class MetadataProvider(Protocol):
+    """Collects manifest metadata for a fenced group.
+
+    Implementations must be side-effect free: they run after checkpoint and
+    before the snapshot, while writers are still fenced.
+    """
+
+    def collect(self, group_id: str) -> GroupMetadata | Mapping[str, object]:
+        """Return the group's checkpoint metadata."""
+
+
+def _coerce_metadata(
+    group_id: str, value: GroupMetadata | Mapping[str, object]
+) -> GroupMetadata:
+    if isinstance(value, GroupMetadata):
+        return value
+    if not isinstance(value, Mapping):
+        raise ManifestError(
+            f"metadata for group {group_id!r} is not a GroupMetadata or mapping"
+        )
+    try:
+        sqlite = tuple(
+            (str(name), int(epoch), int(position))
+            for name, epoch, position in value.get("sqlite", ())
+        )
+        content_hashes = tuple(
+            (str(path), str(digest))
+            for path, digest in value.get("content_hashes", ())
+        )
+        app_versions = tuple(
+            (str(name), str(version))
+            for name, version in value.get("app_versions", ())
+        )
+        dependencies = tuple(
+            str(item) for item in value.get("dependencies", ())
+        )
+    except (TypeError, ValueError) as exc:
+        raise ManifestError(
+            f"malformed metadata for group {group_id!r}: {exc}"
+        ) from exc
+    return GroupMetadata(
+        sqlite=sqlite,
+        content_hashes=content_hashes,
+        app_versions=app_versions,
+        dependencies=dependencies,
+    )
 
 
 class Snapshotter(Protocol):
@@ -61,6 +125,8 @@ class FanoutController:
         *,
         schema_version: int = MANIFEST_VERSION,
         release: str = "",
+        metadata_provider: MetadataProvider | None = None,
+        declared_databases: Mapping[str, Iterable[str]] | None = None,
     ) -> None:
         self._snapshotter = snapshotter
         self._destinations = self._destination_map(destinations)
@@ -68,6 +134,11 @@ class FanoutController:
         self._clock = clock
         self._schema_version = schema_version
         self._release = release
+        self._metadata_provider = metadata_provider
+        self._declared_databases = {
+            str(group_id): tuple(names)
+            for group_id, names in (declared_databases or {}).items()
+        }
 
     @staticmethod
     def _destination_map(
@@ -89,6 +160,28 @@ class FanoutController:
         if isinstance(group, RecoveryGroup):
             return group.group_id
         return str(group)
+
+    def _metadata(self, group_id: str) -> GroupMetadata:
+        """Collect and validate metadata after checkpoint, before snapshot."""
+
+        declared = self._declared_databases.get(group_id, ())
+        if not declared and self._metadata_provider is None:
+            return GroupMetadata()
+        if self._metadata_provider is None:
+            raise ManifestError(
+                f"group {group_id!r} declares databases {sorted(declared)} "
+                "but no metadata provider is configured"
+            )
+        metadata = _coerce_metadata(
+            group_id, self._metadata_provider.collect(group_id)
+        )
+        missing = sorted(set(declared) - {name for name, _, _ in metadata.sqlite})
+        if missing:
+            raise ManifestError(
+                f"group {group_id!r} declares databases without checkpoint "
+                "metadata: " + ", ".join(missing)
+            )
+        return metadata
 
     def run(
         self,
@@ -123,6 +216,7 @@ class FanoutController:
         self._snapshotter.fence(group_id)
         try:
             self._snapshotter.checkpoint(group_id)
+            metadata = self._metadata(group_id)
             snapshot_ids = dict(self._snapshotter.snapshot(group_id))
         finally:
             self._snapshotter.resume(group_id)
@@ -173,6 +267,10 @@ class FanoutController:
             group_id=group_id,
             created_at=created_at,
             datasets=tuple(sorted(snapshot_ids.items())),
+            sqlite=metadata.sqlite,
+            app_versions=metadata.app_versions,
+            content_hashes=metadata.content_hashes,
+            dependencies=metadata.dependencies,
             destinations=tuple(captured),
             complete=True,
             schema_version=self._schema_version,

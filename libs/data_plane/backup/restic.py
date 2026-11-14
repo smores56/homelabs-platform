@@ -123,6 +123,29 @@ class ResticDestination:
             )
         return result
 
+    def _path_for(self, dataset: str, snapshot_id: str) -> str:
+        """Resolve one dataset's read path for this snapshot.
+
+        A path may contain ``{snapshot}`` so the factory can point restic at
+        ``<mount>/.zfs/snapshot/{snapshot}`` without hardcoding the timestamped
+        snapshot name. Static paths keep working for tests and fixtures.
+        """
+
+        template = self.dataset_paths.get(dataset)
+        if not template:
+            raise PublishError(
+                f"destination {self.name!r} has no path for dataset {dataset!r}"
+            )
+        if "{snapshot}" not in template:
+            return template
+        name = snapshot_id.rsplit("@", 1)[-1] if "@" in snapshot_id else ""
+        if not name:
+            raise PublishError(
+                f"destination {self.name!r} got a snapshot id without a name "
+                f"for dataset {dataset!r}"
+            )
+        return template.replace("{snapshot}", name)
+
     def capture(
         self, generation_id: str, snapshot_ids: Mapping[str, str]
     ) -> SnapshotRef:
@@ -130,12 +153,7 @@ class ResticDestination:
             raise PublishError(f"destination {self.name!r} got no snapshots")
         paths = []
         for dataset in sorted(snapshot_ids):
-            path = self.dataset_paths.get(dataset)
-            if not path:
-                raise PublishError(
-                    f"destination {self.name!r} has no path for dataset {dataset!r}"
-                )
-            paths.append(path)
+            paths.append(self._path_for(dataset, snapshot_ids[dataset]))
         argv = self._base() + [
             "backup",
             "--host",

@@ -1,0 +1,25 @@
+---
+# Pinned restic binary and per-domain repositories. The version and checksum
+# are exact; never a channel or "latest". Repositories get their own key files
+# under /etc/homelab/secrets/restic (0600 root) and are initialised only when
+# `restic cat config` says the repository does not exist yet.
+restic_version: "0.19.1"
+restic_binary: /usr/local/bin/restic
+restic_checksums:
+  amd64: f415415624dcc452f2a02b8c33641791a8c6d6d3b65bbb3543fcf9a25151585c
+  arm64: a5f64aaab53d51e311fa3829124c5b703f2d14cf187d8640b6be3b2b49376465
+restic_architectures:
+  x86_64: amd64
+  aarch64: arm64
+
+restic_password_root: "{{ backup_password_root | default('/etc/homelab/secrets/restic') }}"
+restic_retention:
+  daily: 14
+  weekly: 8
+  monthly: 12
+# Retention is a destructive operation. The argv is installed and unit-tested,
+# but the operator enables the schedule after the first complete generation and
+# after the lock drill on a real repository.
+restic_retention_enabled: false
+restic_retention_calendar: "Sun *-*-* 04:15:00"
+restic_lock_drill_enabled: false

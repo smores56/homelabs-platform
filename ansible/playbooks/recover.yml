@@ -8,23 +8,90 @@
 #     -e homelab_recovery_confirm=true \
 #     -e homelab_recovery_generation_manifest=/root/generation.json
 #
-# Set -e homelab_recovery_apply=true only after the dry-run plan is reviewed.
-# Nothing here runs without --tags destructive and the confirmation value.
+# The order is the safety property: fence every writer, open storage, restore a
+# signed generation into a scratch target, verify its content hashes, and only
+# then re-enable the writers. A dry run (no -e homelab_recovery_apply=true)
+# touches nothing. The recovery portal is never a prerequisite.
+
+- name: Fence the data-plane writers before any restore
+  hosts: data_plane_hosts
+  gather_facts: false
+  tags: [destructive]
+  tasks:
+    - name: Require the destructive tag and an explicit recovery confirmation
+      ansible.builtin.assert:
+        that:
+          - "'destructive' in ansible_run_tags"
+          - homelab_recovery_confirm | bool
+          - homelab_recovery_generation_manifest | length > 0
+          - homelab_recovery_scratch_target is match('^/')
+        fail_msg: >-
+          Refusing to recover without --tags destructive,
+          -e homelab_recovery_confirm=true,
+          -e homelab_recovery_generation_manifest=<path>, and an absolute
+          homelab_recovery_scratch_target.
+
+    - name: Check which writer units are installed
+      ansible.builtin.stat:
+        path: "/etc/systemd/system/{{ item }}"
+      loop: "{{ homelab_writer_units }}"
+      register: recovery_writer_unit_files
+
+    - name: Stop and disable every installed writer unit
+      ansible.builtin.systemd_service:
+        name: "{{ item.item }}"
+        enabled: false
+        state: stopped
+      loop: "{{ recovery_writer_unit_files.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+      when:
+        - homelab_recovery_apply | bool
+        - item.stat.exists
+
+    - name: Check whether the backup timer is installed
+      ansible.builtin.stat:
+        path: "/etc/systemd/system/{{ homelab_backup_timer }}"
+      register: recovery_backup_timer_file
+
+    - name: Fence the backup timer
+      ansible.builtin.systemd_service:
+        name: "{{ homelab_backup_timer }}"
+        enabled: false
+        state: stopped
+      when:
+        - homelab_recovery_apply | bool
+        - recovery_backup_timer_file.stat.exists
+
+    - name: Ensure the fence directory exists
+      ansible.builtin.file:
+        path: "{{ homelab_writer_fence | dirname }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+      when: homelab_recovery_apply | bool
+
+    - name: Create the writer fence marker
+      ansible.builtin.file:
+        path: "{{ homelab_writer_fence }}"
+        state: touch
+        owner: root
+        group: root
+        mode: "0600"
+      when: homelab_recovery_apply | bool
 
 - name: Bring the encrypted storage online
   hosts: storage_hosts
   gather_facts: true
+  tags: [destructive]
   tasks:
     - name: Require explicit recovery confirmation
       ansible.builtin.assert:
         that:
           - homelab_recovery_confirm | bool
           - homelab_recovery_generation_manifest | length > 0
-        fail_msg: >-
-          Refusing to recover without --tags destructive,
-          -e homelab_recovery_confirm=true, and
-          -e homelab_recovery_generation_manifest=<path>
-      tags: [destructive]
+        fail_msg: "Pass homelab_recovery_confirm=true and a generation manifest"
 
     - name: Open every encrypted volume with its operator-provisioned keyfile
       community.crypto.luks_device:
@@ -33,8 +100,11 @@
         state: opened
         keyfile: "{{ item.keyfile }}"
       loop: "{{ luks_volumes }}"
-      when: homelab_recovery_confirm | bool
-      tags: [destructive]
+      loop_control:
+        label: "{{ item.name }}"
+      when:
+        - homelab_recovery_apply | bool
+        - not ansible_check_mode
 
     - name: Read the pools the kernel can see
       ansible.builtin.command:
@@ -43,54 +113,63 @@
       changed_when: false
       check_mode: false
       failed_when: false
-      tags: [destructive]
 
-    - name: Import the pool without mounting it yet
+    - name: Resolve the pool's encrypted volume to its stable by-id device
+      ansible.builtin.set_fact:
+        recovery_pool_device: >-
+          {{ luks_volumes | selectattr('name', 'equalto', zfs_pool_luks_volume)
+             | map(attribute='device') | first | default('') }}
+
+    - name: Refuse an unscoped import of the pool
+      ansible.builtin.assert:
+        that:
+          - recovery_pool_device is match('^/dev/disk/by-id/')
+          - recovery_pool_device in homelab_destructive_device_ids
+          - zfs_pool_device == '/dev/mapper/' ~ zfs_pool_luks_volume
+        fail_msg: >-
+          Refusing to import {{ zfs_pool }} from an allow-listed pinned device;
+          add {{ recovery_pool_device }} to homelab_destructive_device_ids.
+        quiet: true
+      when: zfs_pool not in recovery_pools.stdout_lines
+
+    - name: Import the pool from its pinned device without mounting it yet
       ansible.builtin.command:
-        argv: [zpool, import, -N, "{{ zfs_pool }}"]
+        argv: [zpool, import, -N, -d, "{{ zfs_pool_device }}", "{{ zfs_pool }}"]
       when:
-        - homelab_recovery_confirm | bool
+        - homelab_recovery_apply | bool
         - zfs_pool not in recovery_pools.stdout_lines
       changed_when: true
-      tags: [destructive]
 
     - name: Mount every dataset in the pool
       ansible.builtin.systemd_service:
         name: zfs-mount.service
         state: restarted
-      when: homelab_recovery_confirm | bool
-      tags: [destructive]
+      when: homelab_recovery_apply | bool
 
     - name: Mount the backup repositories on demand
       ansible.builtin.systemd_service:
         name: "{{ (item.path | replace('/', '-') | regex_replace('^-', '')) + '.mount' }}"
         state: started
       loop: "{{ backup_mounts }}"
-      when: homelab_recovery_confirm | bool
-      tags: [destructive]
+      loop_control:
+        label: "{{ item.path }}"
+      when: homelab_recovery_apply | bool
 
-- name: Verify the host matches the recovery sentinel
+- name: Restore a verified generation into a scratch target
   hosts: data_plane_hosts
   gather_facts: false
+  tags: [destructive]
   tasks:
-    - name: Run the sentinel check with backup mounts required
-      ansible.builtin.command:
-        argv: [/usr/local/sbin/homelab-recovery-check, --require-backups]
-      changed_when: false
-      check_mode: false
-      tags: [destructive]
-
-- name: Restore a verified generation
-  hosts: data_plane_hosts
-  gather_facts: false
-  tasks:
-    - name: Require confirmation before the restore step
-      ansible.builtin.assert:
-        that:
-          - homelab_recovery_confirm | bool
-          - homelab_recovery_generation_manifest | length > 0
-        fail_msg: "Pass homelab_recovery_confirm=true and a generation manifest"
-      tags: [destructive]
+    - name: Create the scratch restore target
+      ansible.builtin.file:
+        path: "{{ homelab_recovery_scratch_target }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0750"
+      when:
+        - homelab_recovery_apply | bool
+        - not homelab_recovery_allow_live | bool
 
     - name: Render the restore plan
       ansible.builtin.command:
@@ -98,26 +177,76 @@
       environment:
         HOMELAB_GENERATION_MANIFEST: "{{ homelab_recovery_generation_manifest }}"
         HOMELAB_RESTORE_CONFIRM: restore
+        HOMELAB_RESTORE_ROOT: "{{ homelab_recovery_scratch_target }}"
+        HOMELAB_REQUIRED_DESTINATIONS: "{{ homelab_recovery_required_destinations | join(',') }}"
+        HOMELAB_ALLOW_LIVE: "{{ '1' if homelab_recovery_allow_live | bool else '0' }}"
       register: recovery_plan
       changed_when: false
       check_mode: false
       when: not (homelab_recovery_apply | bool)
-      tags: [destructive]
 
     - name: Print the restore plan
       ansible.builtin.debug:
         var: recovery_plan.stdout_lines
       when: not (homelab_recovery_apply | bool)
-      tags: [destructive]
 
-    - name: Apply the verified generation
+    - name: Apply the verified generation to the scratch target
       ansible.builtin.command:
         argv: [/usr/local/sbin/homelab-clean-room-restore]
       environment:
         HOMELAB_GENERATION_MANIFEST: "{{ homelab_recovery_generation_manifest }}"
         HOMELAB_RESTORE_CONFIRM: restore
+        HOMELAB_RESTORE_ROOT: "{{ homelab_recovery_scratch_target }}"
+        HOMELAB_REQUIRED_DESTINATIONS: "{{ homelab_recovery_required_destinations | join(',') }}"
+        HOMELAB_ALLOW_LIVE: "{{ '1' if homelab_recovery_allow_live | bool else '0' }}"
         HOMELAB_RESTORE_APPLY: "1"
       when: homelab_recovery_apply | bool
       changed_when: true
       check_mode: false
-      tags: [destructive]
+
+    - name: Verify the restored content hashes
+      ansible.builtin.command:
+        argv: [/usr/local/sbin/homelab-clean-room-restore, --verify-only]
+      environment:
+        HOMELAB_GENERATION_MANIFEST: "{{ homelab_recovery_generation_manifest }}"
+        HOMELAB_RESTORE_ROOT: "{{ homelab_recovery_scratch_target }}"
+        HOMELAB_REQUIRED_DESTINATIONS: "{{ homelab_recovery_required_destinations | join(',') }}"
+      changed_when: false
+      check_mode: false
+      when: homelab_recovery_apply | bool
+
+- name: Re-enable the writers only after a verified scratch restore
+  hosts: data_plane_hosts
+  gather_facts: false
+  tags: [destructive]
+  tasks:
+    - name: Re-enable every installed writer unit
+      ansible.builtin.systemd_service:
+        name: "{{ item.item }}"
+        enabled: true
+        state: started
+      loop: "{{ recovery_writer_unit_files.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+      when:
+        - homelab_recovery_apply | bool
+        - homelab_recovery_resume_writers | bool
+        - item.stat.exists
+
+    - name: Restart the backup timer
+      ansible.builtin.systemd_service:
+        name: "{{ homelab_backup_timer }}"
+        enabled: true
+        state: started
+      when:
+        - homelab_recovery_apply | bool
+        - homelab_recovery_resume_writers | bool
+        - recovery_backup_timer_file.stat.exists
+
+    - name: Remove the writer fence marker
+      ansible.builtin.file:
+        path: "{{ homelab_writer_fence }}"
+        state: absent
+      when:
+        - homelab_recovery_apply | bool
+        - homelab_recovery_resume_writers | bool

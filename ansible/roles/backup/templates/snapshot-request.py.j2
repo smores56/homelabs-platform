@@ -1,0 +1,111 @@
+#!/usr/bin/python3
+"""Turn request files into scoped snapshot unit starts.
+
+The in-cluster backup controller cannot touch ZFS. It writes a request file
+named ``<group>.request`` (also ``flush-<group>.request`` or
+``checkpoint-<group>.request``) into the watched directory; this consumer
+validates the group against the host plan and triggers the same hardened
+oneshot, scoped to that group, through ``homelab-snapshot@<group>.service``.
+
+Requests are archived, never silently deleted, so an operator can see what was
+asked for even when the unit fails. Unknown groups are rejected and left in the
+request directory for inspection; the unit exits non-zero.
+"""
+
+from __future__ import annotations
+
+import argparse
+import os
+import shutil
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+sys.path.insert(0, "{{ backup_libs_dir }}")
+
+from data_plane.backup.factory import BackupConfig, BackupConfigError  # noqa: E402
+
+PREFIXES = ("flush-", "checkpoint-", "snapshot-")
+SUFFIXES = (".request", ".json")
+
+
+def group_from_name(name: str) -> str:
+    stem = name
+    for suffix in SUFFIXES:
+        if stem.endswith(suffix):
+            stem = stem[: -len(suffix)]
+            break
+    for prefix in PREFIXES:
+        if stem.startswith(prefix):
+            stem = stem[len(prefix) :]
+            break
+    return stem
+
+
+def archive(path: Path, target: Path) -> None:
+    target.mkdir(parents=True, exist_ok=True)
+    destination = target / f"{path.name}.{int(time.time() * 1000)}"
+    shutil.move(str(path), destination)
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--config", default="{{ backup_config_file }}")
+    parser.add_argument("--request-dir", default="{{ backup_request_dir }}")
+    parser.add_argument("--archive-dir", default="{{ backup_request_archive }}")
+    parser.add_argument(
+        "--systemctl", default="/usr/bin/systemctl", help=argparse.SUPPRESS
+    )
+    args = parser.parse_args(argv)
+
+    try:
+        config = BackupConfig.load(args.config)
+    except BackupConfigError as exc:
+        print(f"snapshot-request: {exc}", file=sys.stderr)
+        return 2
+    known = {group.id for group in config.groups}
+
+    request_dir = Path(args.request_dir)
+    try:
+        entries = sorted(
+            path
+            for path in request_dir.iterdir()
+            if path.is_file() and not path.name.startswith(".")
+        )
+    except OSError as exc:
+        print(f"snapshot-request: cannot read {request_dir}: {exc}", file=sys.stderr)
+        return 2
+
+    failures = 0
+    for path in entries:
+        group_id = group_from_name(path.name)
+        if group_id not in known:
+            print(
+                f"snapshot-request: {path.name}: unknown group {group_id!r}",
+                file=sys.stderr,
+            )
+            failures += 1
+            continue
+        unit = f"homelab-snapshot@{group_id}.service"
+        completed = subprocess.run(
+            [args.systemctl, "start", "--no-block", unit],
+            capture_output=True,
+            text=True,
+            check=False,
+            env={key: value for key, value in os.environ.items()},
+        )
+        if completed.returncode != 0:
+            print(
+                f"snapshot-request: {path.name}: {unit} failed: "
+                f"{completed.stderr.strip()[:300]}",
+                file=sys.stderr,
+            )
+            failures += 1
+            continue
+        archive(path, Path(args.archive_dir))
+    return 1 if failures else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

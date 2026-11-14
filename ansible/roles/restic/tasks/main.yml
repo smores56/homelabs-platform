@@ -1,0 +1,229 @@
+---
+# Install one pinned restic binary and make every declared repository usable.
+# Nothing here prints or passes a password: repositories receive a root-only
+# key file path through --password-file, which restic opens itself.
+
+- name: Require a pinned version, a known architecture and a checksum
+  ansible.builtin.assert:
+    that:
+      - restic_version is match('^[0-9]+\.[0-9]+\.[0-9]+$')
+      - ansible_architecture in restic_architectures
+      - restic_architectures[ansible_architecture] in restic_checksums
+      - restic_checksums[restic_architectures[ansible_architecture]] is match('^[0-9a-f]{64}$')
+    fail_msg: "Pin restic_version and a sha256 for {{ ansible_architecture }}"
+    quiet: true
+
+- name: Derive the restic architecture
+  ansible.builtin.set_fact:
+    restic_arch: "{{ restic_architectures[ansible_architecture] }}"
+    restic_archive: >-
+      /tmp/restic_{{ restic_version }}_linux_{{ restic_architectures[ansible_architecture] }}.bz2
+    restic_decompressed: >-
+      /tmp/restic_{{ restic_version }}_linux_{{ restic_architectures[ansible_architecture] }}
+
+- name: Require every repository to name a password file and a pinned host
+  ansible.builtin.assert:
+    that:
+      - backup_repositories | length > 0
+      - backup_repositories | map(attribute='name') | unique | length == (backup_repositories | length)
+      - backup_repositories | selectattr('password_file', 'undefined') | list | length == 0
+      - backup_repositories | rejectattr('password_file', 'match', '^/') | list | length == 0
+      - backup_repositories | selectattr('repository', 'undefined') | list | length == 0
+      - backup_repositories | selectattr('password', 'defined') | list | length == 0
+    fail_msg: "Every backup repository needs name, repository and an absolute password_file"
+    quiet: true
+
+- name: Create the root-only password directory
+  ansible.builtin.file:
+    path: "{{ restic_password_root }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+
+- name: Check the declared password files
+  ansible.builtin.stat:
+    path: "{{ item.password_file }}"
+  loop: "{{ backup_repositories }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: restic_password_stats
+
+- name: Require every password file to exist, root-owned and 0600
+  ansible.builtin.assert:
+    that:
+      - item.stat.exists
+      - item.stat.pw_name == 'root'
+      - item.stat.mode == '0600'
+      - item.stat.size > 0
+    fail_msg: >-
+      {{ item.item.password_file }} must exist, be root-owned 0600 and non-empty;
+      provision it from Bitwarden/SOPS before applying
+    quiet: true
+  loop: "{{ restic_password_stats.results }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+
+- name: Stat the installed restic binary
+  ansible.builtin.stat:
+    path: "{{ restic_binary }}"
+  register: restic_binary_stat
+
+- name: Read the installed restic version
+  ansible.builtin.command:
+    argv: ["{{ restic_binary }}", version]
+  register: restic_installed_version
+  changed_when: false
+  failed_when: false
+  when: restic_binary_stat.stat.exists
+
+- name: Decide whether restic needs installing
+  ansible.builtin.set_fact:
+    restic_needs_install: >-
+      {{ not restic_binary_stat.stat.exists or
+         restic_version not in (restic_installed_version.stdout | default('')) }}
+
+- name: Download the pinned restic archive
+  ansible.builtin.get_url:
+    url: >-
+      https://github.com/restic/restic/releases/download/v{{ restic_version }}/restic_{{ restic_version }}_linux_{{ restic_arch }}.bz2
+    dest: "{{ restic_archive }}"
+    checksum: "sha256:{{ restic_checksums[restic_arch] }}"
+    owner: root
+    group: root
+    mode: "0644"
+  when: restic_needs_install
+
+- name: Decompress the pinned restic binary
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/python3
+      - -c
+      - "import bz2, shutil, sys; shutil.copyfileobj(bz2.open(sys.argv[1]), open(sys.argv[2], 'wb'))"
+      - "{{ restic_archive }}"
+      - "{{ restic_decompressed }}"
+  when: restic_needs_install
+  changed_when: true
+
+- name: Install restic at the declared path
+  ansible.builtin.copy:
+    src: "{{ restic_decompressed }}"
+    dest: "{{ restic_binary }}"
+    remote_src: true
+    owner: root
+    group: root
+    mode: "0755"
+  when: restic_needs_install
+
+- name: Remove the decompressed copy
+  ansible.builtin.file:
+    path: "{{ restic_decompressed }}"
+    state: absent
+  when: restic_needs_install
+
+- name: Remove the downloaded archive
+  ansible.builtin.file:
+    path: "{{ restic_archive }}"
+    state: absent
+  when: restic_needs_install
+
+- name: Verify the pinned restic version
+  ansible.builtin.command:
+    argv: ["{{ restic_binary }}", version]
+  register: restic_version_check
+  changed_when: false
+  failed_when: restic_version not in restic_version_check.stdout
+
+- name: Check whether each repository exists
+  ansible.builtin.command:
+    argv:
+      - "{{ restic_binary }}"
+      - cat
+      - config
+      - --repo
+      - "{{ item.repository }}"
+      - --password-file
+      - "{{ item.password_file }}"
+  loop: "{{ backup_repositories }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: restic_repository_probe
+  changed_when: false
+  failed_when: false
+
+- name: Initialise only the repositories that are missing
+  ansible.builtin.command:
+    argv:
+      - "{{ restic_binary }}"
+      - init
+      - --repo
+      - "{{ item.item.repository }}"
+      - --password-file
+      - "{{ item.item.password_file }}"
+  loop: "{{ restic_repository_probe.results }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+  when: item.rc != 0
+  changed_when: true
+
+- name: Confirm every repository is readable with its own key
+  ansible.builtin.command:
+    argv:
+      - "{{ restic_binary }}"
+      - cat
+      - config
+      - --repo
+      - "{{ item.repository }}"
+      - --password-file
+      - "{{ item.password_file }}"
+  loop: "{{ backup_repositories }}"
+  loop_control:
+    label: "{{ item.name }}"
+  changed_when: false
+
+- name: Install the retention command
+  ansible.builtin.template:
+    src: restic-retention.py.j2
+    dest: /usr/local/sbin/restic-retention
+    owner: root
+    group: root
+    mode: "0750"
+
+- name: Install the retention unit
+  ansible.builtin.template:
+    src: restic-retention.service.j2
+    dest: /etc/systemd/system/restic-retention.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Reload systemd
+
+- name: Install the retention timer
+  ansible.builtin.template:
+    src: restic-retention.timer.j2
+    dest: /etc/systemd/system/restic-retention.timer
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Reload systemd
+
+- name: Enable the retention timer only when the operator opted in
+  ansible.builtin.systemd_service:
+    name: restic-retention.timer
+    enabled: "{{ restic_retention_enabled | bool }}"
+    state: "{{ 'started' if restic_retention_enabled | bool else 'stopped' }}"
+    daemon_reload: true
+
+- name: Install the lock drill
+  ansible.builtin.copy:
+    src: lock-drill.sh
+    dest: /usr/local/sbin/restic-lock-drill
+    owner: root
+    group: root
+    mode: "0750"
+
+- name: Prove stale-lock expiry before retention is enabled
+  ansible.builtin.command:
+    argv: [/usr/local/sbin/restic-lock-drill]
+  when: restic_lock_drill_enabled | bool
+  changed_when: true
