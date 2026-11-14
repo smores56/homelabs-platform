@@ -53,7 +53,7 @@ gone. These are the holdovers, each with the task that ends it:
 
 | nix-config key | Host reader | Retired by |
 | --- | --- | --- |
-| `cloudflare-api-token` | `alerting.nix` mail sender, `kanbei-access.nix` DNS-01, the `cloudflare-*` flake apps | alerting: #649 (the ntfy bus replaces the sender); flake apps: the step-14 state move; Kanbei: a DNS-scoped token of its own |
+| `cloudflare-api-token` | `kanbei-access.nix` DNS-01, the `cloudflare-*` flake apps | flake apps: the step-14 state move; Kanbei: a DNS-scoped token of its own |
 | `cloudflared-credentials` | the host tunnel (`web-proxy.nix`) | #615, when the last host-owned route moves |
 | `restic-password`, `r2-access-key-id`, `r2-secret-access-key` | `restic-backup.nix` | #619's per-tree drill gate, one tree at a time |
 | `memory-mcp-token` | the maki memory shim | #617's cluster route with an Access service token |
