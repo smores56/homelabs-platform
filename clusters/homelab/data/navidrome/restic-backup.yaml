@@ -78,7 +78,10 @@ spec:
                   # read probe first, so a wrong endpoint or key fails there
                   # instead of half-writing a new repository.
                   restic cat config >/dev/null 2>&1 || restic init
-                  restic backup --host cluster-navidrome --tag cluster \
+                  # `--json` makes restic emit a status record per update, with a
+                  # real byte total from the walk and its own ETA; the text
+                  # progress only draws on a TTY, which a Job never has.
+                  restic backup --json --host cluster-navidrome --tag cluster \
                     /data
                   restic forget --host cluster-navidrome \
                     --keep-daily 14 --keep-weekly 8 --keep-monthly 12 --prune

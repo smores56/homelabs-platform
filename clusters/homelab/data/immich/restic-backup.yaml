@@ -82,7 +82,10 @@ spec:
                   # own dump: the live Postgres cluster and Valkey's append-only
                   # file. The comments cannot sit inside the continuation below,
                   # because `#` ends the command line the backslash continues.
-                  restic backup --host cluster-immich --tag cluster \
+                  # `--json` makes restic emit a status record per update, with a
+                  # real byte total from the walk and its own ETA; the text
+                  # progress only draws on a TTY, which a Job never has.
+                  restic backup --json --host cluster-immich --tag cluster \
                     --exclude '/data/postgres' \
                     --exclude '/data/valkey' \
                     /data

@@ -616,6 +616,14 @@ while IFS=: read -r app deadline; do
   eq "$(yq -r '[.spec.jobTemplate.spec.template.spec.containers[0].env[] | select(.valueFrom) | .name] | sort | join(",")' "$cj")" \
     "AWS_ACCESS_KEY_ID,AWS_SECRET_ACCESS_KEY,RESTIC_PASSWORD" \
     "$app restic takes its key and password from the projected Secret only"
+  # Progress is read from a JSON status record, not the text progress: restic
+  # only draws that on a TTY, so a Job's log never shows it, and without a
+  # record the total comes from nothing better than a stale size measurement.
+  if grep -Fq 'restic backup --json' "$cj"; then
+    ok "$app restic backup reports JSON progress"
+  else
+    bad "$app restic backup does not pass --json"
+  fi
   repository="s3:https://$account_id.r2.cloudflarestorage.com/restic-backup/trees/$app"
   eq "$(yq -r '.spec.jobTemplate.spec.template.spec.containers[0].env[] | select(.name == "RESTIC_REPOSITORY") | .value' "$cj")" \
     "$repository" "$app restic writes its own prefix of the shared bucket"
