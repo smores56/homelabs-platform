@@ -190,12 +190,18 @@ locals {
   #                 token. The capability URL is the credential, and the
   #                 receiver's own HMAC check authenticates a source that has
   #                 one, so a bypass is the only workable decision here.
+  #   ntfy        - the notification bus (SDLC #649). The Android app cannot
+  #                 complete an Access login, and a service token cannot be
+  #                 carried alongside the ntfy bearer the broker injects. The
+  #                 app's own auth is the gate: deny-all default, no signup, and
+  #                 ntfy's per-visitor request limiter.
   public_apps = toset([
     "recovery",
     "photos",
     "music",
     "opds",
     "agent-hooks",
+    "ntfy",
   ])
 }
 

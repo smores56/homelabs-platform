@@ -1,6 +1,6 @@
 # Tenancy
 
-Eleven namespaces carry every workload. Each is labelled with the owning tenant, a
+Twelve namespaces carry every workload. Each is labelled with the owning tenant, a
 tier, and PSA enforcement, so admission policy, RBAC scope and NetworkPolicy
 all select by label rather than by hard-coded name. The data tier is one
 namespace per application (smores56/sdlc#580), because each app is bound to one
@@ -13,6 +13,7 @@ virtiofs share and must not be able to reach another app's.
 | `tenant-apps` | `apps` | `tenant` | `restricted` | `homelabs-apps` workloads (nanobot and successors) |
 | `broker` | `broker` | `broker` | `restricted` | Egress broker with per-host tokens |
 | `webhook` | `webhook` | `webhook` | `restricted` | Inbound webhook receiver; capability URLs enqueue into the agent (`docs/webhook.md`) |
+| `notify` | `notify` | `notify` | `restricted` | ntfy: the notification bus for the phone, the laptop, host units, Alertmanager, Flux and the agent (`docs/notify.md`) |
 | `immich` | `immich` | `data` | `restricted` | Immich server, machine-learning, Postgres, Valkey |
 | `navidrome` | `navidrome` | `data` | `restricted` | Navidrome |
 | `opdshelf` | `opdshelf` | `data` | `restricted` | OPDShelf over the books library |
@@ -40,18 +41,19 @@ applied by the first stage (`docs/flux.md`).
 | `platform` | exempt from `no-host-access` | unrestricted | unrestricted |
 | `tenant` | gVisor, digest-pinned images, scratch PVC only, no `sops-age`, no reconciler SA, `agent-identity`, `nanobot-policy` | DNS, the broker on 8080, direct TCP/UDP to global unicast (every non-global range excluded), the k3s API (443/6443) for `agent-control` only | the cluster tunnel on 8080 (`nanobot` only); the broker on 8081 (`agent-control` only) |
 | `webhook` | `no-host-access`, `webhook-runtime` | DNS, `tenant-apps/nanobot` 8765 only | the cluster tunnel on 8080 |
+| `notify` | `no-host-access`, `notify-runtime` | DNS only | the cluster tunnel on 8080, `observability/notifyrelay` on 8080, `observability/prometheus` on 9090 |
 | `data` (each of `immich`, `navidrome`, `opdshelf`, `graphiti`) | `no-host-access`, `data-workload-source`, `data-pvc-scope`, `data-pvc-storage` | same namespace, DNS; HTTPS for `immich-machine-learning` and `graphiti` | same namespace, `ingress` on the app's port |
 | `ingress` | none beyond PSA | the four data apps and `graphiti/memory-mcp` on their ports, `tenant-apps/nanobot` 8080, Cloudflare edge 443, DNS | none |
 | `observability` | exempt from `no-host-access` | DNS, the k3s API range on 443 (Vector, Prometheus, exporter), Loki and the annotated scrape targets, Prometheus → Alertmanager, Alertmanager → mail relay; the mail relay alone reaches 443 on global unicast | default-deny; Vector/Loki/gateway wiring, Prometheus scrapes, the broker paths, and the alerting chain |
 
 ## Admission policy
 
-Sixteen policies, each in its own file with the binding that scopes it
+Seventeen policies, each in its own file with the binding that scopes it
 (`clusters/homelab/platform/policies/`, asserted by `tests/policies/check.sh`).
 
 | Policy | Bound to | Rejects |
 | --- | --- | --- |
-| `no-host-access` | `tenant`, `broker`, `data` (all four namespaces), `webhook` | `hostNetwork`, `hostPID`, `hostIPC`, `hostPath`, privileged containers, `hostPort`, added capabilities, `allowPrivilegeEscalation` |
+| `no-host-access` | `tenant`, `broker`, `data` (all four namespaces), `webhook`, `notify` | `hostNetwork`, `hostPID`, `hostIPC`, `hostPath`, privileged containers, `hostPort`, added capabilities, `allowPrivilegeEscalation` |
 | `tenant-gvisor` | `tenant` | any pod without `spec.runtimeClassName: gvisor` |
 | `tenant-images` | `tenant` | images not pinned by `@sha256:`, floating tags, nanobot from outside `ghcr.io/smores56/homelabs-platform/nanobot@sha256:` |
 | `tenant-scratch-pvc` | `tenant` | pod volumes whose PVC name does not start with the pod's `app.kubernetes.io/name` |
