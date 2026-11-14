@@ -105,3 +105,25 @@
   loop: "{{ data_plane_services | selectattr('timer', 'defined') | list }}"
   loop_control:
     label: "{{ item.name }}"
+
+- name: Verify every long-running service stayed up after start
+  ansible.builtin.command: systemctl is-active --quiet {{ item.name }}.service
+  register: data_plane_service_active
+  retries: 5
+  delay: 2
+  changed_when: false
+  failed_when: data_plane_service_active.rc != 0
+  loop: "{{ data_plane_services | selectattr('timer', 'undefined') | list }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Verify every backup/relay timer is active
+  ansible.builtin.command: systemctl is-active --quiet {{ item.name }}.timer
+  register: data_plane_timer_active
+  retries: 5
+  delay: 2
+  changed_when: false
+  failed_when: data_plane_timer_active.rc != 0
+  loop: "{{ data_plane_services | selectattr('timer', 'defined') | list }}"
+  loop_control:
+    label: "{{ item.name }}"

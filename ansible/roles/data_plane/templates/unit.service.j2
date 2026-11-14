@@ -21,7 +21,7 @@ AssertPathIsMountPoint={{ mount.path }}
 {% endif %}
 
 [Service]
-Type={{ 'oneshot' if service.type | default('simple') == 'oneshot' else 'simple' }}
+Type={{ 'oneshot' if service.type | default('simple') == 'oneshot' else 'exec' }}
 {% if service.type | default('simple') != 'oneshot' %}
 Restart=on-failure
 RestartSec=10s

@@ -11,12 +11,14 @@ data_plane_services:
     description: Single-writer event log for the local profile
     image_key: event_service
     type: simple
-    args: []
+    args: ["event"]
     ports:
       - "127.0.0.1:7101:7101"
     environment:
-      HOMELAB_STATE_DIR: "{{ data_plane_state_root }}/event-service"
-      HOMELAB_LISTEN: "0.0.0.0:7101"
+      DATA_PLANE_DB: "{{ data_plane_state_root }}/event-service/events.sqlite"
+      DATA_PLANE_SECRET_FILE: "{{ data_plane_secret_root }}/event-service.env"
+      DATA_PLANE_HOST: "0.0.0.0"
+      DATA_PLANE_PORT: "7101"
     state_dir: "{{ data_plane_state_root }}/event-service"
     volumes:
       - "{{ data_plane_state_root }}/event-service:/var/lib/homelab/event-service:rw"
@@ -31,13 +33,16 @@ data_plane_services:
     description: Authoritative write broker for general sources
     image_key: write_broker
     type: simple
-    args: []
+    args: ["broker"]
     ports:
       - "127.0.0.1:7102:7102"
     environment:
-      HOMELAB_STATE_DIR: "{{ data_plane_state_root }}/write-broker"
-      HOMELAB_LISTEN: "0.0.0.0:7102"
-      HOMELAB_GENERAL_ROOT: /srv/books
+      DATA_PLANE_DB: "{{ data_plane_state_root }}/write-broker/broker.sqlite"
+      DATA_PLANE_SECRET_FILE: "{{ data_plane_secret_root }}/write-broker.env"
+      DATA_PLANE_CATALOG: "{{ data_plane_config_root }}/sources.json"
+      DATA_PLANE_HOST: "0.0.0.0"
+      DATA_PLANE_PORT: "7102"
+      DATA_PLANE_GENERAL_ROOT: /srv/books
     state_dir: "{{ data_plane_state_root }}/write-broker"
     volumes:
       - "{{ data_plane_state_root }}/write-broker:/var/lib/homelab/write-broker:rw"
@@ -55,14 +60,15 @@ data_plane_services:
     description: Fan-out Restic backup controller
     image_key: backup_controller
     type: oneshot
-    args: []
+    args: ["backup"]
     ports: []
     environment:
-      HOMELAB_STATE_DIR: "{{ data_plane_state_root }}/backup-controller"
-      HOMELAB_PRIMARY_REPOSITORY: /var/backups/primary
-      HOMELAB_SECONDARY_REPOSITORY: /var/backups/secondary
+      DATA_PLANE_MANIFEST_DIR: "{{ data_plane_state_root }}/backup-controller/manifests"
+      DATA_PLANE_GROUPS: "{{ backup_groups | default([]) | join(',') }}"
+      DATA_PLANE_DESTINATIONS: "{{ backup_destinations | default([]) | join(',') }}"
+      DATA_PLANE_SECRET_FILE: "{{ data_plane_secret_root }}/backup-controller.env"
     state_dir: "{{ data_plane_state_root }}/backup-controller"
-    container_user: "0:0"
+    container_user: "65532:65532"
     volumes:
       - "{{ data_plane_state_root }}/backup-controller:/var/lib/homelab/backup-controller:rw"
       - "/srv:/srv:ro"
@@ -83,11 +89,15 @@ data_plane_services:
     short: collector-relay
     description: Scheduled reconciliation pass for collector replicas
     image_key: collector_relay
-    type: oneshot
-    args: []
-    ports: []
+    type: simple
+    args: ["relay"]
+    ports:
+      - "127.0.0.1:7104:7104"
     environment:
-      HOMELAB_STATE_DIR: "{{ data_plane_state_root }}/collector-relay"
+      DATA_PLANE_SECRET_FILE: "{{ data_plane_secret_root }}/collector-relay.env"
+      DATA_PLANE_SCHEMA: "{{ data_plane_config_root }}/relay-schema.json"
+      DATA_PLANE_HOST: "0.0.0.0"
+      DATA_PLANE_PORT: "7104"
     state_dir: "{{ data_plane_state_root }}/collector-relay"
     volumes:
       - "{{ data_plane_state_root }}/collector-relay:/var/lib/homelab/collector-relay:rw"
@@ -96,25 +106,22 @@ data_plane_services:
       - "{{ data_plane_run_root }}/collector-relay"
     assert_mounts: []
     backup_mounts: false
-    timer:
-      calendar: "*:0/15"
-      delay: 60
 
   - name: homelab-recovery-portal
     short: recovery-portal
     description: Read-only recovery portal over verified generations
     image_key: recovery_portal
     type: simple
-    args: []
+    args: ["portal"]
     ports:
       - "127.0.0.1:7103:7103"
     environment:
-      HOMELAB_STATE_DIR: "{{ data_plane_state_root }}/recovery-portal"
-      HOMELAB_LISTEN: "0.0.0.0:7103"
-      HOMELAB_PRIMARY_REPOSITORY: /var/backups/primary
-      HOMELAB_SECONDARY_REPOSITORY: /var/backups/secondary
+      DATA_PLANE_PORTAL_DIR: "{{ data_plane_state_root }}/recovery-portal/site"
+      DATA_PLANE_MANIFEST_DIR: "{{ data_plane_state_root }}/backup-controller/manifests"
+      DATA_PLANE_HOST: "0.0.0.0"
+      DATA_PLANE_PORT: "7103"
     state_dir: "{{ data_plane_state_root }}/recovery-portal"
-    container_user: "0:0"
+    container_user: "65532:65532"
     volumes:
       - "{{ data_plane_state_root }}/recovery-portal:/var/lib/homelab/recovery-portal:rw"
       - "/var/backups/primary:/var/backups/primary:ro"
