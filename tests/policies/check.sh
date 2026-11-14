@@ -613,6 +613,10 @@ while IFS=: read -r app deadline; do
     "$app-data:true" "$app restic mounts only its own claim, read-only"
   eq "$(yq -r '.spec.jobTemplate.spec.template.spec.securityContext.runAsUser' "$cj")" "1000" \
     "$app restic runs as the share's uid"
+  # A crash loop hides the error in one pod that the Job controller deletes with
+  # the backoff limit. `Never` leaves each failed attempt behind for its TTL.
+  eq "$(yq -r '.spec.jobTemplate.spec.template.spec.restartPolicy' "$cj")" "Never" \
+    "$app restic keeps a failed attempt, and its log, as its own pod"
   eq "$(yq -r '[.spec.jobTemplate.spec.template.spec.containers[0].env[] | select(.valueFrom) | .name] | sort | join(",")' "$cj")" \
     "AWS_ACCESS_KEY_ID,AWS_SECRET_ACCESS_KEY,RESTIC_PASSWORD" \
     "$app restic takes its key and password from the projected Secret only"

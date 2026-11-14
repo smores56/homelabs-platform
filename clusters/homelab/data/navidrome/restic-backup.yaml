@@ -56,7 +56,11 @@ spec:
         spec:
           serviceAccountName: data-workload
           automountServiceAccountToken: false
-          restartPolicy: OnFailure
+          # `Never` and not `OnFailure`: a container that fails is restarted in place, so
+          # the crash loop is one pod the Job controller deletes when the backoff limit
+          # is spent — and the log that says why goes with it. `Never` leaves every
+          # failed attempt as its own pod for `ttlSecondsAfterFinished` to expire.
+          restartPolicy: Never
           # No fsGroup: it would recursively chown the share. The credentials
           # Secret is mounted world-readable instead (see restic-contract).
           securityContext:
