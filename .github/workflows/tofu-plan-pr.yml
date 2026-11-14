@@ -1,0 +1,170 @@
+name: tofu-plan-pr
+
+# Pre-merge plan (SDLC #622). The merge is the approval, so the reviewer needs
+# the effect, not just the HCL diff. This is the only workflow allowed to hold
+# Cloudflare credentials on a `pull_request` event, and it holds only read-only
+# ones (`CLOUDFLARE_PLAN_API_TOKEN`, `R2_STATE_READONLY_*`); the write token
+# stays in `tofu-apply.yml`, which never runs on a PR.
+#
+# Four guards, because on `pull_request` the workflow file that runs is the PR
+# head's, not the base one:
+#
+#   1. fork PRs receive no environment secrets at all; the job says so and
+#      stops before anything reads a credential;
+#   2. `cloudflare`'s deployment-branch policy allows `main` and `smores/*`
+#      only, so an agent-owned branch cannot reach the environment;
+#   3. a PR touching `.github/` or `scripts/` fails closed: the head workflow
+#      is the one holding the token, so CI changes need an owner bypass after a
+#      human read, never an automatic plan;
+#   4. executable HCL (`local-exec`, `remote-exec`, `provisioner`, the
+#      `external` data source) is refused unless the owner applies the
+#      `tofu-allow-exec` label.
+#
+# scripts/check-pr-secret-boundary.sh asserts these guards statically, and
+# tests/tofu/check.sh asserts the credential split.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: tofu-plan-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  plan:
+    name: tofu plan (read-only)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: cloudflare
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      # Runs before any credential is referenced, so a fork PR and a
+      # no-op PR both end here with a success the required check can use.
+      - name: guard (fork, CI changes, tofu changes, executable HCL)
+        id: guard
+        # guard: fork-only
+        # guard: ci-change-refused
+        # guard: exec-label
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
+        run: |
+          set -euo pipefail
+          if [[ $HEAD_REPO != "$GITHUB_REPOSITORY" ]]; then
+            echo "::notice::fork pull request; environment secrets are never provided, so there is no plan to make"
+            echo "run=false" >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          git fetch --no-tags origin "+refs/heads/$BASE_REF:refs/remotes/origin/$BASE_REF"
+          base=$(git merge-base "origin/$BASE_REF" HEAD)
+          changed=$(git diff --name-only "$base" HEAD)
+
+          if grep -qE '^(\.github|scripts)/' <<<"$changed"; then
+            echo "::error::this PR changes .github/ or scripts/."
+            echo "::error::On a pull_request event the workflow holding the token is the PR head's, so the plan is refused."
+            echo "::error::Split the CI change into its own PR and merge it with an owner bypass after reading the diff."
+            exit 1
+          fi
+
+          if ! grep -qE '^tofu/' <<<"$changed"; then
+            echo "::notice::no tofu/ changes; the plan check passes without credentials"
+            echo "run=false" >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if grep -rnE 'local-exec|remote-exec|provisioner|data[[:space:]]+"external"' tofu/; then
+            if [[ ",$LABELS," != *,tofu-allow-exec,* ]]; then
+              echo "::error::tofu/ contains an executable construct (matches above)."
+              echo "::error::A plan runs provider code on this runner; add the tofu-allow-exec label after reading every match, or remove it."
+              exit 1
+            fi
+            echo "::warning::executable HCL allowed by the tofu-allow-exec label"
+          fi
+
+          echo "run=true" >>"$GITHUB_OUTPUT"
+
+      - name: install pinned tools
+        if: steps.guard.outputs.run == 'true'
+        run: |
+          scripts/install-ci-tools.sh "$RUNNER_TEMP/bin"
+          echo "$RUNNER_TEMP/bin" >>"$GITHUB_PATH"
+
+      - name: init and plan
+        id: plan
+        if: steps.guard.outputs.run == 'true'
+        env:
+          # guard: read-only-credentials
+          # Read-only by contract (docs/manual-steps.md step 14). A workflow edit
+          # on a branch can therefore reach only a credential that can read.
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_PLAN_API_TOKEN }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_STATE_READONLY_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_STATE_READONLY_SECRET_ACCESS_KEY }}
+        run: |
+          set -o pipefail
+          for name in CLOUDFLARE_API_TOKEN AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY; do
+            if [[ -z ${!name:-} ]]; then
+              echo "::error::$name is absent from the cloudflare environment."
+              echo "::error::A silent skip would let a PR merge without a plan; provision the read-only credentials."
+              echo "::error::See docs/manual-steps.md step 14."
+              exit 1
+            fi
+          done
+          export AWS_DEFAULT_REGION=auto
+          tofu -chdir=tofu init -input=false -no-color
+          status=0
+          tofu -chdir=tofu plan -input=false -lock=false -no-color \
+            -detailed-exitcode -out=tfplan >plan.txt 2>&1 || status=$?
+          {
+            echo '## tofu plan (pre-merge)'
+            echo
+            echo '```'
+            tail -n 300 plan.txt
+            echo '```'
+          } >>"$GITHUB_STEP_SUMMARY"
+          case "$status" in
+            0) echo "::notice::plan is empty" ;;
+            2) echo "::notice::plan has changes; the summary and the PR comment show them" ;;
+            *) echo "::error::tofu plan failed (exit $status)"; exit 1 ;;
+          esac
+
+      - name: comment the plan on the PR
+        if: steps.guard.outputs.run == 'true' && always() && steps.plan.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          {
+            echo '<!-- tofu-plan-pr -->'
+            echo 'tofu plan against the current state:'
+            echo
+            echo '```'
+            tail -n 200 plan.txt
+            echo '```'
+            echo
+            echo "_Read the plan, not only the diff: a rename of a \`for_each\` key is a replacement._"
+          } >comment.md
+          # One sticky comment per PR: update the marked one instead of adding a
+          # new comment on every push to the branch.
+          id=$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR/comments" --paginate \
+            --jq '.[] | select(.body | startswith("<!-- tofu-plan-pr -->")) | .id' | head -n1)
+          if [[ -n $id ]]; then
+            gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$id" -F body=@comment.md >/dev/null
+          else
+            gh api -X POST "repos/$GITHUB_REPOSITORY/issues/$PR/comments" -F body=@comment.md >/dev/null
+          fi
+
+      - name: explain the skip
+        if: steps.guard.outputs.run != 'true'
+        run: echo "::notice::no plan was needed (see the guard step)"

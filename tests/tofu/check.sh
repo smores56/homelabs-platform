@@ -321,29 +321,81 @@ if grep -qE 'encryption[[:space:]]*\{' "$work/code.tf"; then
 else
   ok "no client-side state encryption without a key store"
 fi
-# The apply path: dispatch only, no auto-approve, and a detailed-exitcode gate.
+# The apply path (SDLC #622): the merge is the approval, so a merge to main
+# plans and applies, a destructive plan does not apply unattended, and only the
+# owner may run it.
 apply=.github/workflows/tofu-apply.yml
-if grep -qE '^[[:space:]]*push:' "$apply"; then
-  bad "tofu-apply does not run on push"
+if grep -qE '^[[:space:]]*branches: \[main\]' "$apply"; then
+  ok "tofu-apply runs on a merge to main"
 else
-  ok "tofu-apply does not run on push"
+  bad "tofu-apply runs on a merge to main"
 fi
-if grep -q 'workflow_dispatch' "$apply"; then ok "tofu-apply is dispatched by hand"; else bad "tofu-apply is dispatched by hand"; fi
+if grep -qE '^[[:space:]]*pull_request' "$apply"; then
+  bad "the apply workflow never runs on a pull request"
+else
+  ok "the apply workflow never runs on a pull request"
+fi
+if grep -q 'workflow_dispatch' "$apply"; then ok "tofu-apply keeps an owner dispatch"; else bad "tofu-apply keeps an owner dispatch"; fi
 if grep -q -- '-auto-approve' "$apply"; then
   bad "no -auto-approve in the apply workflow"
 else
   ok "no -auto-approve in the apply workflow"
 fi
-if grep -q -- '-detailed-exitcode' "$apply"; then
-  ok "the apply workflow gates on plan -detailed-exitcode"
+if grep -q -- '-detailed-exitcode' "$apply" && grep -q 'apply .*tfplan' "$apply"; then
+  ok "the apply workflow applies the saved plan from its own run"
 else
-  bad "the apply workflow gates on plan -detailed-exitcode"
+  bad "the apply workflow applies the saved plan from its own run"
 fi
-if grep -qE 'apply:[[:space:]]*true|inputs\.apply' "$apply"; then
-  ok "apply runs only when the dispatch asks for it"
+if grep -q 'github.repository_owner' "$apply"; then
+  ok "the apply workflow refuses actors other than the owner"
 else
-  bad "apply runs only when the dispatch asks for it"
+  bad "the apply workflow refuses actors other than the owner"
 fi
+if grep -qE 'must be replaced|will be destroyed' "$apply"; then
+  ok "the apply workflow stops instead of applying a destructive plan"
+else
+  bad "the apply workflow stops instead of applying a destructive plan"
+fi
+if grep -q 'secrets.CLOUDFLARE_API_TOKEN' "$apply"; then
+  ok "the write token lives only in the apply workflow"
+else
+  bad "the write token lives only in the apply workflow"
+fi
+
+# The pre-merge plan: the required check that makes the merge meaningful, with
+# read-only credentials because on a pull_request the head workflow runs.
+pr=.github/workflows/tofu-plan-pr.yml
+if grep -qE '^[[:space:]]*pull_request:' "$pr"; then ok "the pre-merge plan runs on pull requests"; else bad "the pre-merge plan runs on pull requests"; fi
+if grep -q 'environment: cloudflare' "$pr"; then ok "the pre-merge plan uses the cloudflare environment"; else bad "the pre-merge plan uses the cloudflare environment"; fi
+if grep -q 'secrets.CLOUDFLARE_PLAN_API_TOKEN' "$pr"; then ok "the pre-merge plan holds the read-only token"; else bad "the pre-merge plan holds the read-only token"; fi
+if grep -qE 'secrets\.(CLOUDFLARE_API_TOKEN|R2_STATE_ACCESS_KEY_ID|R2_STATE_SECRET_ACCESS_KEY)\b' "$pr"; then
+  bad "the pre-merge plan never holds the write credentials"
+else
+  ok "the pre-merge plan never holds the write credentials"
+fi
+if grep -q 'head.repo.full_name' "$pr"; then ok "the pre-merge plan fails closed for forks"; else bad "the pre-merge plan fails closed for forks"; fi
+if grep -qE '\\?\(\\?\.github|\.github\|scripts' "$pr"; then
+  ok "the pre-merge plan refuses a PR that changes CI"
+else
+  bad "the pre-merge plan refuses a PR that changes CI"
+fi
+if grep -q 'tofu-allow-exec' "$pr"; then ok "the pre-merge plan gates executable HCL on a label"; else bad "the pre-merge plan gates executable HCL on a label"; fi
+if grep -qE 'ref: \$\{\{ github.event.pull_request.head.sha \}\}' "$pr"; then
+  ok "the pre-merge plan plans the PR head"
+else
+  bad "the pre-merge plan plans the PR head"
+fi
+
+# Drift is read-only and never applies.
+drift=.github/workflows/tofu-drift.yml
+if grep -qE '^[[:space:]]*- cron:' "$drift"; then ok "drift detection is scheduled"; else bad "drift detection is scheduled"; fi
+if grep -qE 'tofu .*apply' "$drift"; then bad "drift detection never applies"; else ok "drift detection never applies"; fi
+if grep -q 'secrets.CLOUDFLARE_API_TOKEN' "$drift"; then
+  bad "drift detection holds no write token"
+else
+  ok "drift detection holds no write token"
+fi
+if grep -q 'tofu-drift' "$drift"; then ok "drift detection reports through one issue"; else bad "drift detection reports through one issue"; fi
 if git ls-files | grep -q '\.tfstate'; then
   bad "no state file is tracked"
 else

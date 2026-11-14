@@ -151,11 +151,14 @@ lacked (HTTP 403, recorded in `docs/runbook.md`). Run as the owner with a
 classic `repo`-scoped PAT or a fine-grained PAT carrying Administration and
 Actions write:
 
-1. `docs/runbook.md` → "Environment `cloudflare`": the environment object
-   already exists but has no deployment branch policy
-   (`deployment_branch_policy: null`, branch-policy list 404). Set
-   `custom_branch_policies: true` and add the `main` branch policy before any
-   secret lands. No required reviewers.
+1. `docs/runbook.md` → "Environment `cloudflare`": the environment object exists
+   but has no deployment branch policy (`deployment_branch_policy: null`). Set
+   `custom_branch_policies: true` and add **two** policies, `main` and
+   `smores/*`. `main` is the apply path; `smores/*` is the pre-merge plan, which
+   needs the read-only pair on a PR branch. `agent/*` is deliberately absent, so
+   a branch the bot can push cannot reach the environment at all. No required
+   reviewers: that reviewer was the click this design removes, and the merge plus
+   the required plan check are the approval now.
 2. `docs/runbook.md` → "Repo settings": read-only default `GITHUB_TOKEN`,
    SHA-pinning required, only GitHub-owned and verified actions, fork PRs need
    owner approval, private vulnerability reporting on.

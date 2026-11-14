@@ -17,12 +17,22 @@ Job `fork-pr-secret-boundary` in `.github/workflows/ci.yml`:
   PR passes only because the variable is never injected.
 - Step `no pull_request workflow references a secret` runs
   `scripts/check-pr-secret-boundary.sh`, which statically asserts:
-  - no workflow triggered by `pull_request` references `secrets.<NAME>` other
-    than `secrets.GITHUB_TOKEN` (read-only on fork runs);
-  - no workflow uses `pull_request_target`, which runs with base-repo secrets.
+  - every `pull_request` workflow except `tofu-plan-pr.yml` references no
+    `secrets.<NAME>` other than `secrets.GITHUB_TOKEN`;
+  - `tofu-plan-pr.yml` may reference only the read-only plan pair
+    (`CLOUDFLARE_PLAN_API_TOKEN`, `R2_STATE_READONLY_*`) and must carry the four
+    guard markers (fork-only, CI-change refusal, executable-HCL label,
+    read-only credentials), so deleting a guard fails CI on the same diff;
+  - no workflow uses `pull_request_target`, which runs with base-repo secrets and
+    is blocked by default in public repositories from 2026-12-02 anyway.
 
 Both checks run on every PR, so they also guard the invariant over time: adding
 `secrets.CLOUDFLARE_API_TOKEN` to a `pull_request` workflow fails CI on that PR.
+The #622 exemption is the one deliberate relaxation: the pre-merge plan is what
+makes the merge an informed approval, and read-only credentials are what make the
+relaxation survivable. It depends on the `cloudflare` environment allowing only
+`main` and `smores/*` (docs/manual-steps.md step 4), because the workflow that
+holds those credentials on a PR is the PR head's.
 
 Result of the static half: **PASS** locally on the bootstrap commits
 (`scripts/check-pr-secret-boundary.sh` → `no pull_request workflow references
