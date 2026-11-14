@@ -1,0 +1,361 @@
+"""Entrypoint: ``python -m apps.data_plane.run <service>``.
+
+One process runs one service. Configuration comes from flags or the matching
+environment variable; a missing DB path or secret file aborts startup instead
+of serving a half-configured endpoint. Logs go to stderr so a container can
+keep stdout for nothing else and a read-only root filesystem only needs the
+database and manifest directories to be writable mounts.
+
+Every backend is local and offline: SQLite files, a fixture snapshotter, and
+in-memory destinations. Nothing here shells out to restic, dials a provider, or
+reads a live source.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import logging
+import os
+import sys
+import time
+from pathlib import Path
+from typing import Any, Iterable, Mapping
+
+from data_plane.backup.controller import FanoutController
+from data_plane.backup.destinations import InMemoryDestination
+from data_plane.broker import Broker
+from data_plane.broker_journal import BrokerJournal
+from data_plane.collectors.relay import Relay
+from data_plane.confirmation import ConfirmationGate, NormalizedOperation
+from data_plane.errors import DataPlaneError
+from data_plane.event_log import EventLog
+from data_plane.identity import IdentityIssuer
+from data_plane.intents import IntentStore
+from data_plane.model import (
+    Authority,
+    Capability,
+    EffectClass,
+    FieldAuthority,
+    FidelityLimit,
+    SourceContract,
+    Visibility,
+)
+
+from . import backup_service, broker_service, common, event_service, relay_service
+
+SERVICES = ("event", "broker", "relay", "backup")
+
+
+class ConfigError(Exception):
+    """Startup configuration is missing or invalid."""
+
+
+def _env(name: str, default: str | None = None) -> str | None:
+    value = os.environ.get(name)
+    return default if value is None or not value.strip() else value
+
+
+def _parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="python -m apps.data_plane.run",
+        description="Run one offline data-plane HTTP service.",
+    )
+    parser.add_argument("service", choices=SERVICES)
+    parser.add_argument("--host", default=_env("DATA_PLANE_HOST", "127.0.0.1"))
+    parser.add_argument(
+        "--port", type=int, default=int(_env("DATA_PLANE_PORT", "8080") or "8080")
+    )
+    parser.add_argument("--db", default=_env("DATA_PLANE_DB"))
+    parser.add_argument("--secret-file", default=_env("DATA_PLANE_SECRET_FILE"))
+    parser.add_argument("--schema", default=_env("DATA_PLANE_SCHEMA"))
+    parser.add_argument("--catalog", default=_env("DATA_PLANE_CATALOG"))
+    parser.add_argument(
+        "--manifest-dir", default=_env("DATA_PLANE_MANIFEST_DIR", "manifests")
+    )
+    parser.add_argument("--group", action="append", dest="groups")
+    parser.add_argument("--destination", action="append", dest="destinations")
+    parser.add_argument(
+        "--max-body-bytes",
+        type=int,
+        default=int(_env("DATA_PLANE_MAX_BODY_BYTES", str(common.MAX_BODY_BYTES)) or "0"),
+    )
+    return parser
+
+
+def _required(value: str | None, name: str) -> str:
+    if not value:
+        raise ConfigError(f"{name} is required")
+    return value
+
+
+def _read_secret(path: str | None) -> bytes:
+    target = Path(_required(path, "--secret-file (DATA_PLANE_SECRET_FILE)"))
+    try:
+        secret = target.read_bytes().rstrip(b"\r\n")
+    except OSError as exc:
+        raise ConfigError(f"cannot read secret file {target}: {exc.strerror}") from exc
+    if not secret:
+        raise ConfigError(f"secret file {target} is empty")
+    return secret
+
+
+def _comma_list(value: str | None) -> tuple[str, ...]:
+    if not value:
+        return ()
+    return tuple(item.strip() for item in value.split(",") if item.strip())
+
+
+def _source_contract(raw: Mapping[str, Any]) -> SourceContract:
+    contract = SourceContract(
+        source_id=str(raw["source_id"]),
+        visibility=Visibility(str(raw["visibility"])),
+        version=int(raw.get("version", 1)),
+        recovery_group=str(raw["recovery_group"]),
+        stable_id_fields=tuple(str(item) for item in raw.get("stable_id_fields", ())),
+        capabilities=tuple(
+            Capability(
+                name=str(item["name"]),
+                effect=EffectClass(str(item["effect"])),
+                requires_confirmation=bool(item.get("requires_confirmation", False)),
+                reversible=bool(item.get("reversible", True)),
+                description=str(item.get("description", "")),
+            )
+            for item in raw.get("capabilities", ())
+        ),
+        authority=tuple(
+            FieldAuthority(
+                field=str(item["field"]),
+                authority=Authority(str(item["authority"])),
+                exportable=bool(item.get("exportable", True)),
+                note=str(item.get("note", "")),
+            )
+            for item in raw.get("authority", ())
+        ),
+        revision_field=raw.get("revision_field"),
+        tombstone_field=raw.get("tombstone_field"),
+        attachment_hash_fields=tuple(
+            str(item) for item in raw.get("attachment_hash_fields", ())
+        ),
+        fidelity_limits=tuple(
+            FidelityLimit(field=str(item["field"]), reason=str(item["reason"]))
+            for item in raw.get("fidelity_limits", ())
+        ),
+        epoch=int(raw.get("epoch", 1)),
+        notes=str(raw.get("notes", "")),
+    )
+    contract.validate()
+    return contract
+
+
+def _load_catalog(path: str | None) -> dict[str, SourceContract]:
+    target = Path(_required(path, "--catalog (DATA_PLANE_CATALOG)"))
+    try:
+        raw = json.loads(target.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ConfigError(f"cannot read catalog {target}: {exc}") from exc
+    items = raw.get("sources") if isinstance(raw, dict) else raw
+    if not isinstance(items, list) or not items:
+        raise ConfigError("catalog must contain a non-empty 'sources' list")
+    sources: dict[str, SourceContract] = {}
+    for item in items:
+        if not isinstance(item, dict):
+            raise ConfigError("catalog sources must be JSON objects")
+        try:
+            contract = _source_contract(item)
+        except (KeyError, TypeError, ValueError, DataPlaneError) as exc:
+            raise ConfigError(f"invalid catalog source: {exc}") from exc
+        sources[contract.source_id] = contract
+    return sources
+
+
+class FixtureAdapter:
+    """In-memory source used until a real adapter is provisioned.
+
+    It implements the broker's four calls with a dict per target and a
+    monotonic revision stub. It never contacts the source it stands in for.
+    """
+
+    def __init__(self, contract: SourceContract) -> None:
+        self._contract = contract
+        self._records: dict[str, dict[str, Any]] = {}
+        self._writes = 0
+
+    def revision(self, target: str) -> str | None:
+        record = self._records.get(target)
+        field = self._contract.revision_field
+        if record is None or field is None:
+            return None
+        value = record.get(field)
+        return None if value is None else str(value)
+
+    def read(self, target: str) -> dict[str, Any]:
+        return dict(self._records.get(target, {}))
+
+    def search(self, query: str) -> list[dict[str, Any]]:
+        needle = query.lower()
+        return [
+            dict(record)
+            for record in self._records.values()
+            if needle in str(record.get("title", "")).lower()
+        ]
+
+    def apply(
+        self, operation: NormalizedOperation, idempotency_key: str
+    ) -> dict[str, Any]:
+        if operation.capability == "delete":
+            for target in operation.targets:
+                self._records.pop(target, None)
+            return {"applied": len(operation.targets)}
+        self._writes += 1
+        for target in operation.targets:
+            record = self._records.setdefault(target, {"id": target})
+            for change in operation.field_diff:
+                record[change.field] = change.after
+            if self._contract.revision_field:
+                record[self._contract.revision_field] = f"rev-{self._writes}"
+        return {"applied": len(operation.targets)}
+
+
+class JournalRecorder:
+    """Effect recorder that appends to the local event log."""
+
+    def __init__(self, log: EventLog) -> None:
+        self._log = log
+
+    def record(self, event: Mapping[str, Any]) -> None:
+        self._log.append("broker.effect", str(event.get("intent_id", "")), dict(event))
+
+
+class FixtureSnapshotter:
+    """Snapshotter that fences, checkpoints, and returns fixture snapshot ids."""
+
+    def __init__(self, clock: Any = time.time) -> None:
+        self._clock = clock
+        self.events: list[tuple[str, str]] = []
+
+    def fence(self, group_id: str) -> None:
+        self.events.append(("fence", group_id))
+
+    def checkpoint(self, group_id: str) -> None:
+        self.events.append(("checkpoint", group_id))
+
+    def snapshot(self, group_id: str) -> dict[str, str]:
+        self.events.append(("snapshot", group_id))
+        return {f"fixture-{group_id}": f"snap-{group_id}-{int(self._clock() * 1000)}"}
+
+    def resume(self, group_id: str) -> None:
+        self.events.append(("resume", group_id))
+
+
+def _run_event(args: argparse.Namespace) -> int:
+    log = EventLog(_required(args.db, "--db (DATA_PLANE_DB)"))
+    try:
+        service = event_service.EventService(
+            log, _read_secret(args.secret_file), max_body_bytes=args.max_body_bytes
+        )
+        common.serve(
+            "event", common.handler_for(service), port=args.port, host=args.host
+        )
+    finally:
+        log.close()
+    return 0
+
+
+def _run_relay(args: argparse.Namespace) -> int:
+    secret = _read_secret(args.secret_file)
+    try:
+        schema = relay_service.load_schema(
+            _required(args.schema, "--schema (DATA_PLANE_SCHEMA)")
+        )
+    except (OSError, ValueError) as exc:
+        raise ConfigError(f"cannot load relay schema: {exc}") from exc
+
+    accepted: list[dict[str, Any]] = []
+
+    def sink(record: dict[str, Any]) -> None:
+        accepted.append(record)
+
+    service = relay_service.RelayService(
+        Relay(secret, schema, sink), max_body_bytes=args.max_body_bytes
+    )
+    common.serve("relay", common.handler_for(service), port=args.port, host=args.host)
+    return 0
+
+
+def _run_broker(args: argparse.Namespace) -> int:
+    secret = _read_secret(args.secret_file)
+    sources = _load_catalog(args.catalog)
+    db = Path(_required(args.db, "--db (DATA_PLANE_DB)"))
+    journal = IntentStore(db)
+    event_path = db if str(db) == ":memory:" else db.with_suffix(db.suffix + ".events")
+    event_log = EventLog(event_path)
+    try:
+        issuer = IdentityIssuer(sources, secret)
+        gate = ConfirmationGate()
+        adapters = {
+            source_id: FixtureAdapter(contract)
+            for source_id, contract in sources.items()
+        }
+        broker = Broker(
+            sources,
+            adapters,
+            issuer,
+            gate,
+            BrokerJournal(journal),
+            JournalRecorder(event_log),
+        )
+        service = broker_service.BrokerService(broker, issuer)
+        common.serve(
+            "broker", common.handler_for(service), port=args.port, host=args.host
+        )
+    finally:
+        event_log.close()
+        journal.close()
+    return 0
+
+
+def _run_backup(args: argparse.Namespace) -> int:
+    groups = tuple(args.groups or _comma_list(_env("DATA_PLANE_GROUPS"))) or (
+        "fixture",
+    )
+    destinations = tuple(
+        args.destinations or _comma_list(_env("DATA_PLANE_DESTINATIONS"))
+    ) or ("fixture-a", "fixture-b")
+    controller = FanoutController(
+        FixtureSnapshotter(),
+        [InMemoryDestination(name) for name in destinations],
+        Path(args.manifest_dir),
+    )
+    service = backup_service.BackupService(controller, destinations, groups)
+    common.serve("backup", common.handler_for(service), port=args.port, host=args.host)
+    return 0
+
+
+_RUNNERS = {
+    "event": _run_event,
+    "broker": _run_broker,
+    "relay": _run_relay,
+    "backup": _run_backup,
+}
+
+
+def main(argv: Iterable[str] | None = None) -> int:
+    args = _parser().parse_args(list(sys.argv[1:] if argv is None else argv))
+    if args.max_body_bytes < 1:
+        print("data-plane: --max-body-bytes must be positive", file=sys.stderr)
+        return 2
+    logging.basicConfig(
+        stream=sys.stderr,
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s %(message)s",
+    )
+    try:
+        return _RUNNERS[args.service](args)
+    except (ConfigError, DataPlaneError) as exc:
+        print(f"data-plane: {exc}", file=sys.stderr)
+        return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
