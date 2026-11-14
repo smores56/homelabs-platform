@@ -1136,69 +1136,118 @@ inbox. The cluster holds no age key.
      -o jsonpath='{.spec.policyTypes}{"\n"}{.spec.ingress}{"\n"}'             # Egress,Ingress / nothing
    ```
 
-## 24. Point the `notify` logical host at the real provider
+## 24. Provision the notification bus credentials
 
-The `notify` enrollment (SDLC #640) is a reviewed placeholder: the broker admits
-only `POST /v1/notify`, caps the body at 4 KiB, and injects
-`Authorization: Bearer <notify-token>`. The endpoint is `notify.invalid`, a name
-reserved by RFC 2606 that never resolves, so every call fails closed with
-`502 dns_failure` until the provider is chosen and the values below replace the
-placeholder in `clusters/homelab/broker/config/broker.json`.
+The `notify` logical host (SDLC #640) now names the real bus (SDLC #649):
+`https://ntfy.sammohr.dev`, `POST` on a single-segment topic, body capped at
+4 KiB, `Authorization: Bearer <notify-token>` injected, `allow_private: false`.
+The bus is `clusters/homelab/notify/` and its shape is `docs/notify.md`; the
+hostname's tunnel route is the `cluster_ingress` entry applied in step 15.
 
-Fill in exactly these fields, then commit and let Flux apply:
+Two Secrets are created here by hand. Neither value is in git.
 
-| Field | Value to enter | Why |
+| Secret | Namespace | Keys | Read by |
+| --- | --- | --- | --- |
+| `ntfy-auth-sops` | `notify` | `users`, `tokens`, `access` | ESO projects it into `ntfy-auth`, which the Deployment reads as `NTFY_AUTH_USERS` / `_TOKENS` / `_ACCESS` |
+| `broker-credentials` | `broker` | `notify-token` | the broker, injected as the bearer on `notify` |
+
+Five tokens, one per holder, so revocation is per device:
+
+| User | ACL | Token holder |
 | --- | --- | --- |
-| `host` | the provider's API hostname (DNS name, never an IP literal) | the broker resolves and pins the address itself |
-| `port` | `443`, or the provider's TLS port | keep `scheme: https`; a credential over plain HTTP is refused at load |
-| `allow_paths` | `^<provider path>$` | the only upstream path the broker forwards |
-| `inject` | `{"kind": "bearer"}` for ntfy or Slack, `{"kind": "header", "header": "<name>"}` for an API-key provider | exactly one credential is injected |
-| `max_body_bytes` | at most `4096`; raise only if the provider needs it | bounds a notification message |
-| `secret` | `notify-token` | names the Secret file; the value never enters git |
+| `sam` | admin — no ACL entry, ntfy rejects one | the web UI login; the password is the only credential a human types |
+| `agent` | `agent:wo` | `notify-token` in `broker-credentials` — the agent |
+| `publisher` | `alerts:wo` | `ntfy-publish@.service` on the host and `notifyrelay` in the cluster |
+| `reader` | `alerts:ro`, `agent:ro` | the phone and the laptop, one token each |
 
-Keep `allow_private: false`. A provider that answers on a private address would
-mean the broker is no longer the public boundary; refuse that instead of
-widening the enrollment.
+`agent` is a separate user from `publisher` on purpose: the broker's
+`allow_paths` is a single-segment regex, not a topic allowlist, so a publisher
+token would let the agent page `alerts`. The bus enforces the boundary, not the
+broker.
 
-Supply the token, without the value reaching the command line or a transcript:
+Generate the values without them reaching the command line or a transcript:
 
 ```sh
-read -rsp 'notify token: ' NOTIFY; echo
 umask 077
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
-printf '%s\n' "$NOTIFY" > "$tmp/notify-token"; unset NOTIFY
+# five tokens, 32 characters each: tk_ plus 29 from the ntfy alphabet
+for u in sam agent publisher phone laptop; do
+  printf 'tk_%s\n' "$(openssl rand -base64 64 | tr -dc 'A-Za-z0-9_-')" \
+    | cut -c1-32 > "$tmp/tk_$u"
+done
+# one bcrypt hash per user; token-only users still need one, an empty hash is rejected
+for u in sam agent publisher reader; do
+  read -rsp "password for $u: " P; echo
+  htpasswd -bnBC 10 "" "$P" | tr -d ':\n' > "$tmp/hash_$u"; unset P
+done
+```
+
+Assemble the three lists and create the Secret. It must exist before the
+`platform-notify` stage applies the Deployment, or the pod sits in
+`CreateContainerConfigError` on the missing `ntfy-auth`:
+
+```sh
+cd "$tmp"
+printf 'sam:%s:admin,agent:%s:user,publisher:%s:user,reader:%s:user\n' \
+  "$(cat hash_sam)" "$(cat hash_agent)" "$(cat hash_publisher)" "$(cat hash_reader)" > users
+printf 'sam:%s:web,agent:%s:broker,publisher:%s:host,reader:%s:phone,reader:%s:laptop\n' \
+  "$(cat tk_sam)" "$(cat tk_agent)" "$(cat tk_publisher)" "$(cat tk_phone)" "$(cat tk_laptop)" > tokens
+printf 'agent:agent:wo,publisher:alerts:wo,reader:alerts:ro,reader:agent:ro\n' > access
+sudo cluster-kubectl -n notify create secret generic ntfy-auth-sops \
+  --from-file=users --from-file=tokens --from-file=access
+```
+
+Then hand the `agent` token to the broker and restart it — it reads credentials
+once at start:
+
+```sh
 sudo cluster-kubectl -n broker patch secret broker-credentials --type merge \
-  -p "$(jq -nc --rawfile v "$tmp/notify-token" '{stringData:{"notify-token":$v}}')"
+  -p "$(jq -nc --rawfile v "$tmp/tk_agent" '{stringData:{"notify-token":$v}}')"
 sudo cluster-kubectl -n broker rollout restart deployment/broker
 ```
 
-Verify from inside the broker pod; it is the only place the value exists:
+Verify, in this order:
 
 ```sh
+# 1. ESO projected all three keys
+sudo cluster-kubectl -n notify get secret ntfy-auth -o jsonpath='{.data}' | jq 'keys'
+# 2. the bus is up and provisioned the users
+sudo cluster-kubectl -n notify exec deploy/ntfy -- ntfy user list
+# 3. a publish through the broker, from the only place the token exists
 sudo cluster-kubectl -n broker exec deploy/broker -- python -c '
-import http.client, json
+import http.client
 c = http.client.HTTPConnection("127.0.0.1", 8080, timeout=20)
-body = json.dumps({"message": "broker notify check"}).encode()
-c.putrequest("POST", "/notify/v1/notify", skip_host=True)
+body = b"broker notify check"
+c.putrequest("POST", "/notify/agent?title=broker&priority=low", skip_host=True)
 c.putheader("Host", "broker.broker.svc.cluster.local")
-c.putheader("Content-Type", "application/json")
+c.putheader("Content-Type", "text/plain")
 c.putheader("Content-Length", str(len(body)))
 c.endheaders(); c.send(body)
 r = c.getresponse(); print(r.status, r.read(200)); c.close()
 '
+# 4. the reader can see it
+curl -s -u ":$(cat "$tmp/tk_phone")" \
+  'https://ntfy.sammohr.dev/agent/json?poll=1&since=10m'
 ```
 
-Expected `2xx`. `502 dns_failure` means the placeholder is still in place; `403
-path_denied` or `body_denied` means a predicate no longer matches the provider;
-`413` means the message is over the cap. Size limits: 4 KiB of JSON per message
-(raise `max_body_bytes` deliberately), and the broker's 64 MiB global cap still
-applies. The body is never logged or echoed, and the provider's response is
-redacted like every other.
+Step 3 expects `200` and a JSON body with an `id`; step 4 expects the same
+message. Failures, by status:
 
-The broker reads credentials once at start, so any later token change needs the
-rollout restart above. `broker-credentials-contract` already lists
-`notify-token`, and `tests/policies/check.sh` fails if the enrollment and that
-contract drift apart.
+| Status | Meaning |
+| --- | --- |
+| `502 dns_failure` | the tunnel route is not applied (step 15) or DNS has not propagated |
+| `503 credential_unavailable` | `notify-token` is absent from `broker-credentials`, or the broker was not restarted |
+| `401` | the token is not in `auth.db`: the Secret was edited without a `rollout restart deployment/ntfy` |
+| `403` | the ACL does not cover the topic — `agent` may only write `agent` |
+| `429` | the per-visitor limiter (burst 120, replenish 2s); a reconcile loop, not a person |
+| `413` | the body is over the 4 KiB cap; raise `max_body_bytes` deliberately |
+
+The body is never logged or echoed, and the bus's response is redacted like
+every other host's. Rotation: replace the key in `ntfy-auth-sops`, wait for the
+ESO refresh (1h) or delete `ntfy-auth` so it is recreated, then restart the
+Deployment — provisioned users are immutable through the CLI, so the Secret is
+the only path. `broker-credentials-contract` already lists `notify-token`, and
+`tests/policies/check.sh` fails if the enrollment and that contract drift apart.
 
 ## 25. Admit the broker to agent-control
 
