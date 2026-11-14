@@ -33,7 +33,7 @@ from data_plane.errors import DataPlaneError
 from data_plane.event_log import EventLog
 from data_plane.identity import IdentityIssuer
 from data_plane.intents import IntentStore
-from data_plane.recovery.portal import build_entries, write_portal
+from data_plane.recovery.portal import write_portal
 from data_plane.model import (
     Authority,
     Capability,
