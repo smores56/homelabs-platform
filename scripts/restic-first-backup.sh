@@ -21,7 +21,11 @@
 # upload re-reads the tree from byte 0).
 set -uo pipefail
 
-KC=${KC:-kubectl}
+# smortress installs no plain `kubectl`; its `cluster-kubectl` wrapper reads a root-only
+# kubeconfig, so the default still needs root there — but the failure now says so.
+if [[ -z ${KC:-} ]]; then
+  if command -v cluster-kubectl >/dev/null; then KC=cluster-kubectl; else KC=kubectl; fi
+fi
 DEADLINE=${DEADLINE:-86400}
 BACKOFF_LIMIT=${BACKOFF_LIMIT:-6}
 
@@ -33,7 +37,9 @@ usage: scripts/restic-first-backup.sh --tree <name> [--deadline <seconds>]
               same name is where the Job runs
   --deadline  activeDeadlineSeconds applied to the Job (default 86400)
 
-environment: KC (kubectl command, default `kubectl`), BACKOFF_LIMIT (default 6)
+environment: KC (client command, default `cluster-kubectl` when installed, else
+           `kubectl`; smortress needs KC='sudo cluster-kubectl'),
+           BACKOFF_LIMIT (default 6)
 EOF
 }
 
@@ -49,8 +55,22 @@ done
 [[ -n $tree ]] || { usage; exit 64; }
 [[ $DEADLINE =~ ^[0-9]+$ ]] || { echo "--deadline takes whole seconds" >&2; exit 64; }
 
-$KC -n "$tree" get cronjob restic-backup >/dev/null 2>&1 ||
-  { echo "namespace $tree has no restic-backup CronJob" >&2; exit 2; }
+# Default to the host's wrapper when it exists: smortress installs no plain `kubectl`, and its
+# kubeconfig is root-only. Either way, a failing call has to report what failed — "no CronJob"
+# for a missing binary or a refused kubeconfig sends the operator looking in the wrong place.
+read -r -a kc <<<"$KC"
+if ! command -v "${kc[0]}" >/dev/null; then
+  echo "$KC: not found (or not on PATH)" >&2
+  echo "set KC to the client that can reach the cluster, e.g. KC='sudo cluster-kubectl'" >&2
+  exit 2
+fi
+
+if ! err=$($KC -n "$tree" get cronjob restic-backup 2>&1 >/dev/null); then
+  printf '%s -n %s get cronjob restic-backup failed:\n' "$KC" "$tree" >&2
+  printf '%s\n' "$err" >&2
+  printf 'If that is a credential or reachability problem, retry as KC="sudo cluster-kubectl" %s --tree %s\n' "$0" "$tree" >&2
+  exit 2
+fi
 
 if [[ -n $($KC -n "$tree" get cronjob restic-backup -o jsonpath='{.status.lastSuccessfulTime}') ]]; then
   echo "$tree has already had a successful run; let the nightly Job cover it" >&2
