@@ -45,7 +45,7 @@ spec:
             # One namespace per data app; the exporter's RoleBindings cover
             # exactly these four (observability/rbac-data.yaml).
             - name: DATA_NAMESPACES
-              value: calibre,graphiti,immich,navidrome
+              value: graphiti,immich,navidrome,opdshelf
             - name: EXPORT_PORT
               value: "9101"
             - name: REFRESH_SECONDS

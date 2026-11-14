@@ -278,7 +278,7 @@ for ref in prom/prometheus:v3.16.0 grafana/loki:3.7.9 \
   ghcr.io/immich-app/immich-server:v3.0.3 \
   ghcr.io/immich-app/immich-machine-learning:v3.0.3 \
   ghcr.io/immich-app/postgres:17-vectorchord0.4.3-pgvector0.8.1 \
-  deluan/navidrome:0.63.2 crocodilestick/calibre-web-automated:v4.0.8 \
+  deluan/navidrome:0.63.2 \
   cloudflare/cloudflared:2026.10.2 alpine/git:2.54.0; do
   printf '%s -> %s\n' "$ref" "$(crane digest "$ref")"
 done
@@ -286,7 +286,7 @@ done
 
 Then rewrite those `image:` lines under
 `clusters/homelab/observability/{prometheus,loki,vector,status-exporter,loki-gateway}`,
-`clusters/homelab/data/{immich,navidrome,calibre,graphiti}`,
+`clusters/homelab/data/{immich,navidrome,graphiti,opdshelf}`,
 `clusters/homelab/ingress` and `clusters/homelab/platform/backup`
 to `repo@sha256:<digest>` (keep the tag when the registry allows
 `repo:tag@sha256:...`), run `scripts/kustomize-build-all.sh` and
@@ -415,7 +415,7 @@ age key the host secrets use:
 sops -e -i neuralwatt-api-key.yaml
 # ingress: the tunnel token from T7
 sops -e -i cloudflare-tunnel-token.yaml
-# calibre: OPDShelf's admin password (also the readers' Basic auth credential)
+# opdshelf: OPDShelf's admin password (also the readers' Basic auth credential)
 sops -e -i opdshelf-admin-password.yaml
 # graphiti: the MCP wrapper's bearer token, the same value as the host secrets'
 # memory-mcp-token in smores56/nix-config
@@ -430,7 +430,7 @@ kubectl -n graphiti create secret generic neuralwatt-api-key-sops \
   --from-file=api-key=<(sops -d neuralwatt-api-key.yaml | yq -r .key | tr -d '\n')
 kubectl -n ingress create secret generic cloudflare-tunnel-token-sops \
   --from-file=tunnel-token=<(sops -d cloudflare-tunnel-token.yaml | yq -r .token | tr -d '\n')
-kubectl -n calibre create secret generic opdshelf-admin-password-sops \
+kubectl -n opdshelf create secret generic opdshelf-admin-password-sops \
   --from-file=password=<(sops -d opdshelf-admin-password.yaml | yq -r .password | tr -d '\n')
 kubectl -n graphiti create secret generic memory-mcp-token-sops \
   --from-file=memory-mcp-token=<(sops -d memory-mcp-token.yaml | yq -r .token | tr -d '\n')
@@ -479,8 +479,8 @@ first cutover:
    password is also the readers' Basic auth credential.
 4. The agent's write path is a file, not an API: OPDShelf's folder is the
    catalog, so `fanficfare-download` drops the EPUB where the host can move it
-   into the share and `calibredb` loses its content-server tail. That change
-   lives in `nix-config`, not here.
+   into the share and `calibredb` (the host CLI, previously named after the app)
+   loses its content-server tail. That change lives in `nix-config`, not here.
 5. **Publish and pin the wrapper image.** In `smores56/nix-config`:
    `just publish-memory-image <git-sha>` builds the layered image, pushes it to
    `ghcr.io/smores56/nix-config/memory-mcp:<git-sha>` and prints the digest.
@@ -1416,11 +1416,20 @@ construction: there is no Access login for GitHub.
 ## 28. Give each tree its restic Secret, then run the drill
 
 Four trees now back themselves up from the cluster (`clusters/homelab/data/*/restic-backup.yaml`,
-SDLC #619): `immich`, `navidrome`, `calibre` and `graphiti`, each with its own
+SDLC #619): `immich`, `navidrome`, `graphiti` and `opdshelf`, each with its own
 CronJob, its own claim mounted read-only and its own repository at
 `s3:https://<account>.r2.cloudflarestorage.com/restic-backup/trees/<tree>`. The
 host's `restic-backups-r2.timer` keeps running and stays the owner of every tree
 until that tree's drill below passes; nothing in this repository stops it.
+
+The namespace was named `calibre` before this rename, so Flux prunes the old
+namespace and deletes its `calibre-*` objects — names it previously carried —
+in the same reconcile that creates the `opdshelf` ones. The PV data is
+untouched because it points at the `/mnt/data/books` share, not at the
+namespace. The old restic prefix `trees/calibre`, previously this tree's
+repository, is orphaned in R2 (the operator may delete it); the new
+`trees/opdshelf` tree starts empty, so the books backup stays on the host timer
+until the new drill below passes.
 
 1. Create one SOPS Secret per namespace. The R2 key pair is the host's existing
    one (`r2-access-key-id` / `r2-secret-access-key` in nix-config's
@@ -1430,7 +1439,7 @@ until that tree's drill below passes; nothing in this repository stops it.
    then:
 
    ```sh
-   for ns in immich navidrome calibre graphiti; do
+   for ns in immich navidrome graphiti opdshelf; do
      kubectl -n "$ns" create secret generic restic-backup-sops \
        --from-file=r2-access-key-id --from-file=r2-secret-access-key \
        --from-file=restic-password
@@ -1447,7 +1456,7 @@ until that tree's drill below passes; nothing in this repository stops it.
    100 MiB of data:
 
    ```sh
-   for ns in immich navidrome calibre graphiti; do
+   for ns in immich navidrome graphiti opdshelf; do
      kubectl -n "$ns" create job --from=cronjob/restic-preflight "preflight-$(date +%s)"
    done
    kubectl -n immich get jobs -w        # then the other three namespaces

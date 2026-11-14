@@ -15,7 +15,7 @@ changes by pull request from a fork, so no PR workflow can read a secret.
 | `clusters/homelab/kustomization.yaml` | Flux root build; controller patches live here so bootstrap cannot overwrite them |
 | `clusters/homelab/flux-system/` | Install manifests, root sync objects, `gotk-patches/`, image automation (`image-automation/`), `bootstrap.sh` |
 | `clusters/homelab/platform/` | Ordered stages: namespaces, RBAC, admission policy, network, secrets, storage, backup, digest, data apps, ingress, observability, nanobot policy, tenant reconciler |
-| `clusters/homelab/data/` | Data-bearing apps, one namespace and one virtiofs share each: Immich, Navidrome, Calibre, Graphiti (`docs/data-migration.md`) |
+| `clusters/homelab/data/` | Data-bearing apps, one namespace and one virtiofs share each: Immich, Navidrome, OPDShelf, Graphiti (`docs/data-migration.md`) |
 | `clusters/homelab/ingress/` | `cloudflared` for the cluster tunnel; the host tunnel stays human-owned |
 | `clusters/homelab/observability/` | Prometheus, Loki, Vector, status exporter, Loki gateway |
 | `clusters/homelab/broker/` | Credential-injecting broker for agent traffic (`docs/broker.md`) |

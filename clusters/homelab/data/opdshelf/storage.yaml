@@ -4,10 +4,10 @@
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: calibre-data
-  namespace: calibre
+  name: opdshelf-data
+  namespace: opdshelf
   labels:
-    app.kubernetes.io/name: calibre
+    app.kubernetes.io/name: opdshelf
     app.kubernetes.io/part-of: homelabs
     homelabs.dev/tier: data
     homelabs.dev/managed-by: platform

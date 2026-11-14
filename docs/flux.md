@@ -285,7 +285,7 @@ platform-backup       repository mirror CronJob/PVC (dependsOn namespaces,
                       policies)
 platform-digest       cluster digest CronJob + PV/PVC (dependsOn namespaces,
                       policies, storage, observability)
-platform-data-apps    Immich, Navidrome, Calibre, Graphiti
+platform-data-apps    Immich, Navidrome, OPDShelf, Graphiti
                       (dependsOn policies, network, storage)
 platform-ingress      cloudflared + routing contract (dependsOn namespaces, network)
 platform-observability

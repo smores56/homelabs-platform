@@ -28,7 +28,7 @@ apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: data-workload
-  namespace: calibre
+  namespace: opdshelf
   labels:
     app.kubernetes.io/part-of: homelabs
     homelabs.dev/tier: data

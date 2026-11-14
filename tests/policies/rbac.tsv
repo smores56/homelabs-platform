@@ -37,7 +37,7 @@ get	pods/log	tenant-apps	yes
 get	events	immich	yes	agent
 list	events	navidrome	yes	agent
 delete	pods	immich	yes	agent
-delete	pods	calibre	yes	agent
+delete	pods	opdshelf	yes	agent
 delete	pods	graphiti	yes	agent
 delete	pods	navidrome	yes	agent
 # Exploitation paths stay closed even though the RBAC exists.
@@ -49,7 +49,7 @@ create	pods/attach	immich	no	agent
 create	pods/portforward	immich	no	agent
 create	pods/proxy	immich	no	agent
 patch	deployments.apps	immich	no	agent
-update	deployments.apps	calibre	no	agent
+update	deployments.apps	opdshelf	no	agent
 get	secrets	immich	no	agent
 list	configmaps	navidrome	no	agent
 get	nodes	-	no	agent
@@ -68,7 +68,7 @@ list	nodes	-	yes	exporter
 get	nodes	-	yes	exporter
 get	pods	immich	yes	exporter
 list	pods	graphiti	yes	exporter
-list	deployments.apps	calibre	yes	exporter
+list	deployments.apps	opdshelf	yes	exporter
 get	statefulsets.apps	navidrome	yes	exporter
 list	pods	kube-system	no	exporter
 get	pods	observability	no	exporter

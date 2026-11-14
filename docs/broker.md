@@ -335,7 +335,7 @@ admission policy `agent-identity` pins `serviceAccountName: nanobot` and
 `automountServiceAccountToken: false` for every nanobot-labelled pod, and
 `broker-runtime` pins gVisor, non-root and read-only rootfs for the broker.
 
-In each data namespace (`immich`, `navidrome`, `calibre`, `graphiti`) Role
+In each data namespace (`immich`, `navidrome`, `opdshelf`, `graphiti`) Role
 `agent-debug` grants exactly:
 
 | Resource | Verbs |

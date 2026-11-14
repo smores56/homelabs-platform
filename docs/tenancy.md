@@ -15,7 +15,7 @@ virtiofs share and must not be able to reach another app's.
 | `webhook` | `webhook` | `webhook` | `restricted` | Inbound webhook receiver; capability URLs enqueue into the agent (`docs/webhook.md`) |
 | `immich` | `immich` | `data` | `restricted` | Immich server, machine-learning, Postgres, Valkey |
 | `navidrome` | `navidrome` | `data` | `restricted` | Navidrome |
-| `calibre` | `calibre` | `data` | `restricted` | OPDShelf over the books library |
+| `opdshelf` | `opdshelf` | `data` | `restricted` | OPDShelf over the books library |
 | `graphiti` | `graphiti` | `data` | `baseline` | Graphiti (root start for `uv`) and FalkorDB |
 | `ingress` | `ingress` | `ingress` | `restricted` | `cloudflared` for the cluster tunnel |
 | `observability` | `observability` | `observability` | `privileged` | Prometheus, Loki, Vector, status exporter |
@@ -24,7 +24,7 @@ virtiofs share and must not be able to reach another app's.
 permissions; audit and warn still record `restricted` violations there.
 `observability` enforces `privileged` because node-exporter needs `hostPath` and
 `hostNetwork`, which baseline forbids; audit and warn stay `restricted`.
-`calibre` is `restricted` again now that OPDShelf replaced the s6-backed
+`opdshelf` is `restricted` again now that OPDShelf replaced the s6-backed
 Calibre-Web-Automated image: it runs as uid 1000 with dropped capabilities and
 `RuntimeDefault` seccomp, so it needs no exemption.
 `tenant-apps` was previously named `tenant`; the rename came with the tenant
@@ -40,7 +40,7 @@ applied by the first stage (`docs/flux.md`).
 | `platform` | exempt from `no-host-access` | unrestricted | unrestricted |
 | `tenant` | gVisor, digest-pinned images, scratch PVC only, no `sops-age`, no reconciler SA, `agent-identity`, `nanobot-policy` | DNS, the broker on 8080, direct TCP/UDP to global unicast (every non-global range excluded), the k3s API (443/6443) for `agent-control` only | the cluster tunnel on 8080 (`nanobot` only); the broker on 8081 (`agent-control` only) |
 | `webhook` | `no-host-access`, `webhook-runtime` | DNS, `tenant-apps/nanobot` 8765 only | the cluster tunnel on 8080 |
-| `data` (each of `immich`, `navidrome`, `calibre`, `graphiti`) | `no-host-access`, `data-workload-source`, `data-pvc-scope`, `data-pvc-storage` | same namespace, DNS; HTTPS for `immich-machine-learning` and `graphiti` | same namespace, `ingress` on the app's port |
+| `data` (each of `immich`, `navidrome`, `opdshelf`, `graphiti`) | `no-host-access`, `data-workload-source`, `data-pvc-scope`, `data-pvc-storage` | same namespace, DNS; HTTPS for `immich-machine-learning` and `graphiti` | same namespace, `ingress` on the app's port |
 | `ingress` | none beyond PSA | the four data apps and `graphiti/memory-mcp` on their ports, `tenant-apps/nanobot` 8080, Cloudflare edge 443, DNS | none |
 | `observability` | exempt from `no-host-access` | DNS, the k3s API range on 443 (Vector, Prometheus, exporter), Loki and the annotated scrape targets, Prometheus → Alertmanager, Alertmanager → mail relay; the mail relay alone reaches 443 on global unicast | default-deny; Vector/Loki/gateway wiring, Prometheus scrapes, the broker paths, and the alerting chain |
 
@@ -158,7 +158,7 @@ post-apply verification.
 | `broker` | both directions | DNS; ingress from `tenant` tier on 8080; egress TCP 443 to global unicast only (every non-global range excluded), TCP 3100 to `loki-gateway` and 9101 to `status-exporter` in `observability`, 8081 to `tenant-apps/agent-control` and 8182 to `graphiti/memory-mcp` |
 | `immich` | both directions | DNS; same-namespace any port; TCP 2283 from `ingress`; HTTPS from the machine-learning pod for model weights |
 | `navidrome` | both directions | DNS; same-namespace any port; TCP 4533 from `ingress` |
-| `calibre` | both directions | DNS; same-namespace any port; TCP 8083 from `ingress` |
+| `opdshelf` | both directions | DNS; same-namespace any port; TCP 8083 from `ingress` |
 | `graphiti` | both directions | DNS; same-namespace any port; TCP 8182 from the host tap addresses (the memory wrapper's NodePort), from `ingress/cloudflared` (the cluster tunnel, SDLC #617) and from the `broker` namespace (the `memory` logical host, SDLC #631); HTTPS from the graphiti pod to the Neuralwatt API; TCP 443 to R2 for the restic job |
 | `ingress` | both directions | DNS; the three published app Services on their ports; `tenant-apps/nanobot` on 8080; TCP 443 to the Cloudflare edge (`cloudflared` only) |
 

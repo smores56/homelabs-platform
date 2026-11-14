@@ -93,7 +93,7 @@ apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: allow-dns-egress
-  namespace: calibre
+  namespace: opdshelf
   labels:
     app.kubernetes.io/part-of: homelabs
     homelabs.dev/tier: data

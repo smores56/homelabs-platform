@@ -100,7 +100,7 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   name: agent-debug
-  namespace: calibre
+  namespace: opdshelf
   labels:
     app.kubernetes.io/name: nanobot
     homelabs.dev/tier: data
@@ -116,7 +116,7 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: agent-debug
-  namespace: calibre
+  namespace: opdshelf
   labels:
     app.kubernetes.io/name: nanobot
     homelabs.dev/tier: data

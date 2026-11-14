@@ -6,7 +6,7 @@ broker
 ingress
 immich
 navidrome
-calibre
+opdshelf
 graphiti
 platform
 flux-system
