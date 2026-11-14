@@ -81,10 +81,19 @@ spec:
                   printf 'read access: %s files readable as uid 1000\n' "$(wc -l </tmp/files)"
                   # 2. Repository access: create it once, then read it back.
                   restic cat config >/dev/null 2>&1 || restic init
-                  restic snapshots --last
-                  # 3. A metadata check plus a bounded 100 MiB data read.
+                  restic snapshots --latest 1
+                  # 3. A metadata check, plus a bounded 100 MiB data read once the
+                  # repository holds a snapshot. A repository created moments ago
+                  # has no packs and `--read-data-subset` refuses it with "Cannot
+                  # read from a repository having size 0", which failed the first
+                  # preflight for every tree before this guard. The first backup
+                  # supplies the data; the weekly run then exercises the read.
                   restic check
-                  restic check --read-data-subset=100M
+                  if [ "$(restic snapshots --json)" = "[]" ]; then
+                    printf 'no snapshots yet: the data read runs after the first backup\n'
+                  else
+                    restic check --read-data-subset=100M
+                  fi
                   printf 'preflight: calibre is ready to be the backup owner\n'
               env:
                 - name: RESTIC_REPOSITORY
