@@ -796,8 +796,8 @@ eq "$(jq -r "$enrollment | .logical_hosts | keys | sort | join(\",\")" "$work/br
 eq "$(jq -r "$enrollment | [.logical_hosts | to_entries[] | select(.value.allow_private) | .key] | sort | join(\",\")" "$work/broker.json")" \
   "cluster,loki,memory,self,status" "only the in-cluster hosts are private enrollments"
 eq "$(jq -r "$enrollment | .logical_hosts.notify | [.host, .allow_private, .inject.kind, .secret, (.optional_secret | tostring), (.allow_methods | join(\",\")), (.allow_paths | join(\";\")), (.max_body_bytes | tostring)] | join(\":\")" "$work/broker.json")" \
-  "notify.invalid:false:bearer:notify-token:true:POST:^/v1/notify$:4096" \
-  "notify is a public placeholder, POST-only, bearer, body-capped, optional token"
+  "ntfy.sammohr.dev:false:bearer:notify-token:true:POST:^/[a-z0-9_-]{1,64}$:4096" \
+  "notify is the ntfy bus, POST-only, bearer, body-capped, optional token"
 eq "$(jq -r "$enrollment | .logical_hosts.self | [.host, .port, .allow_private, (.secret // \"-\"), (.inject.kind // \"none\"), .path_prefix] | join(\":\")" "$work/broker.json")" \
   "agent-control.tenant-apps.svc.cluster.local:8081:true:-:none:/self" \
   "self is a credential-free private enrollment with its route prefix"

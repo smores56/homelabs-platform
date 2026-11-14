@@ -22,8 +22,10 @@ data:
   source: >-
     broker-credentials.yaml, SOPS-encrypted with the flux-system age recipient;
     decrypt with `sops -d` and pipe each key into the Secret. Never commit the
-    encrypted file to the tenant repository. notify-token is optional until the
-    #640 provider is chosen (optional_secret in the enrollment); memory-mcp-token
+    encrypted file to the tenant repository. notify-token is the ntfy `agent`
+    user's access token (docs/manual-steps.md step 24); it stays optional so a
+    missing value answers 503 on `notify` instead of aborting every other host
+    at startup. memory-mcp-token
     is optional until its value is projected from the graphiti Secret
     (docs/manual-steps.md step 32).
   rotate: >-
