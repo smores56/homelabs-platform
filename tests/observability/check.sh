@@ -230,6 +230,24 @@ eq "$(jq -r '.[] | select(.metadata.name == "prometheus-egress-scrape") | [.spec
   "$network_json")" "8686,9090,9101" "Prometheus may scrape only the annotated ports in observability"
 eq "$(jq -r '.[] | select(.metadata.name == "prometheus-egress-scrape") | [.spec.egress[1].to[0].namespaceSelector.matchLabels["kubernetes.io/metadata.name"], (.spec.egress[1].ports[0].port | tostring)] | join(":")' \
   "$network_json")" "flux-system:8080" "Prometheus may scrape the Flux controllers"
+# The bus's own metrics (SDLC #649). Three things have to agree or the scrape
+# fails closed and looks exactly like a dead bus: the pod annotation, the
+# container's metrics port, and this egress rule. The ingress half is
+# `allow-ingress-prometheus` in the notify namespace, pinned below.
+eq "$(jq -r '.[] | select(.metadata.name == "prometheus-egress-scrape") | [.spec.egress[2].to[0].namespaceSelector.matchLabels["kubernetes.io/metadata.name"], .spec.egress[2].to[0].podSelector.matchLabels["app.kubernetes.io/name"], (.spec.egress[2].ports[0].port | tostring)] | join(":")' \
+  "$network_json")" "notify:ntfy:9090" "Prometheus may scrape the bus's metrics port"
+eq "$(jq -r '.[] | select(.metadata.name == "prometheus-egress-scrape") | .spec.egress | length' \
+  "$network_json")" "3" "the scrape allowlist holds exactly the three reviewed destinations"
+ntfy_deploy=clusters/homelab/notify/deployment.yaml
+eq "$(yq -r '.spec.template.metadata.annotations["prometheus.io/scrape"] + ":" + .spec.template.metadata.annotations["prometheus.io/port"]' \
+  "$ntfy_deploy")" "true:9090" "the bus opts into the annotation scrape on its metrics port"
+eq "$(yq -r '[.spec.template.spec.containers[0].ports[] | select(.name == "metrics") | .containerPort] | map(tostring) | join(",")' \
+  "$ntfy_deploy")" "9090" "the annotated port is the container's metrics port"
+kustomize build clusters/homelab/notify >"$work/notify.yaml"
+yq -o=json -I=0 '.' "$work/notify.yaml" | jq -s '.' >"$work/notify.json"
+eq "$(jq -r '.[] | select(.kind == "NetworkPolicy" and .metadata.name == "allow-ingress-prometheus") | [.spec.ingress[0].from[0].namespaceSelector.matchLabels["kubernetes.io/metadata.name"], .spec.ingress[0].from[0].podSelector.matchLabels["app.kubernetes.io/name"], (.spec.ingress[0].ports[0].port | tostring)] | join(":")' \
+  "$work/notify.json")" "observability:prometheus:9090" \
+  "the bus accepts Prometheus on its metrics port only"
 eq "$(jq -r '.[] | select(.metadata.name == "status-exporter-from-prometheus") | [.spec.ingress[0].from[0].podSelector.matchLabels["app.kubernetes.io/name"], (.spec.ingress[0].ports[0].port | tostring)] | join(":")' \
   "$network_json")" "prometheus:9101" "the exporter accepts Prometheus on 9101"
 eq "$(jq -r '.[] | select(.metadata.name == "status-exporter-from-broker") | [.spec.ingress[0].from[0].namespaceSelector.matchLabels["kubernetes.io/metadata.name"], (.spec.ingress[0].ports[0].port | tostring)] | join(":")' \
@@ -280,7 +298,8 @@ else
   ok "Alertmanager holds no SMTP credential"
 fi
 rules=clusters/homelab/observability/prometheus/rules.yaml
-for expr in 'up == 0' 'homelabs_data_workload_ready == 0' \
+for expr in 'up == 0' 'up{job="kubernetes-pods", namespace="notify"} == 0' \
+  'homelabs_data_workload_ready == 0' \
   'homelabs_data_cronjob_last_successful_timestamp_seconds{cronjob="restic-backup"} > 26 * 3600' \
   'homelabs_data_cronjob_last_successful_timestamp_seconds{cronjob="restic-preflight"} > 8 * 24 * 3600'; do
   # No `-q` anywhere in a `pipefail` pipeline: it makes grep exit at the first
@@ -293,7 +312,7 @@ for expr in 'up == 0' 'homelabs_data_workload_ready == 0' \
   fi
 done
 eq "$(yq -r '[.groups[].rules[] | select(.labels.severity == "critical") | .alert] | join(",")' "$rules")" \
-  "ResticBackupStale" "exactly the backup gap is critical"
+  "NtfyDown,ResticBackupStale" "exactly the bus and the backup gap are critical"
 eq "$(yq -r '.rule_files[0]' clusters/homelab/observability/prometheus/prometheus.yaml)" \
   "/etc/prometheus/rules/rules.yaml" "Prometheus loads the rule file it is given"
 eq "$(yq -r '.alerting.alertmanagers[0].static_configs[0].targets[0]' clusters/homelab/observability/prometheus/prometheus.yaml)" \

@@ -5,6 +5,7 @@
 #
 #   observability  vector 8686, status-exporter 9101, prometheus 9090
 #   flux-system    the gotk controllers' 8080 metrics port
+#   notify         ntfy 9090 (the bus's own metrics, so a silent bus is visible)
 #
 # A new annotated workload means adding its namespace and port here; a scrape
 # that is not listed simply fails closed (target down), never silently widens.
@@ -41,6 +42,16 @@ spec:
       ports:
         - protocol: TCP
           port: 8080
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: notify
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: ntfy
+      ports:
+        - protocol: TCP
+          port: 9090
 ---
 # Vector exposes its own API/metrics port; only Prometheus may read it.
 apiVersion: networking.k8s.io/v1

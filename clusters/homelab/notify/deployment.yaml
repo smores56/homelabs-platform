@@ -10,6 +10,10 @@
 #
 # `serve` needs no /tmp, so there is no emptyDir: a write that should not happen
 # fails loudly instead of landing in a scratch volume.
+#
+# The pod opts into the annotation scrape on its metrics port, so a silent bus is
+# visible: `NtfyDown` fires when Prometheus stops reaching 9090, and the ingress
+# half of that flow is `allow-ingress-prometheus` in networkpolicy.yaml.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -30,6 +34,11 @@ spec:
         app.kubernetes.io/name: ntfy
         homelabs.dev/tier: notify
         homelabs.dev/managed-by: platform
+      annotations:
+        # The metrics port, not the message port: 8080 is the API the tunnel and
+        # the relay use, and scraping it would count as traffic.
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
     spec:
       serviceAccountName: ntfy
       automountServiceAccountToken: false
