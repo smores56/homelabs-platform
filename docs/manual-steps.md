@@ -1554,8 +1554,9 @@ until the new drill below passes.
    `--tree <name>` for one tree, `--once` to append a snapshot to a log). It
    streams each Job's log and renders the `--json` status record — percentage,
    bytes against restic's own total, file count and ETA — and reports a Job that
-   is not uploading from its own state, because a deadline kill takes the pod
-   and its log with it.
+   stopped from its own state: `idle — … completed` for a finished run,
+   `killed by its deadline` for a deadline kill, which takes the pod and its log
+   with it.
 
 4. Run the drill from a workstation. The exact commands are the `drill` key of
    the tree's `restic-contract` ConfigMap, and the preflight prints the same text

@@ -14,7 +14,8 @@
 #
 # A Job that is not uploading is reported from its own state — `Failed
 # (DeadlineExceeded)` and the like — because a deadline kill deletes the pod and
-# with it the log; silence would otherwise look like a slow upload.
+# with it the log; silence would otherwise look like a slow upload. A Job that
+# finished reads `idle`, so the resting state does not look like a failure.
 set -uo pipefail
 
 KC=${KC:-}
@@ -184,18 +185,25 @@ render_tree() {
       jq -r '[.status.conditions[]? | select(.status == "True") | .reason]
              | unique | join(",")' 2>/dev/null)
   fi
-  case $cond in
-    CompletionsReached | Completed) note="completed" ;;
-    DeadlineExceeded) note="killed by its deadline" ;;
-    BackoffLimitExceeded) note="retries exhausted" ;;
-    "") note="" ;;
+  # A completed Job is the normal resting state: `not uploading` beside
+  # `(completed)` reads as an alarm, so only a Job that stopped without
+  # finishing gets that wording. Conditions are matched as a set: a successful
+  # Job carries two of them with the same reason, and older clusters name it
+  # `Completed` rather than `CompletionsReached`.
+  case ",$cond," in
+    *,CompletionsReached,* | *,Completed,*) note="completed" ;;
+    *,DeadlineExceeded,*) note="killed by its deadline" ;;
+    *,BackoffLimitExceeded,*) note="retries exhausted" ;;
+    ",,") note="" ;;
     *) note="$cond" ;;
   esac
-  if [[ -n $job ]]; then
+  if [[ -z $job ]]; then
+    line=$(printf '%-10s no Job in this namespace' "$ns")
+  elif [[ $note == completed ]]; then
+    line=$(printf '%-10s idle — %s completed' "$ns" "${job#job.batch/}")
+  else
     line=$(printf '%-10s not uploading — %s%s' "$ns" "${job#job.batch/}" \
       "${note:+ ($note)}")
-  else
-    line=$(printf '%-10s no Job in this namespace' "$ns")
   fi
 }
 
