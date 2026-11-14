@@ -1083,6 +1083,29 @@ else
   bad "stage files missing from platform/kustomization.yaml" "$missing"
 fi
 
+# A stage's kustomization is the only thing that applies its directory, so a
+# resource file it does not list is dead weight that reads as applied. The
+# observability payloads (loki.yaml, rules.yaml, …) carry no `kind:` and are
+# generator inputs, so they are not resources and are skipped.
+unlisted=""
+while IFS= read -r kfile; do
+  kdir=$(dirname "$kfile")
+  while IFS= read -r res; do
+    base=$(basename "$res")
+    [[ $base == kustomization.yaml ]] && continue
+    [[ -z $(yq -r '.kind // ""' "$res" 2>/dev/null | head -1) ]] && continue
+    if ! yq -o=json -I=0 '.resources // []' "$kfile" |
+      jq -e --arg b "$base" 'any(.[]; . == $b or endswith("/" + $b))' >/dev/null; then
+      unlisted+="${kdir#"$root"/}/$base"$'\n'
+    fi
+  done < <(find "$kdir" -maxdepth 1 -name '*.yaml' | sort)
+done < <(find clusters/homelab -name kustomization.yaml | sort)
+if [[ -z $unlisted ]]; then
+  ok "every stage resource file is listed in its kustomization"
+else
+  bad "resource files missing from their kustomization" "$unlisted"
+fi
+
 # ------------------------------------------------------- bootstrap and sync
 if diff -u <(clusters/homelab/flux-system/bootstrap.sh --print-sync) \
   clusters/homelab/flux-system/gotk-sync.yaml >"$work/sync.diff"; then
