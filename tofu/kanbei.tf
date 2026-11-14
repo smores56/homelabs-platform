@@ -9,6 +9,12 @@
 # This replaced a private WARP hostname route. A private hostname needs Gateway's
 # L4 rewrite and a client-side initial-resolved IP; a public hostname needs
 # neither, and the same in-guest TLS still sits behind Access.
+#
+# The wildcard is the only record, so the edge picks the connector, not the
+# name: a second process joined to the same tunnel with an older ingress answers
+# kanbei requests with its own 404 and never reaches this route. If the hostname
+# returns a post-login 404, compare the tunnel's live connectors before changing
+# anything here (nix-config `docs/kanbei-access.md`, "Stray connector").
 
 # `allow_authenticate_via_warp` costs nothing here: a device that already runs
 # the Cloudflare One client skips the browser login, and every other device gets
