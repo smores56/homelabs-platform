@@ -99,6 +99,17 @@ newest_pod() {
     -o name 2>/dev/null | tail -1
 }
 
+pod_health() {
+  $KC -n "$1" get pods --field-selector=status.phase=Running \
+    -l app.kubernetes.io/name=restic --sort-by=.metadata.creationTimestamp \
+    -o json 2>/dev/null |
+    jq -r '[.items[]] | last // {} | [
+      (.metadata.name // ""),
+      ([.status.containerStatuses[]?.restartCount] | max // 0),
+      ([.status.containerStatuses[]?.lastState.terminated.reason]
+         | map(select(. != null and . != "")) | first // "")] | @tsv' 2>/dev/null
+}
+
 # Follows one tree's newest restic pod, writing its last status record to
 # $state/<tree>.json. The pod is re-resolved whenever the stream ends, because a
 # retry replaces the pod and the name changes with it.
@@ -124,7 +135,7 @@ follow() {
 # One line per tree. Writes into the global `line` so the caller owns printing.
 render_tree() {
   local ns=$1 json pct fdone ftotal bdone btotal eta rate now prev_ts prev_b
-  local job cond pod note
+  local job cond pod note podname restarts lastreason
   json="$state/$ns.json"
   if [[ -r $json ]]; then
     IFS=$'\t' read -r pct bdone btotal fdone ftotal eta < <(
@@ -157,7 +168,11 @@ render_tree() {
   job=$($KC -n "$ns" get jobs --sort-by=.metadata.creationTimestamp -o name 2>/dev/null | tail -1)
   pod=$(newest_pod "$ns")
   if [[ -n $pod ]]; then
-    line=$(printf '%-10s running %s, no status record yet' "$ns" "${pod#pod/}")
+    read -r podname restarts lastreason <<<"$(pod_health "$ns")"
+    line=$(printf '%-10s running %s, no status record yet' "$ns" \
+      "${podname:-${pod#pod/}}")
+    ((restarts > 0)) && line+=$(printf '  restarts=%s' "$restarts")
+    [[ -n $lastreason ]] && line+=$(printf '  last=%s' "$lastreason")
     return
   fi
   # A failed Job carries both `FailureTarget` and `Failed` with the same reason,
