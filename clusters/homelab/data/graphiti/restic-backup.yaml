@@ -71,11 +71,14 @@ spec:
                   # read probe first, so a wrong endpoint or key fails there
                   # instead of half-writing a new repository.
                   restic cat config >/dev/null 2>&1 || restic init
+                  # Excluded because they change under the walk and are dumped
+                  # separately: FalkorDB's live AOF/RDB (02:45) and the wrapper's
+                  # live SQLite WAL set (02:20). The comments cannot sit inside
+                  # the continuation below, because `#` ends the command line the
+                  # backslash continues.
                   restic backup --host cluster-graphiti --tag cluster \
-                  # FalkorDB's live AOF/RDB, dumped at 02:45
-                  --exclude '/data/falkordb' \
-                  # the wrapper's live SQLite WAL set, exported at 02:20
-                  --exclude '/data/memory/registry.sqlite*' \
+                    --exclude '/data/falkordb' \
+                    --exclude '/data/memory/registry.sqlite*' \
                     /data
                   restic forget --host cluster-graphiti \
                     --keep-daily 14 --keep-weekly 8 --keep-monthly 12 --prune

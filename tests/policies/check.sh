@@ -642,6 +642,19 @@ else
   bad "every restic job pins the image digest"
 fi
 
+# A `#` line inside a backslash continuation ends the command at the comment,
+# so the continuation is lost and the next line runs as its own command. That
+# silently turned `restic backup --host x --tag cluster \ # comment --exclude …`
+# into a backup with no paths, and only on the trees that documented an exclude.
+if awk 'FNR == 1 { prev = "" }
+        prev ~ /\\[[:space:]]*$/ && $0 ~ /^[[:space:]]*#/ { found = 1 }
+        { prev = $0 }
+        END { exit !found }' clusters/homelab/data/*/*.yaml; then
+  bad "a comment line breaks a shell continuation inside a job script"
+else
+  ok "no comment line breaks a shell continuation inside a job script"
+fi
+
 # ------------------------------------------------- data workload manifest shape
 # Admission (data-workload-source) enforces the identity at runtime; this is the
 # pre-merge half, so a manifest that would be denied never reaches review.
