@@ -1,0 +1,18 @@
+{
+  "messageId": "synthetic-msg-1",
+  "revision": "3",
+  "subject": "Synthetic subject",
+  "sender": "sender@example.invalid",
+  "recipients": ["recipient@example.invalid"],
+  "receivedAt": "2026-04-01T12:00:00+00:00",
+  "labels": ["inbox", "synthetic"],
+  "rawMime": "From: sender@example.invalid\r\nTo: recipient@example.invalid\r\nSubject: Synthetic subject\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nSynthetic body text.\r\n",
+  "attachments": [
+    {
+      "filename": "synthetic.txt",
+      "mimeType": "text/plain",
+      "dataBase64": "c3ludGhldGljIGF0dGFjaG1lbnQgYnl0ZXMK"
+    }
+  ],
+  "deleted": false
+}

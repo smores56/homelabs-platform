@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "profile": "external",
+  "group_id": "synthetic-external-group",
+  "nodes": [
+    {
+      "uuid": "55555555-5555-4555-8555-555555555555",
+      "name": "Synthetic external fact",
+      "summary": "This synthetic fact belongs to the external profile.",
+      "labels": ["Entity"],
+      "created_at": "2026-01-01T00:00:00+00:00",
+      "updated_at": "2026-01-01T00:00:00+00:00"
+    }
+  ],
+  "edges": [],
+  "provenance": {
+    "export": {
+      "source_id": "graphiti.export",
+      "revision": "2026-11-10",
+      "captured_at": "2026-11-10T00:00:00+00:00"
+    },
+    "nodes": {
+      "55555555-5555-4555-8555-555555555555": {
+        "source_id": "graphiti.synthetic",
+        "revision": "1",
+        "captured_at": "2026-01-01T00:00:00+00:00"
+      }
+    }
+  }
+}

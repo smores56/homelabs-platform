@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "photos.library collector record",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["source_id", "tombstone", "photo_id", "revision"],
+  "properties": {
+    "source_id": {"const": "photos.library"},
+    "tombstone": {"type": "boolean"},
+    "photo_id": {"type": "string", "minLength": 1},
+    "revision": {"type": "string", "minLength": 1},
+    "captured_at": {"type": "string", "format": "date-time"},
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "original_filename": {"type": "string"},
+    "media_type": {"type": "string"},
+    "width": {"type": "integer", "minimum": 0},
+    "height": {"type": "integer", "minimum": 0},
+    "album_ids": {"type": "array", "items": {"type": "string"}},
+    "exif": {"type": "object"}
+  },
+  "x-relay": {
+    "max_bytes": 268435456,
+    "max_records_per_second": 20
+  },
+  "x-contract": {
+    "stable_id_fields": ["photo_id"],
+    "revision_field": "revision",
+    "tombstone_field": "tombstone",
+    "attachment_hash_fields": ["sha256"],
+    "fidelity_limits": [
+      {"field": "preview_renders", "reason": "Previews are derived and regenerated from the original file."},
+      {"field": "face_embeddings", "reason": "Derived model output is not part of the library export."}
+    ]
+  }
+}

@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "calendar.events collector record",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["source_id", "tombstone", "event_id", "revision"],
+  "properties": {
+    "source_id": {"const": "calendar.events"},
+    "tombstone": {"type": "boolean"},
+    "event_id": {"type": "string", "minLength": 1},
+    "revision": {"type": "string", "minLength": 1},
+    "uid": {"type": "string"},
+    "summary": {"type": "string"},
+    "description": {"type": "string"},
+    "location": {"type": "string"},
+    "starts_at": {"type": "string", "format": "date-time"},
+    "ends_at": {"type": "string", "format": "date-time"},
+    "all_day": {"type": "boolean"},
+    "recurrence_rule": {"type": "string"},
+    "attendees": {"type": "array", "items": {"type": "string"}},
+    "status": {"type": "string"},
+    "updated_at": {"type": "string", "format": "date-time"}
+  },
+  "x-relay": {
+    "max_bytes": 262144,
+    "max_records_per_second": 10
+  },
+  "x-contract": {
+    "stable_id_fields": ["event_id"],
+    "revision_field": "revision",
+    "tombstone_field": "tombstone",
+    "attachment_hash_fields": [],
+    "fidelity_limits": [
+      {"field": "recurrence_exceptions", "reason": "Per-instance overrides are provider-local and do not survive an export."},
+      {"field": "notification_state", "reason": "Reminders are device state, not calendar content."}
+    ]
+  }
+}

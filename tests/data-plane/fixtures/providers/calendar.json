@@ -1,0 +1,17 @@
+{
+  "eventId": "synthetic-event-1",
+  "revision": "2",
+  "uid": "synthetic-event-1@example.invalid",
+  "summary": "Synthetic meeting",
+  "description": "Synthetic agenda",
+  "location": "Room Example",
+  "start": {"dateTime": "2026-05-01T09:00:00+00:00"},
+  "end": {"dateTime": "2026-05-01T10:00:00+00:00"},
+  "allDay": false,
+  "recurrence": ["RRULE:FREQ=WEEKLY"],
+  "attendees": [{"email": "attendee@example.invalid"}],
+  "status": "confirmed",
+  "updatedAt": "2026-05-01T00:00:00+00:00",
+  "overrides": [{"instance": "2026-05-08", "summary": "Synthetic override"}],
+  "cancelled": false
+}

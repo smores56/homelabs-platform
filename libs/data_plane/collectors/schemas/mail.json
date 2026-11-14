@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "tuta.mail collector record",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["source_id", "tombstone", "message_id", "revision"],
+  "properties": {
+    "source_id": {"const": "tuta.mail"},
+    "tombstone": {"type": "boolean"},
+    "message_id": {"type": "string", "minLength": 1},
+    "revision": {"type": "string", "minLength": 1},
+    "subject": {"type": "string"},
+    "sender": {"type": "string"},
+    "recipients": {"type": "array", "items": {"type": "string"}},
+    "received_at": {"type": "string", "format": "date-time"},
+    "mime": {"type": "string", "description": "Full RFC 5322 MIME source, preserved verbatim."},
+    "body_text": {"type": "string"},
+    "labels": {"type": "array", "items": {"type": "string"}},
+    "attachment_sha256": {
+      "type": "array",
+      "items": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+    },
+    "attachment_filenames": {"type": "array", "items": {"type": "string"}}
+  },
+  "x-relay": {
+    "max_bytes": 8388608,
+    "max_records_per_second": 5
+  },
+  "x-contract": {
+    "stable_id_fields": ["message_id"],
+    "revision_field": "revision",
+    "tombstone_field": "tombstone",
+    "attachment_hash_fields": ["attachment_sha256"],
+    "fidelity_limits": [
+      {"field": "provider_labels", "reason": "Opaque provider-side labels survive only as revisions, not as named folders."},
+      {"field": "server_side_search_index", "reason": "The provider index is derived and rebuilt locally."}
+    ]
+  }
+}

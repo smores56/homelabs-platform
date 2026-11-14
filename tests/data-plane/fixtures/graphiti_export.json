@@ -1,0 +1,67 @@
+{
+  "version": 1,
+  "profile": "local",
+  "group_id": "synthetic-group",
+  "exported_at": "2026-11-10T00:00:00+00:00",
+  "nodes": [
+    {
+      "uuid": "11111111-1111-4111-8111-111111111111",
+      "name": "Synthetic tea preference",
+      "summary": "Example Person prefers synthetic tea.",
+      "labels": ["Entity", "Preference"],
+      "created_at": "2026-01-01T09:00:00+00:00",
+      "updated_at": "2026-01-02T09:00:00+00:00"
+    },
+    {
+      "uuid": "22222222-2222-4222-8222-222222222222",
+      "name": "Synthetic project",
+      "summary": "Example Person works on a synthetic project.",
+      "labels": ["Entity", "Project"],
+      "created_at": "2026-01-03T09:00:00+00:00",
+      "updated_at": "2026-01-04T09:00:00+00:00",
+      "provenance": {
+        "source_id": "graphiti.synthetic",
+        "revision": "2",
+        "captured_at": "2026-01-04T09:00:00+00:00"
+      }
+    },
+    {
+      "uuid": "33333333-3333-4333-8333-333333333333",
+      "name": "Synthetic expired note",
+      "summary": "This synthetic fact expired.",
+      "labels": ["Entity"],
+      "created_at": "2026-01-05T09:00:00+00:00",
+      "updated_at": "2026-02-01T09:00:00+00:00",
+      "invalid_at": "2026-02-01T09:00:00+00:00"
+    }
+  ],
+  "edges": [
+    {
+      "uuid": "44444444-4444-4444-8444-444444444444",
+      "source_node_uuid": "11111111-1111-4111-8111-111111111111",
+      "target_node_uuid": "22222222-2222-4222-8222-222222222222",
+      "fact": "Synthetic relation between two synthetic nodes.",
+      "created_at": "2026-01-06T09:00:00+00:00",
+      "invalid_at": null
+    }
+  ],
+  "provenance": {
+    "export": {
+      "source_id": "graphiti.export",
+      "revision": "2026-11-10",
+      "captured_at": "2026-11-10T00:00:00+00:00"
+    },
+    "nodes": {
+      "11111111-1111-4111-8111-111111111111": {
+        "source_id": "graphiti.synthetic",
+        "revision": "1",
+        "captured_at": "2026-01-02T09:00:00+00:00"
+      },
+      "33333333-3333-4333-8333-333333333333": {
+        "source_id": "graphiti.synthetic",
+        "revision": "3",
+        "captured_at": "2026-02-01T09:00:00+00:00"
+      }
+    }
+  }
+}

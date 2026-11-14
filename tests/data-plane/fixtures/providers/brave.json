@@ -1,0 +1,10 @@
+{
+  "entryId": "synthetic-visit-1",
+  "revision": "1",
+  "url": "https://example.invalid/synthetic",
+  "title": "Synthetic page",
+  "visitedAt": "2026-07-01T10:00:00+00:00",
+  "transition": "typed",
+  "faviconDataBase64": "c3ludGhldGljIGZhdmljb24gYnl0ZXM=",
+  "deleted": false
+}

@@ -1,0 +1,15 @@
+{
+  "callId": "synthetic-call-1",
+  "revision": "4",
+  "direction": "incoming",
+  "startedAt": "2026-06-01T08:00:00+00:00",
+  "durationSeconds": 42,
+  "contact": {"displayName": "Example Contact"},
+  "missed": false,
+  "voicemail": {
+    "transcript": "Synthetic voicemail transcript.",
+    "audioBase64": "c3ludGhldGljIHZvaWNlbWFpbCBhdWRpbw=="
+  },
+  "labels": ["mobile"],
+  "deleted": false
+}

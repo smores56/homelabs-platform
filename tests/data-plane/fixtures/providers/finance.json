@@ -1,0 +1,16 @@
+{
+  "transactionId": "synthetic-txn-1",
+  "revision": "7",
+  "accountAlias": "example-checking",
+  "amount": {"minor": -1250, "currency": "USD"},
+  "postedAt": "2026-04-02T00:00:00+00:00",
+  "description": "Synthetic purchase",
+  "merchant": "Example Merchant",
+  "pending": false,
+  "statement": {
+    "filename": "statement.pdf",
+    "mimeType": "application/pdf",
+    "dataBase64": "JVBERi0xLjQgc3ludGhldGljIHN0YXRlbWVudAo="
+  },
+  "voided": false
+}

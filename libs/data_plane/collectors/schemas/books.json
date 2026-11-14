@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "books.opds collector record",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["source_id", "tombstone", "book_id", "revision"],
+  "properties": {
+    "source_id": {"const": "books.opds"},
+    "tombstone": {"type": "boolean"},
+    "book_id": {"type": "string", "minLength": 1},
+    "revision": {"type": "string", "minLength": 1},
+    "title": {"type": "string"},
+    "author": {"type": "string"},
+    "language": {"type": "string"},
+    "publisher": {"type": "string"},
+    "description": {"type": "string"},
+    "epub_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "cover_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "reading_position": {"type": "object"}
+  },
+  "x-relay": {
+    "max_bytes": 67108864,
+    "max_records_per_second": 5
+  },
+  "x-contract": {
+    "stable_id_fields": ["book_id"],
+    "revision_field": "revision",
+    "tombstone_field": "tombstone",
+    "attachment_hash_fields": ["epub_sha256", "cover_sha256"],
+    "fidelity_limits": []
+  }
+}

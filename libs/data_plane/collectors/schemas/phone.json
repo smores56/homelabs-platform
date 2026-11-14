@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "phone.calls collector record",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["source_id", "tombstone", "call_id", "revision"],
+  "properties": {
+    "source_id": {"const": "phone.calls"},
+    "tombstone": {"type": "boolean"},
+    "call_id": {"type": "string", "minLength": 1},
+    "revision": {"type": "string", "minLength": 1},
+    "direction": {"type": "string", "enum": ["incoming", "outgoing", "missed"]},
+    "started_at": {"type": "string", "format": "date-time"},
+    "duration_seconds": {"type": "integer", "minimum": 0},
+    "contact_alias": {"type": "string"},
+    "missed": {"type": "boolean"},
+    "voicemail_transcript": {"type": "string"},
+    "labels": {"type": "array", "items": {"type": "string"}}
+  },
+  "x-relay": {
+    "max_bytes": 131072,
+    "max_records_per_second": 20
+  },
+  "x-contract": {
+    "stable_id_fields": ["call_id"],
+    "revision_field": "revision",
+    "tombstone_field": "tombstone",
+    "attachment_hash_fields": [],
+    "fidelity_limits": [
+      {"field": "carrier_voicemail_audio", "reason": "The carrier retains voicemail audio; only the transcript is replicated."},
+      {"field": "network_cell_metadata", "reason": "Radio and cell-tower metadata is carrier-only and not exportable."}
+    ]
+  }
+}

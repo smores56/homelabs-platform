@@ -1,0 +1,14 @@
+{
+  "assetId": "synthetic-asset-1",
+  "revision": "9",
+  "capturedAt": "2026-08-01T11:00:00+00:00",
+  "checksum": "0f8b28ea5e0f8529a3c9f39f17ca96330cb44163f14919ccb311b281cb3943dc",
+  "albumIds": ["synthetic-album"],
+  "original": {
+    "filename": "synthetic.png",
+    "mimeType": "image/png",
+    "dataBase64": "c3ludGhldGljIGltYWdlIGJ5dGVzIGZvciBpbW1pY2g="
+  },
+  "faces": [{"person": "Example Person"}],
+  "deleted": false
+}

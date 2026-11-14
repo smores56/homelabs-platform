@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "notes.markdown collector record",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["source_id", "tombstone", "note_id", "revision"],
+  "properties": {
+    "source_id": {"const": "notes.markdown"},
+    "tombstone": {"type": "boolean"},
+    "note_id": {"type": "string", "minLength": 1},
+    "revision": {"type": "string", "minLength": 1},
+    "path": {"type": "string", "minLength": 1},
+    "heading": {"type": "string"},
+    "tags": {"type": "array", "items": {"type": "string"}},
+    "frontmatter": {"type": "object"},
+    "body_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "updated_at": {"type": "string", "format": "date-time"}
+  },
+  "x-relay": {
+    "max_bytes": 1048576,
+    "max_records_per_second": 20
+  },
+  "x-contract": {
+    "stable_id_fields": ["note_id"],
+    "revision_field": "revision",
+    "tombstone_field": "tombstone",
+    "attachment_hash_fields": ["body_sha256"],
+    "fidelity_limits": [
+      {"field": "remote_embeds", "reason": "Remote images and embeds are never fetched; only their text remains."},
+      {"field": "resolved_wikilinks", "reason": "Wiki-links stay unresolved text so the vault remains portable."}
+    ]
+  }
+}

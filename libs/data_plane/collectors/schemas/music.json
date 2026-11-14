@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "music.library collector record",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["source_id", "tombstone", "track_id", "revision"],
+  "properties": {
+    "source_id": {"const": "music.library"},
+    "tombstone": {"type": "boolean"},
+    "track_id": {"type": "string", "minLength": 1},
+    "revision": {"type": "string", "minLength": 1},
+    "title": {"type": "string"},
+    "artist": {"type": "string"},
+    "album": {"type": "string"},
+    "duration_seconds": {"type": "integer", "minimum": 0},
+    "track_number": {"type": "integer", "minimum": 0},
+    "audio_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "format": {"type": "string"},
+    "play_count": {"type": "integer", "minimum": 0}
+  },
+  "x-relay": {
+    "max_bytes": 268435456,
+    "max_records_per_second": 20
+  },
+  "x-contract": {
+    "stable_id_fields": ["track_id"],
+    "revision_field": "revision",
+    "tombstone_field": "tombstone",
+    "attachment_hash_fields": ["audio_sha256"],
+    "fidelity_limits": [
+      {"field": "streaming_transcodes", "reason": "Transcodes are generated on demand and are not library content."},
+      {"field": "loudness_analysis", "reason": "ReplayGain values are derived locally and rebuilt on import."}
+    ]
+  }
+}
