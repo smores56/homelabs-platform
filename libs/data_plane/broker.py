@@ -301,15 +301,25 @@ class Broker:
                 f"intent {intent.intent_id} is {intent.state.value} and cannot be applied"
             )
 
-        if intent.requires_confirmation and intent.state is not IntentState.APPROVED:
+        # Recompute the gate for the principal that is applying, not just for
+        # the one that proposed. Otherwise an external proposal (no gate) could
+        # be replayed by a local writer and skip the write-down confirmation.
+        resolved = self._issuer.verify(claims) if isinstance(claims, str) else claims
+        capability = contract.capability(request.capability)
+        requires = intent.requires_confirmation or self._needs_confirmation(
+            resolved, contract, capability
+        )
+        already_approved = intent.intent_id in self._approvals
+        if requires and not already_approved:
             if approval_token is None:
                 raise ConfirmationRequired(
                     f"intent {intent.intent_id} requires human confirmation"
                 )
             approval = self._verify_approval(approval_token, operation)
             self._remember_approval(intent.intent_id, approval, approval_token)
-            intent = self._transition(intent, IntentState.APPROVED)
-            self._intents.save(intent)
+            if intent.state is not IntentState.APPROVED:
+                intent = self._transition(intent, IntentState.APPROVED)
+                self._intents.save(intent)
 
         adapter = self._adapter(operation.source_id)
         for target in operation.targets:

@@ -264,6 +264,27 @@ class BrokerTests(unittest.TestCase):
         self.assertEqual(len(self.recorder.events), 1)
         self.assertEqual(self.recorder.events[0]["intent_id"], intent.intent_id)
 
+    def test_second_principal_cannot_bypass_confirmation(self) -> None:
+        external = self.external(("books", "create"))
+        write = request(
+            source_id="books",
+            capability="create",
+            targets=("book-2",),
+            base_revision=None,
+            field_diff=(FieldChange(field="title", before=None, after="Cross"),),
+            idempotency_key="cross-principal-1",
+        )
+        intent, operation = self.broker.propose(external, write)
+        self.assertIs(intent.state, IntentState.APPROVED)
+
+        local = self.local(("books", "create"))
+        with self.assertRaises(ConfirmationRequired):
+            self.broker.apply(local, write)
+
+        _, token = self.gate.issue(operation, "smores")
+        effect = self.broker.apply(local, write, approval_token=token)
+        self.assertEqual(effect["applied"], 1)
+
     def test_update_checks_the_base_revision(self) -> None:
         claims = self.local(("notes", "update"))
         write = request(idempotency_key="update-1")
