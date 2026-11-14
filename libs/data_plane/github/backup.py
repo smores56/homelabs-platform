@@ -117,6 +117,78 @@ class GithubBackupPlan:
         return commands
 
 
+@dataclass(frozen=True)
+class PythonGithubBackupPlan:
+    """Argv for python-github-backup, which captures more than a git mirror.
+
+    The token is never placed on argv; the tool reads ``GITHUB_TOKEN`` from the
+    environment. That keeps it out of the process table and logs.
+    """
+
+    owner: str
+    out_dir: str
+    repositories: bool = True
+    forks: bool = False
+    lfs: bool = True
+    gists: bool = True
+    issues: bool = True
+    issue_comments: bool = True
+    pulls: bool = True
+    pull_comments: bool = True
+    releases: bool = True
+    wikis: bool = True
+    discussions: bool = True
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.owner, str) or not _OWNER_PATTERN.fullmatch(self.owner):
+            raise ContractError(f"GitHub owner is not a plain account name: {self.owner!r}")
+        if not isinstance(self.out_dir, str) or not os.path.isabs(self.out_dir):
+            raise ContractError(
+                f"GitHub backup out_dir must be absolute, got {self.out_dir!r}"
+            )
+        flags = (
+            self.repositories,
+            self.forks,
+            self.lfs,
+            self.gists,
+            self.issues,
+            self.issue_comments,
+            self.pulls,
+            self.pull_comments,
+            self.releases,
+            self.wikis,
+            self.discussions,
+        )
+        if not any(flags):
+            raise ContractError("python-github-backup plan selects nothing to capture")
+        if any(not isinstance(flag, bool) for flag in flags):
+            raise ContractError("python-github-backup flags must be bools")
+
+    def commands(self) -> list[list[str]]:
+        argv = [
+            "python-github-backup",
+            self.owner,
+            "--output-directory",
+            self.out_dir,
+        ]
+        for flag, enabled in (
+            ("--repositories", self.repositories),
+            ("--forks", self.forks),
+            ("--lfs", self.lfs),
+            ("--gists", self.gists),
+            ("--issues", self.issues),
+            ("--issue-comments", self.issue_comments),
+            ("--pulls", self.pulls),
+            ("--pull-comments", self.pull_comments),
+            ("--releases", self.releases),
+            ("--wikis", self.wikis),
+            ("--discussions", self.discussions),
+        ):
+            if enabled:
+                argv.append(flag)
+        return [argv]
+
+
 def _entry(payload: Mapping[str, object]) -> dict[str, object]:
     if not isinstance(payload, Mapping):
         raise ValidationError("GitHub manifest entry must be a mapping")

@@ -1,0 +1,52 @@
+# Builds the one data-plane image used by deploy/data-plane and prints its
+# digest for a human to pin in images.yaml. It never writes the pin itself and
+# never receives a provider, cluster, or restic credential.
+name: publish-data-plane
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "libs/data_plane/**"
+      - "apps/data_plane/**"
+      - "images/data-plane/**"
+      - ".github/workflows/publish-data-plane.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: publish-data-plane
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - name: Build, push, and print the digest
+        env:
+          IMAGE: ghcr.io/smores56/homelabs-platform/data-plane
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="sha-${GITHUB_SHA::12}"
+          printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          docker build \
+            --label "org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}" \
+            -f images/data-plane/Dockerfile \
+            -t "$IMAGE:$tag" .
+          docker push "$IMAGE:$tag"
+          digest=$(docker inspect --format '{{index .RepoDigests 0}}' "$IMAGE:$tag" | cut -d@ -f2)
+          [[ $digest =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "no digest in RepoDigests"; exit 1; }
+          {
+            echo "### Data-plane image"
+            echo
+            echo "- \`$IMAGE:$tag\`"
+            echo "- \`$IMAGE@$digest\`"
+            echo
+            echo "Pin this digest in \`deploy/data-plane/images.yaml\`."
+          } >>"$GITHUB_STEP_SUMMARY"
+          echo "pin: $IMAGE@$digest"

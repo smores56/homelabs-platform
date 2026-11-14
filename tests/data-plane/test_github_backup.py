@@ -10,7 +10,12 @@ import unittest
 from pathlib import Path
 
 from data_plane.errors import ContractError, ManifestError, ValidationError
-from data_plane.github import GithubBackupPlan, manifest, verify_bundle
+from data_plane.github import (
+    GithubBackupPlan,
+    PythonGithubBackupPlan,
+    manifest,
+    verify_bundle,
+)
 
 GIT = shutil.which("git")
 
@@ -232,6 +237,30 @@ class BundleVerificationTests(unittest.TestCase):
 
         self.assertEqual(commands[0][:3], ["git", "clone", "--mirror"])
         self.assertEqual(commands[1][0:4], ["git", "-C", str(self.root / "mirror" / "repo.git"), "bundle"])
+
+
+class PythonGithubBackupPlanTests(unittest.TestCase):
+    def test_argv_has_full_capture_and_no_token(self):
+        plan = PythonGithubBackupPlan(owner="smores56", out_dir="/backup/github")
+        argv = plan.commands()[0]
+        self.assertEqual(argv[:2], ["python-github-backup", "smores56"])
+        for flag in (
+            "--repositories",
+            "--lfs",
+            "--gists",
+            "--issues",
+            "--pulls",
+            "--releases",
+            "--wikis",
+            "--discussions",
+        ):
+            self.assertIn(flag, argv)
+        self.assertNotIn("--token", argv)
+        self.assertFalse(any("token" in item.lower() for item in argv))
+
+    def test_rejects_relative_out_dir(self):
+        with self.assertRaises(ContractError):
+            PythonGithubBackupPlan(owner="smores56", out_dir="relative")
 
 
 if __name__ == "__main__":
