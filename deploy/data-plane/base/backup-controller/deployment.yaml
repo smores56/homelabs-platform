@@ -69,7 +69,7 @@ spec:
             - name: DATA_PLANE_MANIFEST_DIR
               value: /var/lib/data-plane/manifests
             - name: DATA_PLANE_GROUPS
-              value: browsing,finance,mail,photos,books,notes,memory-local,memory-external,data-plane-state
+              value: books,memory-external,memory-local,music,notes,photos,wallpapers,data-plane-state,browsing,finance,mail
             - name: DATA_PLANE_DESTINATIONS
               value: nvme,hdd,r2
             # The full inventory is mounted for the controller's classifier; the
