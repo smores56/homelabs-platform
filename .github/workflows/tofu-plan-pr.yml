@@ -131,7 +131,7 @@ jobs:
           tofu -chdir=tofu init -input=false -no-color
           status=0
           tofu -chdir=tofu plan -input=false -lock=false -no-color \
-            -detailed-exitcode -out=tfplan >plan.txt 2>&1 || status=$?
+            -detailed-exitcode -out=tfplan -parallelism=3 2>&1 | tee plan.txt || status=$?
           {
             echo '## tofu plan (pre-merge)'
             echo
