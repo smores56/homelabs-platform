@@ -64,6 +64,7 @@ if [[ -n $($KC -n "$tree" get pods -l app.kubernetes.io/name=restic \
 fi
 
 name="first-$tree-$(date +%s)"
+schedule=$($KC -n "$tree" get cronjob restic-backup -o jsonpath='{.spec.schedule}')
 $KC -n "$tree" create job --from=cronjob/restic-backup "$name" >/dev/null
 $KC -n "$tree" patch job "$name" --type=merge >/dev/null \
   -p "{\"spec\":{\"activeDeadlineSeconds\":$DEADLINE,\"backoffLimit\":$BACKOFF_LIMIT}}"
@@ -78,6 +79,9 @@ fi
 
 printf '%s: first upload started in %s\n' "$name" "$tree"
 printf '  deadline %ss, backoffLimit %s\n' "$applied" "$BACKOFF_LIMIT"
+printf '  the CronJob still fires (%s); concurrencyPolicy: Forbid covers only its\n' "$schedule"
+printf '  own Jobs, so a nightly run that starts while this one is alive re-reads\n'
+printf '  the whole tree. Start right after a nightly run.\n'
 printf '  follow:  %s -n %s logs -f job/%s --all-containers\n' "$KC" "$tree" "$name"
 printf '  stop:    %s -n %s delete job %s\n\n' "$KC" "$tree" "$name"
 cat <<'EOF'
