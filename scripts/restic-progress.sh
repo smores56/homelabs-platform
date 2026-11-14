@@ -124,7 +124,7 @@ follow() {
 # One line per tree. Writes into the global `line` so the caller owns printing.
 render_tree() {
   local ns=$1 json pct fdone ftotal bdone btotal eta rate now prev_ts prev_b
-  local job cond pod
+  local job cond pod note
   json="$state/$ns.json"
   if [[ -r $json ]]; then
     IFS=$'\t' read -r pct bdone btotal fdone ftotal eta < <(
@@ -160,12 +160,25 @@ render_tree() {
     line=$(printf '%-10s running %s, no status record yet' "$ns" "${pod#pod/}")
     return
   fi
+  # A failed Job carries both `FailureTarget` and `Failed` with the same reason,
+  # so the raw jsonpath printed it twice. `jq` also turns the reason into the
+  # sentence an operator needs: `BackoffLimitExceeded` explains nothing.
   cond=""
-  [[ -n $job ]] && cond=$($KC -n "$ns" get "$job" \
-    -o jsonpath='{.status.conditions[?(@.status=="True")].reason}' 2>/dev/null)
+  if [[ -n $job ]]; then
+    cond=$($KC -n "$ns" get "$job" -o json 2>/dev/null |
+      jq -r '[.status.conditions[]? | select(.status == "True") | .reason]
+             | unique | join(",")' 2>/dev/null)
+  fi
+  case $cond in
+    CompletionsReached | Completed) note="completed" ;;
+    DeadlineExceeded) note="killed by its deadline" ;;
+    BackoffLimitExceeded) note="retries exhausted" ;;
+    "") note="" ;;
+    *) note="$cond" ;;
+  esac
   if [[ -n $job ]]; then
     line=$(printf '%-10s not uploading — %s%s' "$ns" "${job#job.batch/}" \
-      "${cond:+ ($cond)}")
+      "${note:+ ($note)}")
   else
     line=$(printf '%-10s no Job in this namespace' "$ns")
   fi
