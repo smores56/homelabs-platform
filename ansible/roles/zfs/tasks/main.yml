@@ -1,0 +1,182 @@
+---
+# ZFS-on-LUKS: the pool lives on /dev/mapper/luks-data. Structural parents are
+# canmount=off; every recovery group mounts at its /srv path. Import is
+# idempotent and dataset creation only adds or updates properties.
+
+- name: Require the pool to be defined
+  ansible.builtin.assert:
+    that:
+      - zfs_pool | length > 0
+      - zfs_pool_luks_volume in (luks_volumes | selectattr('auto') | map(attribute='name') | list)
+      - zfs_pool_device is match('^/dev/mapper/luks-[a-z0-9-]+$')
+      - zfs_datasets | length > 0
+    fail_msg: "Define zfs_pool, zfs_pool_device, and zfs_datasets in group_vars/all.yml"
+
+- name: Reject unclassified datasets before creation
+  ansible.builtin.assert:
+    that:
+      - zfs_datasets | selectattr('recovery_group', 'undefined') | list | length == 0
+      - zfs_datasets | map(attribute='recovery_group') | unique
+        | difference(recovery_inventory.keys() | list) | length == 0
+      - zfs_datasets | rejectattr('mountpoint', 'match', '^/srv/') | list | length == 0
+      - zfs_datasets | map(attribute='mountpoint') | unique | length == (zfs_datasets | length)
+    fail_msg: "Every dataset needs a recovery_group from recovery_inventory and a unique /srv mountpoint"
+
+- name: Read the pools the kernel can see
+  ansible.builtin.command:
+    argv: [zpool, list, -H, -o, name]
+  register: zfs_pools
+  changed_when: false
+  check_mode: false
+  failed_when: false
+  tags: [always]
+
+- name: Require explicit confirmation to create the pool
+  ansible.builtin.assert:
+    that:
+      - homelab_destructive_confirm | bool
+    fail_msg: >-
+      Refusing to create {{ zfs_pool }}. Re-run with --tags destructive and
+      -e homelab_destructive_confirm=true after verifying {{ zfs_pool_device }}.
+  tags: [destructive]
+
+- name: Create the pool on the encrypted device
+  ansible.builtin.command:
+    argv:
+      - zpool
+      - create
+      - -o
+      - "ashift={{ zfs_ashift }}"
+      - -O
+      - mountpoint=none
+      - -O
+      - canmount=off
+      - -O
+      - "compression={{ zfs_compression }}"
+      - -O
+      - "atime={{ zfs_atime }}"
+      - -O
+      - xattr=sa
+      - -O
+      - acltype=posixacl
+      - "{{ zfs_pool }}"
+      - "{{ zfs_pool_device }}"
+  when:
+    - homelab_destructive_confirm | bool
+    - zfs_pool not in zfs_pools.stdout_lines
+  register: zfs_pool_create
+  changed_when: true
+  tags: [destructive]
+
+- name: Refresh the visible pool list after creation
+  ansible.builtin.command:
+    argv: [zpool, list, -H, -o, name]
+  register: zfs_pools
+  when:
+    - zfs_pool_create is defined
+    - zfs_pool_create is changed
+  changed_when: false
+  check_mode: false
+  failed_when: false
+  tags: [destructive]
+
+- name: Import the existing pool without mounting it early
+  ansible.builtin.command:
+    argv: [zpool, import, -N, "{{ zfs_pool }}"]
+  when: zfs_pool not in zfs_pools.stdout_lines
+  register: zfs_import
+  changed_when: true
+
+- name: Mount the pool after an import
+  ansible.builtin.systemd_service:
+    name: "{{ zfs_mount_service }}"
+    state: restarted
+  when: zfs_import is changed
+
+- name: Create the structural container datasets
+  community.general.zfs:
+    name: "{{ item.name }}"
+    state: present
+    extra_zfs_properties:
+      mountpoint: "{{ item.mountpoint }}"
+      canmount: "{{ item.canmount }}"
+      compression: "{{ zfs_compression }}"
+      atime: "{{ zfs_atime }}"
+  loop: "{{ zfs_container_datasets }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Create the /srv root
+  ansible.builtin.file:
+    path: /srv
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Create the structural mount points before mounting children
+  ansible.builtin.file:
+    path: "{{ item.mountpoint }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0750"
+  loop: "{{ zfs_container_datasets }}"
+  loop_control:
+    label: "{{ item.mountpoint }}"
+
+- name: Create and mount the recovery-group datasets
+  community.general.zfs:
+    name: "{{ item.name }}"
+    state: mounted
+    extra_zfs_properties:
+      mountpoint: "{{ item.mountpoint }}"
+      canmount: "on"
+      compression: "{{ zfs_compression }}"
+      recordsize: "{{ item.recordsize }}"
+      atime: "{{ zfs_atime }}"
+      xattr: sa
+      acltype: posixacl
+  loop: "{{ zfs_datasets | sort(attribute='name') }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Create the zfs unit drop-in directories
+  ansible.builtin.file:
+    path: "{{ zfs_systemd_dir }}/{{ item }}.d"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - "{{ zfs_import_service }}"
+    - "{{ zfs_mount_service }}"
+  notify: Reload systemd
+
+- name: Make pool import wait for the encrypted boot volumes
+  ansible.builtin.copy:
+    dest: "{{ zfs_systemd_dir }}/{{ zfs_import_service }}.d/10-luks.conf"
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      # Managed by ansible/roles/zfs. The pool must never import before LUKS.
+      [Unit]
+      {% for volume in luks_volumes if volume.name == zfs_pool_luks_volume %}
+      Requires=systemd-cryptsetup@{{ volume.name }}.service
+      After=systemd-cryptsetup@{{ volume.name }}.service
+      {% endfor %}
+  notify: Reload systemd
+
+- name: Make dataset mounts depend on a successful pool import
+  ansible.builtin.copy:
+    dest: "{{ zfs_systemd_dir }}/{{ zfs_mount_service }}.d/10-import.conf"
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      # Managed by ansible/roles/zfs. Mounting before import is a hard failure.
+      [Unit]
+      Requires={{ zfs_import_service }}
+      After={{ zfs_import_service }}
+  notify: Reload systemd

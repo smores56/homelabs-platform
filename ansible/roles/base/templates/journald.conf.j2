@@ -1,0 +1,4 @@
+[Journal]
+{% for key, value in homelab_journald | dictsort %}
+{{ key }}={{ value }}
+{% endfor %}

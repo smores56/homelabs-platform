@@ -1,0 +1,7 @@
+# Site inventories name real hosts and contain no secrets but are still local.
+inventory/hosts.yml
+inventory/hosts.yaml
+inventory/host_vars/
+inventory/group_vars/local.yml
+*.retry
+.ansible/

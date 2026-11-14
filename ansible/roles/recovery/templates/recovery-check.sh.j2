@@ -1,0 +1,113 @@
+#!/usr/bin/env bash
+# Verify that the live host still matches the recovery sentinel. Read-only.
+set -euo pipefail
+
+sentinel="{{ recovery_sentinel }}"
+portal_unit="{{ recovery_portal_unit }}"
+require_backups=0
+quiet=0
+
+usage() {
+  printf 'usage: %s [--require-backups] [--quiet]\n' "$0" >&2
+}
+
+for arg in "$@"; do
+  case "$arg" in
+    --require-backups) require_backups=1 ;;
+    --quiet) quiet=1 ;;
+    *) usage; exit 2 ;;
+  esac
+done
+
+failures=0
+fail() { printf 'FAIL %s\n' "$1" >&2; failures=$((failures + 1)); }
+ok() { if [[ $quiet -eq 0 ]]; then printf 'ok   %s\n' "$1"; fi; }
+
+if [[ ! -r $sentinel ]]; then
+  printf 'FAIL missing sentinel %s\n' "$sentinel" >&2
+  exit 1
+fi
+
+if ! python3 - "$sentinel" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    doc = json.load(handle)
+for key in ("host", "pool", "mounts", "backup_mounts"):
+    if not doc.get(key):
+        raise SystemExit(f"sentinel is missing {key}")
+PY
+then
+  exit 1
+fi
+
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+
+python3 - "$sentinel" >"$work/mounts" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    for path in json.load(handle)["mounts"]:
+        print(path)
+PY
+
+python3 - "$sentinel" >"$work/backups" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    for path in json.load(handle)["backup_mounts"]:
+        print(path)
+PY
+
+pool=$(python3 - "$sentinel" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    print(json.load(handle)["pool"])
+PY
+)
+
+check_mount() {
+  local mount=$1
+  local target
+  target=$(findmnt -rn -o TARGET --target "$mount" 2>/dev/null || true)
+  if [[ $target == "$mount" ]]; then
+    ok "mounted $mount"
+  else
+    fail "not a mount point: $mount"
+  fi
+}
+
+while IFS= read -r mount; do
+  check_mount "$mount"
+done <"$work/mounts"
+
+if zpool status -x "$pool" >/dev/null 2>&1; then
+  ok "pool $pool is healthy"
+else
+  fail "pool $pool is missing or degraded"
+fi
+
+if [[ $require_backups -eq 1 ]]; then
+  while IFS= read -r mount; do
+    check_mount "$mount"
+  done <"$work/backups"
+fi
+
+if systemctl is-active --quiet "$portal_unit"; then
+  ok "$portal_unit is active"
+else
+  fail "$portal_unit is not active"
+fi
+
+if [[ $failures -gt 0 ]]; then
+  printf '%d recovery sentinel check(s) failed\n' "$failures" >&2
+  exit 1
+fi
+
+ok "recovery sentinel satisfied"

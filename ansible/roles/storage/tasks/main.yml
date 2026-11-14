@@ -1,0 +1,139 @@
+---
+# Directory ownership, the /srv layout, and the on-demand backup mounts. The
+# final assertion is the default-deny inventory: a dataset that exists in the
+# pool but is not classified in recovery_inventory stops the run.
+
+- name: Require a completely classified dataset inventory
+  ansible.builtin.assert:
+    that:
+      - zfs_datasets | selectattr('recovery_group', 'undefined') | list | length == 0
+      - zfs_datasets | map(attribute='recovery_group') | unique
+        | difference(recovery_inventory.keys() | list) | length == 0
+      - zfs_datasets | rejectattr('mountpoint', 'match', '^/srv/') | list | length == 0
+    fail_msg: "Unclassified dataset in zfs_datasets; add it to recovery_inventory first"
+
+- name: Require backup mounts to be locked down and on demand
+  ansible.builtin.assert:
+    that:
+      - "'noauto' in item.options"
+      - "'nodev' in item.options"
+      - "'nosuid' in item.options"
+      - "'noexec' in item.options"
+      - item.source is match('^/dev/mapper/luks-[a-z0-9-]+$')
+    fail_msg: "Backup mounts need noauto,nodev,nosuid,noexec and a LUKS mapper source"
+    quiet: true
+  loop: "{{ backup_mounts }}"
+
+- name: Read the pools the kernel can see
+  ansible.builtin.command:
+    argv: [zpool, list, -H, -o, name]
+  register: storage_pools
+  changed_when: false
+  check_mode: false
+  failed_when: false
+
+- name: Create the /srv root
+  ansible.builtin.file:
+    path: /srv
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Create the structural mount points
+  ansible.builtin.file:
+    path: "{{ item.mountpoint }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "{{ storage_memory_mode }}"
+  loop: "{{ zfs_container_datasets }}"
+  loop_control:
+    label: "{{ item.mountpoint }}"
+
+- name: Verify each served tree is a mounted dataset
+  ansible.builtin.command:
+    argv: [findmnt, -rn, -o, TARGET, --target, "{{ item.mountpoint }}"]
+  register: storage_mount_check
+  changed_when: false
+  check_mode: false
+  failed_when: false
+  loop: "{{ zfs_datasets }}"
+  loop_control:
+    label: "{{ item.mountpoint }}"
+  when: zfs_pool in storage_pools.stdout_lines
+
+- name: Refuse to change ownership on an unmounted tree
+  ansible.builtin.assert:
+    that:
+      - item.stdout == item.item.mountpoint
+    fail_msg: "{{ item.item.mountpoint }} is not a mount point; refusing to chown the root filesystem"
+    quiet: true
+  loop: "{{ storage_mount_check.results }}"
+  loop_control:
+    label: "{{ item.item.mountpoint }}"
+  when: zfs_pool in storage_pools.stdout_lines
+
+- name: Set ownership and permissions on the served trees
+  ansible.builtin.file:
+    path: "{{ item.mountpoint }}"
+    state: directory
+    owner: "{{ item.owner | default(storage_default_owner) }}"
+    group: "{{ item.group | default(storage_default_group) }}"
+    mode: "{{ item.mode | default(storage_default_mode) }}"
+  loop: "{{ zfs_datasets }}"
+  loop_control:
+    label: "{{ item.mountpoint }}"
+  when: zfs_pool in storage_pools.stdout_lines
+
+- name: Create the backup mount points
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "{{ storage_backup_mode }}"
+  loop: "{{ backup_mounts }}"
+  loop_control:
+    label: "{{ item.path }}"
+
+- name: Register the backup filesystems as on-demand mounts
+  ansible.posix.mount:
+    path: "{{ item.path }}"
+    src: "{{ item.source }}"
+    fstype: "{{ item.fstype }}"
+    opts: "{{ item.options }}"
+    state: present
+    dump: 0
+    passno: 0
+  loop: "{{ backup_mounts }}"
+  loop_control:
+    label: "{{ item.path }}"
+
+- name: Read every dataset in the pool
+  ansible.builtin.command:
+    argv: [zfs, list, -H, -o, name, -r, "{{ zfs_pool }}"]
+  register: storage_live_datasets
+  changed_when: false
+  check_mode: false
+  when: zfs_pool in storage_pools.stdout_lines
+
+- name: Compute the default-deny dataset diff
+  ansible.builtin.set_fact:
+    storage_unknown_datasets: >-
+      {{ storage_live_datasets.stdout_lines
+         | difference((zfs_container_datasets | map(attribute='name') | list)
+                      + (zfs_datasets | map(attribute='name') | list)
+                      + [zfs_pool]) }}
+  when: zfs_pool in storage_pools.stdout_lines
+
+- name: Refuse datasets missing a recovery-group classification
+  ansible.builtin.assert:
+    that:
+      - storage_unknown_datasets | length == 0
+    fail_msg: >-
+      Unknown dataset(s): {{ storage_unknown_datasets | join(', ') }}.
+      Add a recovery group and mountpoint in group_vars/all.yml before use.
+  when:
+    - storage_enforce_inventory | bool
+    - zfs_pool in storage_pools.stdout_lines

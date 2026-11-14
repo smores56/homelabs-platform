@@ -1,0 +1,75 @@
+#!/usr/bin/env bash
+# Clean-room restore entrypoint. Restores a *complete, verified* generation
+# from a generation manifest. It never uses `latest`, never prints a password,
+# and does nothing destructive without HOMELAB_RESTORE_APPLY=1.
+#
+# Manifest shape (one entry per destination):
+# {
+#   "complete": true,
+#   "destinations": [
+#     {"repository": "/var/backups/primary/personal", "password_file": "/etc/restic/personal.key",
+#      "snapshot": "<restic snapshot id>", "target": "/srv"}
+#   ]
+# }
+set -euo pipefail
+
+sentinel="{{ recovery_sentinel }}"
+check_script="{{ recovery_check_script }}"
+manifest=${HOMELAB_GENERATION_MANIFEST:-}
+apply=${HOMELAB_RESTORE_APPLY:-0}
+confirm=${HOMELAB_RESTORE_CONFIRM:-}
+
+die() { printf 'refusing: %s\n' "$1" >&2; exit 1; }
+
+[[ $EUID -eq 0 ]] || die "run as root"
+[[ -r $sentinel ]] || die "missing recovery sentinel $sentinel"
+[[ -n $manifest && -r $manifest ]] || die "set HOMELAB_GENERATION_MANIFEST to a readable manifest"
+[[ $confirm == "restore" ]] || die "set HOMELAB_RESTORE_CONFIRM=restore after reading the runbook"
+
+"$check_script" --require-backups --quiet || die "host does not match the recovery sentinel"
+
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+
+python3 - "$manifest" >"$work/plan" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    doc = json.load(handle)
+
+if doc.get("complete") is not True:
+    raise SystemExit("generation manifest is not marked complete")
+
+destinations = doc.get("destinations") or []
+if not destinations:
+    raise SystemExit("generation manifest lists no destinations")
+
+for entry in destinations:
+    for key in ("repository", "password_file", "snapshot", "target"):
+        if not entry.get(key):
+            raise SystemExit(f"destination is missing {key}")
+    if entry["snapshot"] == "latest":
+        raise SystemExit("a generation must name its snapshot; latest is not allowed")
+    if not entry["target"].startswith(("/srv/", "/var/lib/")):
+        raise SystemExit(f"restore target escapes the data plane: {entry['target']}")
+    print("\t".join([entry["repository"], entry["password_file"], entry["snapshot"], entry["target"]]))
+PY
+
+[[ -s $work/plan ]] || die "generation manifest produced an empty plan"
+
+if [[ $apply -ne 1 ]]; then
+  while IFS=$'\t' read -r repository _password_file snapshot target; do
+    printf 'plan: %s %s -> %s\n' "$repository" "$snapshot" "$target"
+  done <"$work/plan"
+  printf 'dry run: set HOMELAB_RESTORE_APPLY=1 to restore this generation\n'
+  exit 0
+fi
+
+while IFS=$'\t' read -r repository password_file snapshot target; do
+  restic -r "$repository" --password-file "$password_file" snapshots "$snapshot" >/dev/null
+  restic -r "$repository" --password-file "$password_file" restore "$snapshot" --target "$target" --verify
+done <"$work/plan"
+
+"$check_script" --require-backups --quiet
+printf 'restore complete; writers stay disabled until the old writer is fenced\n'

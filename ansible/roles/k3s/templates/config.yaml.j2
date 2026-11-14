@@ -1,0 +1,13 @@
+# Managed by ansible/roles/k3s. k3s_version is pinned in group_vars/all.yml.
+write-kubeconfig-mode: "{{ k3s_write_kubeconfig_mode }}"
+data-dir: {{ k3s_data_dir }}
+node-name: {{ inventory_hostname }}
+{% if k3s_role == 'server' %}
+disable:
+{% for component in k3s_disable_components %}
+  - {{ component }}
+{% endfor %}
+{% else %}
+server: {{ k3s_server_url }}
+token-file: {{ k3s_token_file }}
+{% endif %}

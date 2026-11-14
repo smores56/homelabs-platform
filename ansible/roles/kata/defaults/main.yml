@@ -1,0 +1,7 @@
+---
+# Kata with QEMU/runtime-rs: the Ubuntu package ships runtime-rs and the QEMU
+# hypervisor. The collector RuntimeClass selects kata-qemu, and the containerd
+# handler is declared in roles/k3s.
+kata_runtime_binary: /usr/bin/kata-runtime
+kata_preferences_file: /etc/apt/preferences.d/90-homelab-kata.pref
+kata_manifests_dir: /var/lib/rancher/k3s/server/manifests

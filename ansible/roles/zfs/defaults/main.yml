@@ -1,0 +1,4 @@
+---
+zfs_import_service: zfs-import-cache.service
+zfs_mount_service: zfs-mount.service
+zfs_systemd_dir: /etc/systemd/system

@@ -1,0 +1,107 @@
+---
+- name: Require digest-pinned images for every service
+  ansible.builtin.assert:
+    that:
+      - data_plane_images[item] is match('^[^@]+@sha256:[0-9a-f]{64}$')
+    fail_msg: "Set data_plane_images.{{ item }} to repository@sha256:<64 hex>"
+    quiet: true
+  loop: "{{ data_plane_images.keys() | list }}"
+
+- name: Require unique service names and a declared image key
+  ansible.builtin.assert:
+    that:
+      - data_plane_services | map(attribute='name') | unique | length == (data_plane_services | length)
+      - data_plane_services | selectattr('image_key', 'undefined') | list | length == 0
+      - data_plane_services | map(attribute='image_key') | unique | length == (data_plane_images | length)
+    fail_msg: "data_plane_services must be unique and use every declared image"
+
+- name: Derive the backup cryptsetup units
+  ansible.builtin.set_fact:
+    data_plane_backup_crypt_units: >-
+      {{ backup_mounts | map(attribute='source')
+         | map('regex_replace', '^/dev/mapper/', 'systemd-cryptsetup@')
+         | map('regex_replace', '$', '.service') | list }}
+
+- name: Create the data-plane directory roots
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "{{ item.mode }}"
+  loop:
+    - { path: /etc/homelab, mode: "0755" }
+    - { path: "{{ data_plane_config_root }}", mode: "0750" }
+    - { path: "{{ data_plane_secret_root }}", mode: "0700" }
+    - { path: "{{ data_plane_state_root }}", mode: "0750" }
+    - { path: "{{ data_plane_podman_root }}", mode: "0700" }
+    - { path: "{{ data_plane_run_root }}", mode: "0755" }
+  loop_control:
+    label: "{{ item.path }}"
+
+- name: Create each service state directory
+  ansible.builtin.file:
+    path: "{{ item.state_dir }}"
+    state: directory
+    owner: "{{ item.container_user | default(data_plane_default_container_user) | split(':') | first }}"
+    group: "{{ item.container_user | default(data_plane_default_container_user) | split(':') | last }}"
+    mode: "0750"
+  loop: "{{ data_plane_services }}"
+  loop_control:
+    label: "{{ item.short }}"
+
+- name: Write the non-secret environment for each service
+  ansible.builtin.template:
+    src: env.j2
+    dest: "{{ data_plane_config_root }}/{{ item.short }}.env"
+    owner: root
+    group: root
+    mode: "0640"
+  loop: "{{ data_plane_services }}"
+  loop_control:
+    label: "{{ item.short }}"
+  notify: Reload systemd
+
+- name: Install the service units
+  ansible.builtin.template:
+    src: unit.service.j2
+    dest: "/etc/systemd/system/{{ item.name }}.service"
+    owner: root
+    group: root
+    mode: "0644"
+  loop: "{{ data_plane_services }}"
+  loop_control:
+    label: "{{ item.name }}"
+  notify: Reload systemd
+
+- name: Install the timers
+  ansible.builtin.template:
+    src: unit.timer.j2
+    dest: "/etc/systemd/system/{{ item.name }}.timer"
+    owner: root
+    group: root
+    mode: "0644"
+  loop: "{{ data_plane_services | selectattr('timer', 'defined') | list }}"
+  loop_control:
+    label: "{{ item.name }}"
+  notify: Reload systemd
+
+- name: Enable and start the long-running services
+  ansible.builtin.systemd_service:
+    name: "{{ item.name }}.service"
+    enabled: true
+    state: started
+    daemon_reload: true
+  loop: "{{ data_plane_services | selectattr('timer', 'undefined') | list }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Enable and start the scheduled timers
+  ansible.builtin.systemd_service:
+    name: "{{ item.name }}.timer"
+    enabled: true
+    state: started
+    daemon_reload: true
+  loop: "{{ data_plane_services | selectattr('timer', 'defined') | list }}"
+  loop_control:
+    label: "{{ item.name }}"

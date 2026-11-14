@@ -1,0 +1,12 @@
+[Unit]
+{% for unit in recovery_backup_crypt_units %}
+Requires={{ unit }}
+After={{ unit }}
+{% endfor %}
+RequiresMountsFor={{ backup_mounts | map(attribute='path') | join(' ') }}
+{% for mount in backup_mounts %}
+AssertPathIsMountPoint={{ mount.path }}
+{% endfor %}
+
+[Service]
+ReadOnlyPaths={{ backup_mounts | map(attribute='path') | join(' ') }}

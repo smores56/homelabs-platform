@@ -1,0 +1,123 @@
+---
+# Clean-room recovery outline for a freshly autoinstalled host that still has
+# its encrypted disks. Run site.yml first (non-destructive) so crypttab, the
+# zfs units, fstab, and the recovery scripts exist, then:
+#
+#   ansible-playbook -i inventory/hosts.yml playbooks/recover.yml \
+#     --tags destructive \
+#     -e homelab_recovery_confirm=true \
+#     -e homelab_recovery_generation_manifest=/root/generation.json
+#
+# Set -e homelab_recovery_apply=true only after the dry-run plan is reviewed.
+# Nothing here runs without --tags destructive and the confirmation value.
+
+- name: Bring the encrypted storage online
+  hosts: storage_hosts
+  gather_facts: true
+  tasks:
+    - name: Require explicit recovery confirmation
+      ansible.builtin.assert:
+        that:
+          - homelab_recovery_confirm | bool
+          - homelab_recovery_generation_manifest | length > 0
+        fail_msg: >-
+          Refusing to recover without --tags destructive,
+          -e homelab_recovery_confirm=true, and
+          -e homelab_recovery_generation_manifest=<path>
+      tags: [destructive]
+
+    - name: Open every encrypted volume with its operator-provisioned keyfile
+      community.crypto.luks_device:
+        device: "{{ item.device }}"
+        name: "{{ item.name }}"
+        state: opened
+        keyfile: "{{ item.keyfile }}"
+      loop: "{{ luks_volumes }}"
+      when: homelab_recovery_confirm | bool
+      tags: [destructive]
+
+    - name: Read the pools the kernel can see
+      ansible.builtin.command:
+        argv: [zpool, list, -H, -o, name]
+      register: recovery_pools
+      changed_when: false
+      check_mode: false
+      failed_when: false
+      tags: [destructive]
+
+    - name: Import the pool without mounting it yet
+      ansible.builtin.command:
+        argv: [zpool, import, -N, "{{ zfs_pool }}"]
+      when:
+        - homelab_recovery_confirm | bool
+        - zfs_pool not in recovery_pools.stdout_lines
+      changed_when: true
+      tags: [destructive]
+
+    - name: Mount every dataset in the pool
+      ansible.builtin.systemd_service:
+        name: zfs-mount.service
+        state: restarted
+      when: homelab_recovery_confirm | bool
+      tags: [destructive]
+
+    - name: Mount the backup repositories on demand
+      ansible.builtin.systemd_service:
+        name: "{{ (item.path | replace('/', '-') | regex_replace('^-', '')) + '.mount' }}"
+        state: started
+      loop: "{{ backup_mounts }}"
+      when: homelab_recovery_confirm | bool
+      tags: [destructive]
+
+- name: Verify the host matches the recovery sentinel
+  hosts: data_plane_hosts
+  gather_facts: false
+  tasks:
+    - name: Run the sentinel check with backup mounts required
+      ansible.builtin.command:
+        argv: [/usr/local/sbin/homelab-recovery-check, --require-backups]
+      changed_when: false
+      check_mode: false
+      tags: [destructive]
+
+- name: Restore a verified generation
+  hosts: data_plane_hosts
+  gather_facts: false
+  tasks:
+    - name: Require confirmation before the restore step
+      ansible.builtin.assert:
+        that:
+          - homelab_recovery_confirm | bool
+          - homelab_recovery_generation_manifest | length > 0
+        fail_msg: "Pass homelab_recovery_confirm=true and a generation manifest"
+      tags: [destructive]
+
+    - name: Render the restore plan
+      ansible.builtin.command:
+        argv: [/usr/local/sbin/homelab-clean-room-restore]
+      environment:
+        HOMELAB_GENERATION_MANIFEST: "{{ homelab_recovery_generation_manifest }}"
+        HOMELAB_RESTORE_CONFIRM: restore
+      register: recovery_plan
+      changed_when: false
+      check_mode: false
+      when: not (homelab_recovery_apply | bool)
+      tags: [destructive]
+
+    - name: Print the restore plan
+      ansible.builtin.debug:
+        var: recovery_plan.stdout_lines
+      when: not (homelab_recovery_apply | bool)
+      tags: [destructive]
+
+    - name: Apply the verified generation
+      ansible.builtin.command:
+        argv: [/usr/local/sbin/homelab-clean-room-restore]
+      environment:
+        HOMELAB_GENERATION_MANIFEST: "{{ homelab_recovery_generation_manifest }}"
+        HOMELAB_RESTORE_CONFIRM: restore
+        HOMELAB_RESTORE_APPLY: "1"
+      when: homelab_recovery_apply | bool
+      changed_when: true
+      check_mode: false
+      tags: [destructive]

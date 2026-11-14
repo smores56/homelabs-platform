@@ -1,0 +1,75 @@
+---
+# Fail-closed inventory validation shared by site.yml and check.yml. Every
+# assertion runs before a role can touch a host.
+
+- name: Require a usable timezone and boolean gates
+  ansible.builtin.assert:
+    that:
+      - homelab_timezone | length > 0
+      - homelab_destructive_confirm is boolean
+      - homelab_admin_users is sequence
+    fail_msg: "group_vars/all.yml is incomplete; see ansible/README.md"
+    quiet: true
+
+- name: Validate the encrypted volume layout on storage hosts
+  when: inventory_hostname in groups.get('storage_hosts', [])
+  block:
+    - name: Require at least one encrypted volume
+      ansible.builtin.assert:
+        that:
+          - luks_volumes | length > 0
+        fail_msg: "Define luks_volumes for {{ inventory_hostname }} in inventory/hosts.yml"
+
+    - name: Validate each encrypted volume entry
+      ansible.builtin.assert:
+        that:
+          - item.name is match('^luks-[a-z0-9-]+$')
+          - item.device is match('^/dev/disk/by-id/')
+          - item.keyfile is match('^/')
+          - item.auto is boolean
+          - "'nofail' not in (item.options | default('luks,discard'))"
+        fail_msg: "Invalid luks_volumes entry {{ item.name | default('unnamed') }}; check README.md"
+        quiet: true
+      loop: "{{ luks_volumes }}"
+
+    - name: Require resolved backup mount devices
+      ansible.builtin.assert:
+        that:
+          - backup_mounts | length > 0
+          - backup_mounts | map(attribute='source') | list
+            | difference(luks_volumes | map(attribute='name') | map('regex_replace', '^', '/dev/mapper/') | list)
+            | length == 0
+        fail_msg: "Every backup_mounts source must be a declared LUKS mapper"
+
+    - name: Require every dataset to carry a known recovery group
+      ansible.builtin.assert:
+        that:
+          - zfs_datasets | length > 0
+          - zfs_datasets | selectattr('recovery_group', 'undefined') | list | length == 0
+          - zfs_datasets | map(attribute='recovery_group') | unique
+            | difference(recovery_inventory.keys() | list) | length == 0
+          - zfs_datasets | rejectattr('mountpoint', 'match', '^/srv/') | list | length == 0
+          - zfs_datasets | map(attribute='mountpoint') | unique | length == (zfs_datasets | length)
+        fail_msg: "A dataset is unclassified or outside /srv; add it to recovery_inventory and zfs_datasets"
+
+- name: Require digest-pinned data-plane images
+  when: inventory_hostname in groups.get('data_plane_hosts', [])
+  ansible.builtin.assert:
+    that:
+      - data_plane_images[item] is match('^[^@]+@sha256:[0-9a-f]{64}$')
+    fail_msg: "Set data_plane_images.{{ item }} to repository@sha256:<64 hex> in inventory/hosts.yml"
+    quiet: true
+  loop: "{{ data_plane_images.keys() | list }}"
+
+- name: Require a pinned k3s node configuration
+  when: inventory_hostname in (groups.get('k3s_servers', []) + groups.get('k3s_agents', []))
+  ansible.builtin.assert:
+    that:
+      - k3s_version is match('^v[0-9]+\.[0-9]+\.[0-9]+\+k3s[0-9]+$')
+      - k3s_role in ['server', 'agent']
+      - k3s_role == 'agent' or k3s_disable_components | length > 0
+      - k3s_role == 'server' or k3s_server_url | length > 0
+      - k3s_enable_gvisor_runtime is boolean
+      - k3s_enable_kata_runtime is boolean
+      - k3s_enable_nvidia_runtime is boolean
+    fail_msg: "Set k3s_role and pin k3s_version for {{ inventory_hostname }}"

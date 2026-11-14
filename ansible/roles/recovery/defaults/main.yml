@@ -1,0 +1,6 @@
+---
+recovery_state_dir: /var/lib/homelab/recovery
+recovery_sentinel: "{{ recovery_state_dir }}/sentinel.json"
+recovery_entrypoint: /usr/local/sbin/homelab-clean-room-restore
+recovery_check_script: /usr/local/sbin/homelab-recovery-check
+recovery_portal_unit: homelab-recovery-portal.service

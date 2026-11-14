@@ -1,0 +1,9 @@
+{{ {
+  'host': inventory_hostname,
+  'pool': zfs_pool,
+  'datasets': zfs_datasets | map(attribute='name') | list,
+  'mounts': zfs_datasets | map(attribute='mountpoint') | list,
+  'backup_mounts': backup_mounts | map(attribute='path') | list,
+  'portal_unit': recovery_portal_unit,
+  'generated_by': 'ansible/roles/recovery'
+} | to_nice_json }}

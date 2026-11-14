@@ -1,0 +1,52 @@
+---
+# Bring a host from a signed Ubuntu autoinstall to the data-plane baseline.
+# Run `playbooks/check.yml --check --diff` first. Disk-destructive tasks carry
+# the `destructive` tag and additionally require homelab_destructive_confirm.
+
+- name: Validate the inventory before any role runs
+  hosts: all
+  gather_facts: true
+  tasks:
+    - name: Import the fail-closed preflight assertions
+      ansible.builtin.import_tasks: tasks/preflight.yml
+
+- name: Apply the shared host baseline
+  hosts: all
+  roles:
+    - base
+
+- name: Install the NVIDIA driver and container toolkit
+  hosts: gpu_hosts
+  roles:
+    - nvidia
+
+- name: Map the encrypted volumes and record the keyfile slots
+  hosts: storage_hosts
+  roles:
+    - luks
+
+- name: Import the pool and mount every recovery-group dataset
+  hosts: storage_hosts
+  roles:
+    - zfs
+
+- name: Lay out served trees and the backup mount points
+  hosts: storage_hosts
+  roles:
+    - storage
+
+- name: Install the pinned k3s node
+  hosts: k3s_servers:k3s_agents
+  roles:
+    - k3s
+
+- name: Install the Kata runtime and RuntimeClass
+  hosts: k3s_servers:k3s_agents
+  roles:
+    - kata
+
+- name: Install the data-plane units and timers
+  hosts: data_plane_hosts
+  roles:
+    - data_plane
+    - recovery

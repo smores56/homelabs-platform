@@ -1,0 +1,6 @@
+---
+luks_crypttab: /etc/crypttab
+luks_crypttab_mode: "0644"
+luks_keyfile_owner: root
+luks_keyfile_group: root
+luks_keyfile_mode: "0400"

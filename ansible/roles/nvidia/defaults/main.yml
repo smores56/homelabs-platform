@@ -1,0 +1,7 @@
+---
+# GPU device plugin notes: the device plugin and its RuntimeClass are cluster
+# workloads owned by homelabs-apps. This role only pins the host driver and the
+# container toolkit that exposes the GPU to ordinary runc containers on this
+# node. Kata collectors never use this runtime.
+nvidia_runtime_binary: /usr/bin/nvidia-container-runtime
+nvidia_preferences_file: /etc/apt/preferences.d/90-homelab-nvidia.pref

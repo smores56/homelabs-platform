@@ -1,0 +1,71 @@
+[Unit]
+Description={{ service.description }}
+Wants=network-online.target
+After=network-online.target
+{% if service.assert_mounts | default([]) | length > 0 %}
+Requires=zfs-mount.service
+After=zfs-mount.service
+{% for mount in service.assert_mounts %}
+AssertPathIsMountPoint={{ mount }}
+{% endfor %}
+{% endif %}
+{% if service.backup_mounts | default(false) %}
+{% for unit in data_plane_backup_crypt_units %}
+Requires={{ unit }}
+After={{ unit }}
+{% endfor %}
+RequiresMountsFor={{ backup_mounts | map(attribute='path') | join(' ') }}
+{% for mount in backup_mounts %}
+AssertPathIsMountPoint={{ mount.path }}
+{% endfor %}
+{% endif %}
+
+[Service]
+Type={{ 'oneshot' if service.type | default('simple') == 'oneshot' else 'simple' }}
+{% if service.type | default('simple') != 'oneshot' %}
+Restart=on-failure
+RestartSec=10s
+{% endif %}
+EnvironmentFile={{ data_plane_config_root }}/{{ service.short }}.env
+EnvironmentFile=-{{ data_plane_secret_root }}/{{ service.short }}.env
+RuntimeDirectory=homelab/{{ service.short }}
+RuntimeDirectoryMode=0700
+ExecStart=/usr/bin/podman run \
+  --rm \
+  --name {{ service.name }} \
+  --pull=never \
+  --root {{ data_plane_podman_root }}/{{ service.short }} \
+  --runroot {{ data_plane_run_root }}/{{ service.short }} \
+  --read-only \
+  --cap-drop=all \
+  --security-opt=no-new-privileges \
+  --user {{ service.container_user | default('65532:65532') }} \
+  --tmpfs /tmp:rw,nosuid,nodev,noexec,size=64m \
+{% for port in service.ports | default([]) %}
+  --publish {{ port }} \
+{% endfor %}
+{% for volume in service.volumes | default([]) %}
+  --volume {{ volume }} \
+{% endfor %}
+  {{ data_plane_images[service.image_key] }}{% for arg in service.args | default([]) %} {{ arg }}{% endfor %}
+
+# Hardening. RequiresMountsFor/AssertPathIsMountPoint above make a missing
+# dataset or backup repository a start failure, never an empty-mount write.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+ReadWritePaths=/run/lock
+{% for path in service.read_write_paths | default([]) %}
+ReadWritePaths={{ path }}
+{% endfor %}
+StandardOutput=journal
+StandardError=journal

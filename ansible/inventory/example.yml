@@ -1,0 +1,61 @@
+---
+# Copy this file to inventory/hosts.yml (git-ignored) and replace every
+# 192.0.2.x address, by-id device path, and key fingerprint with the real value.
+# The example layout is the only supported topology: smortress is the
+# bare-metal storage/GPU/k3s worker; tenant-vm is the CPU-only k3s server.
+all:
+  vars:
+    ansible_python_interpreter: /usr/bin/python3
+    ansible_ssh_common_args: -o StrictHostKeyChecking=accept-new
+  children:
+    storage_hosts:
+      hosts:
+        smortress:
+          ansible_host: 192.0.2.10
+          ansible_user: ansible
+          k3s_role: agent
+          k3s_server_url: https://192.0.2.20:6443
+          k3s_enable_nvidia_runtime: true
+          k3s_enable_kata_runtime: true
+          k3s_enable_gvisor_runtime: true
+          # Replace each by-id path with the disk's stable identifier. The
+          # root entry may be omitted when autoinstall already owns crypttab.
+          luks_volumes:
+            - name: luks-root
+              device: /dev/disk/by-id/REPLACE-root
+              keyfile: /etc/luks/root.key
+              auto: true
+              options: luks,discard
+            - name: luks-data
+              device: /dev/disk/by-id/REPLACE-data
+              keyfile: /etc/luks/data.key
+              auto: true
+              options: luks,discard
+            - name: luks-backup-primary
+              device: /dev/disk/by-id/REPLACE-backup-primary
+              keyfile: /etc/luks/backup-primary.key
+              auto: false
+              options: luks,discard
+            - name: luks-backup-secondary
+              device: /dev/disk/by-id/REPLACE-backup-secondary
+              keyfile: /etc/luks/backup-secondary.key
+              auto: false
+              options: luks,discard
+    gpu_hosts:
+      hosts:
+        smortress:
+    data_plane_hosts:
+      hosts:
+        smortress:
+    k3s_agents:
+      hosts:
+        smortress:
+    k3s_servers:
+      hosts:
+        tenant-vm:
+          ansible_host: 192.0.2.20
+          ansible_user: ansible
+          k3s_role: server
+          k3s_enable_nvidia_runtime: false
+          k3s_enable_kata_runtime: false
+          k3s_enable_gvisor_runtime: true

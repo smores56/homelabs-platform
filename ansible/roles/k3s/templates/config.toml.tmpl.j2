@@ -1,0 +1,24 @@
+{% raw %}{{ template "base" . }}{% endraw %}
+
+[plugins.'io.containerd.cri.v1.runtime'.containerd]
+  default_runtime_name = "runc"
+
+[plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.runc]
+  runtime_type = "io.containerd.runc.v2"
+{% if k3s_enable_gvisor_runtime | bool %}
+
+[plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.runsc]
+  runtime_type = "io.containerd.runsc.v1"
+{% endif %}
+{% if k3s_enable_nvidia_runtime | bool %}
+
+[plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.nvidia]
+  runtime_type = "io.containerd.runc.v2"
+  [plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.nvidia.options]
+    BinaryName = "/usr/bin/nvidia-container-runtime"
+{% endif %}
+{% if k3s_enable_kata_runtime | bool %}
+
+[plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.kata-qemu]
+  runtime_type = "io.containerd.kata.v2"
+{% endif %}

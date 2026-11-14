@@ -1,0 +1,184 @@
+---
+# LUKS2 layout: one container per volume, each unlocked by a root-only keyfile
+# and (operator-provisioned) an offline passphrase slot. This role never creates
+# a passphrase and never prints key material.
+#
+# Order matters for first boot: containers are created under --tags destructive
+# before any volume is opened. The read-only checks and the boot-volume open
+# carry `always` so both a destructive-only initialisation run and a normal run
+# validate the same keyfiles and devices.
+
+- name: Require an encrypted volume layout
+  ansible.builtin.assert:
+    that:
+      - luks_volumes | length > 0
+    fail_msg: "Define luks_volumes for the storage host in inventory/hosts.yml"
+  tags: [always]
+
+- name: Validate every encrypted volume entry
+  ansible.builtin.assert:
+    that:
+      - item.name is match('^luks-[a-z0-9-]+$')
+      - item.device is match('^/dev/disk/by-id/')
+      - item.keyfile is match('^/')
+      - item.auto is boolean
+      - "'nofail' not in (item.options | default('luks,discard'))"
+    fail_msg: "Invalid luks_volumes entry; see ansible/README.md"
+    quiet: true
+  loop: "{{ luks_volumes }}"
+  tags: [always]
+
+- name: Check the encrypted devices are present
+  ansible.builtin.stat:
+    path: "{{ item.device }}"
+  loop: "{{ luks_volumes }}"
+  loop_control:
+    label: "{{ item.device }}"
+  register: luks_device_stat
+  tags: [always]
+
+- name: Fail closed when a device is absent
+  ansible.builtin.assert:
+    that:
+      - luks_device_stat.results | rejectattr('stat.exists') | list | length == 0
+    fail_msg: >-
+      A configured LUKS device does not exist. Replace every REPLACE-* by-id
+      path in the inventory with the disk's stable identifier.
+  tags: [always]
+
+- name: Create the keyfile directory
+  ansible.builtin.file:
+    path: "{{ luks_keyfile_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+  tags: [always]
+
+- name: Check the operator-provisioned keyfiles
+  ansible.builtin.stat:
+    path: "{{ item.keyfile }}"
+  loop: "{{ luks_volumes }}"
+  register: luks_keyfile_stat
+  tags: [always]
+
+- name: Fail closed when a keyfile is missing
+  ansible.builtin.assert:
+    that:
+      - luks_keyfile_stat.results | rejectattr('stat.exists') | list | length == 0
+    fail_msg: >-
+      Missing LUKS keyfile. Provision each keyfile as root:root mode 0400 from
+      Bitwarden before running; Ansible never generates one.
+  tags: [always]
+
+- name: Restrict the keyfile permissions
+  ansible.builtin.file:
+    path: "{{ item.item.keyfile }}"
+    owner: "{{ luks_keyfile_owner }}"
+    group: "{{ luks_keyfile_group }}"
+    mode: "{{ luks_keyfile_mode }}"
+  loop: "{{ luks_keyfile_stat.results }}"
+  loop_control:
+    label: "{{ item.item.keyfile }}"
+  when: item.stat.exists
+  tags: [always]
+
+# A managed block leaves any autoinstall-owned root entry in place. List only
+# the volumes Ansible should own; never duplicate a line the installer wrote.
+- name: Write the managed crypttab block with keyfile unlock
+  ansible.builtin.blockinfile:
+    path: "{{ luks_crypttab }}"
+    create: true
+    owner: root
+    group: root
+    mode: "{{ luks_crypttab_mode }}"
+    marker: "# {mark} ANSIBLE MANAGED BLOCK - homelab luks"
+    block: |
+      {% for volume in luks_volumes %}
+      {{ volume.name }} {{ volume.device }} {{ volume.keyfile }} {{ volume.options | default('luks,discard') }}{{ '' if volume.auto else ',noauto' }}
+      {% endfor %}
+  notify: Reload systemd
+
+- name: Require explicit confirmation to initialise LUKS2 containers
+  ansible.builtin.assert:
+    that:
+      - homelab_destructive_confirm | bool
+    fail_msg: >-
+      Refusing to initialise disks. Re-run with --tags destructive and
+      -e homelab_destructive_confirm=true after verifying every by-id path.
+  tags: [destructive]
+
+# The keyfile occupies the first keyslot. Add the offline recovery passphrase
+# once from Bitwarden with `cryptsetup luksAddKey <device>`; Ansible never sees
+# it, so it can never leak into a log or the repository.
+- name: Create the LUKS2 containers
+  community.crypto.luks_device:
+    device: "{{ item.device }}"
+    state: present
+    type: luks2
+    cipher: aes-xts-plain64
+    keysize: 512
+    hash: sha256
+    label: "{{ item.name }}"
+    keyfile: "{{ item.keyfile }}"
+  loop: "{{ luks_volumes }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: homelab_destructive_confirm | bool
+  tags: [destructive]
+
+- name: Open the boot-time volumes
+  community.crypto.luks_device:
+    device: "{{ item.device }}"
+    name: "{{ item.name }}"
+    state: opened
+    keyfile: "{{ item.keyfile }}"
+  loop: "{{ luks_volumes | selectattr('auto') | list }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: not ansible_check_mode
+  tags: [always]
+
+- name: Open the backup volumes for initialisation
+  community.crypto.luks_device:
+    device: "{{ item.device }}"
+    name: "{{ item.name }}"
+    state: opened
+    keyfile: "{{ item.keyfile }}"
+  loop: "{{ luks_volumes | rejectattr('auto') | list }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when:
+    - homelab_destructive_confirm | bool
+    - not ansible_check_mode
+  tags: [destructive]
+
+# The backup disks hold only Restic repositories. Formatting never forces a
+# filesystem onto an existing one: blkid decides, and force stays false.
+- name: Probe the backup filesystem type
+  ansible.builtin.command:
+    argv: [blkid, -o, value, -s, TYPE, "/dev/mapper/{{ item.name }}"]
+  loop: "{{ luks_volumes | rejectattr('auto') | list }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: luks_backup_fs
+  changed_when: false
+  failed_when: false
+  when: homelab_destructive_confirm | bool
+  tags: [destructive]
+
+- name: Create ext4 on unformatted backup volumes
+  community.general.filesystem:
+    dev: "/dev/mapper/{{ item.name }}"
+    fstype: ext4
+    opts: "-L {{ item.name | regex_replace('^luks-', '') }}"
+    force: false
+  loop: "{{ luks_volumes | rejectattr('auto') | list }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when:
+    - homelab_destructive_confirm | bool
+    - not ansible_check_mode
+    - luks_backup_fs.results | selectattr('item.name', 'equalto', item.name)
+      | map(attribute='stdout') | first | length == 0
+  tags: [destructive]

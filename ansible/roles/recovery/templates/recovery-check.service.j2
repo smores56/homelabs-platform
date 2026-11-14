@@ -1,0 +1,7 @@
+[Unit]
+Description=Verify the recovery sentinel against the live host
+After=zfs-mount.service
+
+[Service]
+Type=oneshot
+ExecStart={{ recovery_check_script }}

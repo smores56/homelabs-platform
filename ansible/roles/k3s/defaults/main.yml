@@ -1,0 +1,13 @@
+---
+k3s_binary: /usr/local/bin/k3s
+k3s_config_dir: /etc/rancher/k3s
+k3s_data_dir: /var/lib/rancher/k3s
+k3s_service: k3s
+k3s_binary_url: "https://github.com/k3s-io/k3s/releases/download/{{ k3s_version }}/k3s"
+# Optional supply-chain check. When set it must be a sha256sum of the binary.
+k3s_binary_sha256: ""
+gvisor_base_url: "https://storage.googleapis.com/gvisor/releases/release/{{ gvisor_release }}/x86_64"
+gvisor_binaries:
+  - runsc
+  - containerd-shim-runsc-v1
+k3s_manifests_dir: "{{ k3s_data_dir }}/server/manifests"

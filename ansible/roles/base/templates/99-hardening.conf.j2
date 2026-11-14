@@ -1,0 +1,15 @@
+# Managed by ansible/roles/base. Local edits are replaced on every run.
+Port {{ homelab_ssh_port }}
+PermitRootLogin no
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PubkeyAuthentication yes
+AuthenticationMethods publickey
+PermitEmptyPasswords no
+X11Forwarding no
+AllowAgentForwarding no
+AllowGroups {{ homelab_ssh_allow_groups | join(' ') }}
+MaxAuthTries {{ homelab_ssh_max_auth_tries }}
+LoginGraceTime 30
+ClientAliveInterval {{ homelab_ssh_client_alive_interval }}
+ClientAliveCountMax {{ homelab_ssh_client_alive_count_max }}

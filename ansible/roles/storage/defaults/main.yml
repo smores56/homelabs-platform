@@ -1,0 +1,7 @@
+---
+storage_default_owner: root
+storage_default_group: root
+storage_default_mode: "0755"
+storage_memory_mode: "0750"
+storage_backup_mode: "0700"
+storage_enforce_inventory: true

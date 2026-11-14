@@ -1,0 +1,47 @@
+---
+# GPU host only. Ubuntu supplies the driver; the CUDA container repository is
+# expected to be present before this role runs. Pinning happens through apt
+# preferences so an unattended upgrade cannot cross the tested branch.
+
+- name: Require a GPU host
+  ansible.builtin.assert:
+    that:
+      - inventory_hostname in groups.get('gpu_hosts', [])
+    fail_msg: "roles/nvidia is only applied to hosts in gpu_hosts"
+
+- name: Pin the NVIDIA driver branch
+  ansible.builtin.copy:
+    dest: "{{ nvidia_preferences_file }}"
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      # Managed by ansible/roles/nvidia.
+      Package: {{ nvidia_driver_package }}
+      Pin: version {{ nvidia_driver_version }}
+      Pin-Priority: 1001
+
+      Package: {{ nvidia_container_toolkit_package }}
+      Pin: version {{ nvidia_container_toolkit_version }}
+      Pin-Priority: 1001
+
+- name: Install the pinned driver and container toolkit
+  ansible.builtin.apt:
+    name:
+      - "{{ nvidia_driver_package }}"
+      - "{{ nvidia_container_toolkit_package }}"
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Check the container runtime binary
+  ansible.builtin.stat:
+    path: "{{ nvidia_runtime_binary }}"
+  register: nvidia_runtime
+
+- name: Require the container runtime binary
+  ansible.builtin.assert:
+    that:
+      - nvidia_runtime.stat.exists
+      - nvidia_runtime.stat.executable
+    fail_msg: "{{ nvidia_runtime_binary }} is missing; install the pinned container toolkit"

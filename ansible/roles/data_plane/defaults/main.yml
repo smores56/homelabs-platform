@@ -1,0 +1,126 @@
+---
+data_plane_default_container_user: "65532:65532"
+
+# The five host services. Every image is selected by key from data_plane_images
+# and must be digest-pinned. Units run rootful podman with a read-only container
+# root, all capabilities dropped, and no-new-privileges; the host unit itself is
+# hardened below and in templates/unit.service.j2.
+data_plane_services:
+  - name: homelab-event-service
+    short: event-service
+    description: Single-writer event log for the local profile
+    image_key: event_service
+    type: simple
+    args: []
+    ports:
+      - "127.0.0.1:7101:7101"
+    environment:
+      HOMELAB_STATE_DIR: "{{ data_plane_state_root }}/event-service"
+      HOMELAB_LISTEN: "0.0.0.0:7101"
+    state_dir: "{{ data_plane_state_root }}/event-service"
+    volumes:
+      - "{{ data_plane_state_root }}/event-service:/var/lib/homelab/event-service:rw"
+    read_write_paths:
+      - "{{ data_plane_state_root }}/event-service"
+      - "{{ data_plane_run_root }}/event-service"
+    assert_mounts: []
+    backup_mounts: false
+
+  - name: homelab-write-broker
+    short: write-broker
+    description: Authoritative write broker for general sources
+    image_key: write_broker
+    type: simple
+    args: []
+    ports:
+      - "127.0.0.1:7102:7102"
+    environment:
+      HOMELAB_STATE_DIR: "{{ data_plane_state_root }}/write-broker"
+      HOMELAB_LISTEN: "0.0.0.0:7102"
+      HOMELAB_GENERAL_ROOT: /srv/books
+    state_dir: "{{ data_plane_state_root }}/write-broker"
+    volumes:
+      - "{{ data_plane_state_root }}/write-broker:/var/lib/homelab/write-broker:rw"
+      - "/srv/books:/srv/books:rw"
+    read_write_paths:
+      - "{{ data_plane_state_root }}/write-broker"
+      - "{{ data_plane_run_root }}/write-broker"
+      - /srv/books
+    assert_mounts:
+      - /srv/books
+    backup_mounts: false
+
+  - name: homelab-backup-controller
+    short: backup-controller
+    description: Fan-out Restic backup controller
+    image_key: backup_controller
+    type: oneshot
+    args: []
+    ports: []
+    environment:
+      HOMELAB_STATE_DIR: "{{ data_plane_state_root }}/backup-controller"
+      HOMELAB_PRIMARY_REPOSITORY: /var/backups/primary
+      HOMELAB_SECONDARY_REPOSITORY: /var/backups/secondary
+    state_dir: "{{ data_plane_state_root }}/backup-controller"
+    container_user: "0:0"
+    volumes:
+      - "{{ data_plane_state_root }}/backup-controller:/var/lib/homelab/backup-controller:rw"
+      - "/srv:/srv:ro"
+      - "/var/backups/primary:/var/backups/primary:rw"
+      - "/var/backups/secondary:/var/backups/secondary:rw"
+    read_write_paths:
+      - "{{ data_plane_state_root }}/backup-controller"
+      - "{{ data_plane_run_root }}/backup-controller"
+      - /var/backups/primary
+      - /var/backups/secondary
+    assert_mounts: "{{ zfs_datasets | map(attribute='mountpoint') | list }}"
+    backup_mounts: true
+    timer:
+      calendar: hourly
+      delay: 120
+
+  - name: homelab-collector-relay
+    short: collector-relay
+    description: Scheduled reconciliation pass for collector replicas
+    image_key: collector_relay
+    type: oneshot
+    args: []
+    ports: []
+    environment:
+      HOMELAB_STATE_DIR: "{{ data_plane_state_root }}/collector-relay"
+    state_dir: "{{ data_plane_state_root }}/collector-relay"
+    volumes:
+      - "{{ data_plane_state_root }}/collector-relay:/var/lib/homelab/collector-relay:rw"
+    read_write_paths:
+      - "{{ data_plane_state_root }}/collector-relay"
+      - "{{ data_plane_run_root }}/collector-relay"
+    assert_mounts: []
+    backup_mounts: false
+    timer:
+      calendar: "*:0/15"
+      delay: 60
+
+  - name: homelab-recovery-portal
+    short: recovery-portal
+    description: Read-only recovery portal over verified generations
+    image_key: recovery_portal
+    type: simple
+    args: []
+    ports:
+      - "127.0.0.1:7103:7103"
+    environment:
+      HOMELAB_STATE_DIR: "{{ data_plane_state_root }}/recovery-portal"
+      HOMELAB_LISTEN: "0.0.0.0:7103"
+      HOMELAB_PRIMARY_REPOSITORY: /var/backups/primary
+      HOMELAB_SECONDARY_REPOSITORY: /var/backups/secondary
+    state_dir: "{{ data_plane_state_root }}/recovery-portal"
+    container_user: "0:0"
+    volumes:
+      - "{{ data_plane_state_root }}/recovery-portal:/var/lib/homelab/recovery-portal:rw"
+      - "/var/backups/primary:/var/backups/primary:ro"
+      - "/var/backups/secondary:/var/backups/secondary:ro"
+    read_write_paths:
+      - "{{ data_plane_state_root }}/recovery-portal"
+      - "{{ data_plane_run_root }}/recovery-portal"
+    assert_mounts: []
+    backup_mounts: true

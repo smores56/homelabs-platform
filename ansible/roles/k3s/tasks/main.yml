@@ -1,0 +1,143 @@
+---
+# A pinned k3s node. The server runs with traefik, servicelb, and
+# metrics-server disabled; the containerd template carries the GPU and sandbox
+# runtime handlers. The kubeconfig is root-only.
+
+- name: Require a valid node role
+  ansible.builtin.assert:
+    that:
+      - k3s_role in ['server', 'agent']
+      - k3s_version is match('^v[0-9]+\.[0-9]+\.[0-9]+\+k3s[0-9]+$')
+      - k3s_role == 'server' or k3s_server_url | length > 0
+    fail_msg: "Set k3s_role and a pinned k3s_version (or k3s_server_url on an agent)"
+
+- name: Create the k3s configuration directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - "{{ k3s_config_dir }}"
+    - "{{ k3s_data_dir }}/agent/etc/containerd"
+
+- name: Create the k3s server manifest directory
+  ansible.builtin.file:
+    path: "{{ k3s_manifests_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  when: k3s_role == 'server'
+
+- name: Install the pinned k3s binary without a checksum
+  ansible.builtin.get_url:
+    url: "{{ k3s_binary_url }}"
+    dest: "{{ k3s_binary }}"
+    owner: root
+    group: root
+    mode: "0755"
+  when: k3s_binary_sha256 | length == 0
+  notify: Restart k3s
+
+- name: Install the pinned k3s binary with its checksum
+  ansible.builtin.get_url:
+    url: "{{ k3s_binary_url }}"
+    dest: "{{ k3s_binary }}"
+    owner: root
+    group: root
+    mode: "0755"
+    checksum: "sha256:{{ k3s_binary_sha256 }}"
+  when: k3s_binary_sha256 | length > 0
+  notify: Restart k3s
+
+- name: Provide the kubectl, crictl, and ctr entry points
+  ansible.builtin.file:
+    src: "{{ k3s_binary }}"
+    dest: "/usr/local/bin/{{ item }}"
+    state: link
+    force: true
+  loop:
+    - kubectl
+    - crictl
+    - ctr
+
+- name: Install the gVisor runtime and shim
+  ansible.builtin.get_url:
+    url: "{{ gvisor_base_url }}/{{ item }}"
+    dest: "/usr/local/bin/{{ item }}"
+    owner: root
+    group: root
+    mode: "0755"
+  loop: "{{ gvisor_binaries }}"
+  when: k3s_enable_gvisor_runtime | bool
+
+- name: Configure the k3s server or agent
+  ansible.builtin.template:
+    src: config.yaml.j2
+    dest: "{{ k3s_config_dir }}/config.yaml"
+    owner: root
+    group: root
+    mode: "0600"
+  notify: Restart k3s
+
+# k3s renders this Go template into its own containerd config. The base
+# template keeps k3s defaults and appends only the runtime handlers this node
+# is allowed to serve; a CPU-only server never advertises the NVIDIA runtime.
+- name: Template the containerd runtime handlers
+  ansible.builtin.template:
+    src: config.toml.tmpl.j2
+    dest: "{{ k3s_data_dir }}/agent/etc/containerd/config.toml.tmpl"
+    owner: root
+    group: root
+    mode: "0600"
+  notify: Restart k3s
+
+- name: Install the k3s systemd unit
+  ansible.builtin.template:
+    src: k3s.service.j2
+    dest: "/etc/systemd/system/{{ k3s_service }}.service"
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Reload systemd
+
+- name: Enable and start k3s
+  ansible.builtin.systemd_service:
+    name: "{{ k3s_service }}"
+    enabled: true
+    state: started
+    daemon_reload: true
+
+- name: Check the server kubeconfig
+  ansible.builtin.stat:
+    path: "{{ k3s_config_dir }}/k3s.yaml"
+  register: k3s_kubeconfig
+  when: k3s_role == 'server'
+
+- name: Restrict the kubeconfig to root
+  ansible.builtin.file:
+    path: "{{ k3s_config_dir }}/k3s.yaml"
+    owner: root
+    group: root
+    mode: "{{ k3s_write_kubeconfig_mode }}"
+  when:
+    - k3s_role == 'server'
+    - k3s_kubeconfig.stat.exists
+
+- name: Publish the gVisor RuntimeClass
+  ansible.builtin.copy:
+    dest: "{{ k3s_manifests_dir }}/runtimeclass-gvisor.yaml"
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      apiVersion: node.k8s.io/v1
+      kind: RuntimeClass
+      metadata:
+        name: gvisor
+      handler: runsc
+  when:
+    - k3s_role == 'server'
+    - k3s_enable_gvisor_runtime | bool

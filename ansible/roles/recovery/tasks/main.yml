@@ -1,0 +1,99 @@
+---
+# Recovery-side content for the data-plane host: the sentinel that describes
+# what a healthy host must look like, the read-only portal constraints, and the
+# clean-room restore entrypoint. The portal unit itself is owned by
+# roles/data_plane; this role only tightens it.
+
+- name: Create the recovery state directory
+  ansible.builtin.file:
+    path: "{{ recovery_state_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0750"
+
+- name: Record the expected host shape as the recovery sentinel
+  ansible.builtin.template:
+    src: sentinel.json.j2
+    dest: "{{ recovery_sentinel }}"
+    owner: root
+    group: root
+    mode: "0640"
+
+- name: Install the sentinel check
+  ansible.builtin.template:
+    src: recovery-check.sh.j2
+    dest: "{{ recovery_check_script }}"
+    owner: root
+    group: root
+    mode: "0750"
+
+- name: Install the clean-room restore entrypoint
+  ansible.builtin.template:
+    src: clean-room-restore.sh.j2
+    dest: "{{ recovery_entrypoint }}"
+    owner: root
+    group: root
+    mode: "0750"
+
+- name: Derive the backup cryptsetup units
+  ansible.builtin.set_fact:
+    recovery_backup_crypt_units: >-
+      {{ backup_mounts | map(attribute='source')
+         | map('regex_replace', '^/dev/mapper/', 'systemd-cryptsetup@')
+         | map('regex_replace', '$', '.service') | list }}
+
+- name: Check the portal unit installed by roles/data_plane
+  ansible.builtin.stat:
+    path: "/etc/systemd/system/{{ recovery_portal_unit }}"
+  register: recovery_portal_unit_file
+  when: not ansible_check_mode
+
+- name: Require the portal unit before tightening it
+  ansible.builtin.assert:
+    that:
+      - recovery_portal_unit_file.stat.exists
+    fail_msg: "{{ recovery_portal_unit }} is missing; apply roles/data_plane first"
+  when: not ansible_check_mode
+
+- name: Create the portal drop-in directory
+  ansible.builtin.file:
+    path: "/etc/systemd/system/{{ recovery_portal_unit }}.d"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Make the portal fail closed on missing backup repositories
+  ansible.builtin.template:
+    src: portal-dropin.conf.j2
+    dest: "/etc/systemd/system/{{ recovery_portal_unit }}.d/20-recovery.conf"
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Reload systemd after recovery changes
+
+- name: Install the recovery check unit
+  ansible.builtin.template:
+    src: recovery-check.service.j2
+    dest: /etc/systemd/system/homelab-recovery-check.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Reload systemd after recovery changes
+
+- name: Install the recovery check timer
+  ansible.builtin.template:
+    src: recovery-check.timer.j2
+    dest: /etc/systemd/system/homelab-recovery-check.timer
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Reload systemd after recovery changes
+
+- name: Enable and start the recovery check timer
+  ansible.builtin.systemd_service:
+    name: homelab-recovery-check.timer
+    enabled: true
+    state: started
+    daemon_reload: true

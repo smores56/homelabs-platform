@@ -1,0 +1,43 @@
+---
+# Drift report and inventory validation. This playbook refuses to run without
+# --check, so it can never change a host by accident:
+#
+#   ansible-playbook -i inventory/hosts.yml playbooks/check.yml --check --diff
+#
+# The first play validates the inventory; the imported site playbook then runs
+# every role in check mode and prints the diff it would apply.
+
+- name: Validate the inventory in check mode
+  hosts: all
+  gather_facts: true
+  tasks:
+    - name: Refuse a mutating run
+      ansible.builtin.assert:
+        that:
+          - ansible_check_mode
+        fail_msg: "check.yml is read-only; run it with --check --diff"
+
+    - name: Import the fail-closed preflight assertions
+      ansible.builtin.import_tasks: tasks/preflight.yml
+
+    - name: Report the host's provisioning state
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      loop:
+        - /var/lib/homelab/recovery/sentinel.json
+        - /usr/local/sbin/homelab-clean-room-restore
+        - /usr/local/sbin/homelab-recovery-check
+      register: check_provisioning_state
+      when: inventory_hostname in groups.get('data_plane_hosts', [])
+
+    - name: Print the provisioning state
+      ansible.builtin.debug:
+        msg: >-
+          {{ item.item }} {{ 'present' if item.stat.exists else 'absent' }}
+      loop: "{{ check_provisioning_state.results | default([]) }}"
+      loop_control:
+        label: "{{ item.item }}"
+      when: not item.skipped | default(false)
+
+- name: Apply every role in check mode
+  ansible.builtin.import_playbook: site.yml

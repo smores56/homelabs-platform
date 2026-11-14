@@ -1,0 +1,239 @@
+---
+# Provisioning defaults for the Ubuntu host platform. Everything here is safe
+# to commit: no secrets, no host-specific device paths, no mutable image tags.
+# Storage hosts override the empty device variables in their inventory, and
+# every playbook fails closed when a required value is still unset.
+
+# --------------------------------------------------------------------------
+# Base host
+# --------------------------------------------------------------------------
+homelab_timezone: Etc/UTC
+
+homelab_admin_group: sudo
+# Each entry: name, groups (optional), shell (optional), ssh_authorized_keys.
+# Public keys only. Example:
+# homelab_admin_users:
+#   - name: smores
+#     groups: [sudo]
+#     shell: /bin/bash
+#     ssh_authorized_keys:
+#       - ssh-ed25519 AAAA... operator@laptop
+homelab_admin_users: []
+
+homelab_base_packages:
+  - ca-certificates
+  - chrony
+  - cryptsetup
+  - curl
+  - gnupg
+  - htop
+  - jq
+  - lsof
+  - lvm2
+  - nvme-cli
+  - podman
+  - rsync
+  - smartmontools
+  - sudo
+  - tmux
+  - unattended-upgrades
+  - zfsutils-linux
+homelab_extra_packages: []
+
+homelab_sysctl:
+  fs.inotify.max_user_watches: 1048576
+  kernel.dmesg_restrict: 1
+  kernel.kptr_restrict: 2
+  kernel.unprivileged_bpf_disabled: 1
+  net.core.default_qdisc: fq
+  net.ipv4.conf.all.rp_filter: 1
+  net.ipv4.tcp_congestion_control: bbr
+  vm.max_map_count: 1048576
+  vm.swappiness: 10
+
+homelab_journald:
+  Compress: "yes"
+  MaxFileSec: 1day
+  RuntimeMaxUse: 256M
+  SystemKeepFree: 4G
+  SystemMaxUse: 1G
+
+homelab_ssh_port: 22
+homelab_ssh_allow_groups:
+  - sudo
+homelab_ssh_max_auth_tries: 3
+homelab_ssh_client_alive_interval: 300
+homelab_ssh_client_alive_count_max: 2
+
+homelab_unattended_upgrades_enabled: true
+homelab_unattended_origins:
+  - "${distro_id}:${distro_codename}-security"
+  - "${distro_id}ESMApps:${distro_codename}-apps-security"
+  - "${distro_id}ESM:${distro_codename}-infra-security"
+homelab_unattended_package_blacklist: []
+
+# The single gate for disk-destructive tasks. Playbooks require both
+# `--tags destructive` and `-e homelab_destructive_confirm=true`.
+homelab_destructive_confirm: false
+
+# --------------------------------------------------------------------------
+# LUKS2 volumes
+# --------------------------------------------------------------------------
+# Empty by default: the luks role refuses to run on a storage host until the
+# operator supplies the real by-id paths. Ansible never creates, reads, or
+# prints a passphrase. Each container carries the keyfile slot (root-only) plus
+# an offline passphrase slot that the operator adds once from Bitwarden. The
+# `noauto` crypttab option is derived from `auto: false`.
+luks_volumes: []
+luks_keyfile_dir: /etc/luks
+
+# --------------------------------------------------------------------------
+# ZFS and the recovery-group inventory
+# --------------------------------------------------------------------------
+zfs_pool: tank
+zfs_pool_luks_volume: luks-data
+zfs_pool_device: "/dev/mapper/{{ zfs_pool_luks_volume }}"
+zfs_ashift: 12
+zfs_compression: zstd
+zfs_atime: "off"
+
+# One parent dataset per recovery group. A new dataset without an entry here is
+# rejected at apply time (roles/storage) and by playbooks/check.yml.
+recovery_inventory:
+  books:
+    visibility: general
+    destination_tiers: [primary, secondary, r2]
+  memory_external:
+    visibility: personal
+    destination_tiers: [primary, secondary, r2]
+  memory_local:
+    visibility: personal
+    destination_tiers: [primary, secondary, r2]
+  music:
+    visibility: personal
+    destination_tiers: [primary, secondary, r2]
+  notes:
+    visibility: personal
+    destination_tiers: [primary, secondary, r2]
+  photos:
+    visibility: personal
+    destination_tiers: [primary, secondary, r2]
+  wallpapers:
+    visibility: personal
+    destination_tiers: [primary, secondary, r2]
+
+# Structural parents hold no data and are never mounted themselves.
+zfs_container_datasets:
+  - name: "{{ zfs_pool }}/memory"
+    mountpoint: /srv/memory
+    canmount: "off"
+
+zfs_datasets:
+  - name: "{{ zfs_pool }}/books"
+    mountpoint: /srv/books
+    recovery_group: books
+    recordsize: 128K
+    mode: "0755"
+  - name: "{{ zfs_pool }}/memory/external"
+    mountpoint: /srv/memory/external
+    recovery_group: memory_external
+    recordsize: 16K
+    mode: "0750"
+  - name: "{{ zfs_pool }}/memory/local"
+    mountpoint: /srv/memory/local
+    recovery_group: memory_local
+    recordsize: 16K
+    mode: "0750"
+  - name: "{{ zfs_pool }}/music"
+    mountpoint: /srv/music
+    recovery_group: music
+    recordsize: 1M
+    mode: "0755"
+  - name: "{{ zfs_pool }}/notes"
+    mountpoint: /srv/notes
+    recovery_group: notes
+    recordsize: 64K
+    mode: "0755"
+  - name: "{{ zfs_pool }}/photos"
+    mountpoint: /srv/photos
+    recovery_group: photos
+    recordsize: 1M
+    mode: "0755"
+  - name: "{{ zfs_pool }}/wallpapers"
+    mountpoint: /srv/wallpapers
+    recovery_group: wallpapers
+    recordsize: 1M
+    mode: "0755"
+
+# Restic repositories only. Mounted on demand by the backup units, never at
+# boot, and never executed from or written setuid.
+backup_mounts:
+  - path: /var/backups/primary
+    source: /dev/mapper/luks-backup-primary
+    fstype: ext4
+    options: "noauto,nodev,nosuid,noexec,x-systemd.requires=systemd-cryptsetup@luks-backup-primary.service"
+  - path: /var/backups/secondary
+    source: /dev/mapper/luks-backup-secondary
+    fstype: ext4
+    options: "noauto,nodev,nosuid,noexec,x-systemd.requires=systemd-cryptsetup@luks-backup-secondary.service"
+
+# --------------------------------------------------------------------------
+# k3s, gVisor, Kata, NVIDIA
+# --------------------------------------------------------------------------
+# Exact version, never a channel. Bump deliberately after the compatibility
+# matrix in docs/manual-steps.md is re-tested.
+k3s_version: v1.33.4+k3s1
+k3s_disable_components:
+  - traefik
+  - servicelb
+  - metrics-server
+k3s_write_kubeconfig_mode: "0600"
+k3s_token_file: /etc/rancher/k3s/node-token
+# Agents set k3s_server_url in their inventory entry.
+k3s_server_url: ""
+
+k3s_enable_gvisor_runtime: true
+k3s_enable_kata_runtime: true
+k3s_enable_nvidia_runtime: false
+
+gvisor_release: "20241021"
+
+kata_packages:
+  - kata-containers
+  - qemu-system-x86
+kata_package_version: "3.17.*"
+kata_runtime_class: kata-qemu
+
+nvidia_driver_package: nvidia-driver-570
+nvidia_driver_version: "570.*"
+nvidia_container_toolkit_package: nvidia-container-toolkit
+nvidia_container_toolkit_version: "1.17.*"
+
+# --------------------------------------------------------------------------
+# Data plane
+# --------------------------------------------------------------------------
+# Digest-pinned images. Empty means "not built yet"; every data-plane playbook
+# asserts on `@sha256:<64 hex>` before it writes a unit. Mirrored locally, and
+# podman runs with --pull=never so a tag can never silently replace a digest.
+data_plane_images:
+  backup_controller: ""
+  collector_relay: ""
+  event_service: ""
+  recovery_portal: ""
+  write_broker: ""
+
+data_plane_state_root: /var/lib/homelab
+data_plane_config_root: /etc/homelab/data-plane
+data_plane_secret_root: /etc/homelab/secrets
+data_plane_podman_root: /var/lib/homelab/podman
+data_plane_run_root: /run/homelab
+data_plane_state_uid: 65532
+data_plane_state_gid: 65532
+
+# --------------------------------------------------------------------------
+# Recovery
+# --------------------------------------------------------------------------
+# Set on the command line for recover.yml; never store a credential here.
+homelab_recovery_confirm: false
+homelab_recovery_generation_manifest: ""
+homelab_recovery_apply: false
