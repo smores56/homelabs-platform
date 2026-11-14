@@ -56,23 +56,29 @@ Every flag also has an environment variable: `DATA_PLANE_HOST`,
 
 ## Event service
 
-Auth: `X-Event-Token: sha256=<hex>` where the digest is
+Auth: `X-Event-Token: v1:<unix-timestamp>:<nonce>:<hex>` where the digest is
 
 ```
-HMAC-SHA256(secret, "<METHOD>\n<request-target>\n<sha256(body) hex>")
+HMAC-SHA256(secret, "<METHOD>\n<request-target>\n<sha256(body) hex>\n<timestamp>\n<nonce>")
 ```
 
 `<request-target>` is the path **including the query string**, exactly as sent.
-A missing token is 401; a wrong token is 403. `request_token()` in `common.py`
-is the reference signer.
+A token is accepted once inside a 60-second freshness window; its nonce is
+cached (bounded) so a replay is refused. A missing token is 401, a malformed,
+stale, replayed, or wrong token is 403. `request_token()` in `common.py` is the
+reference signer.
+
+`POST /events/ack` is authenticated with the **consumer's own** secret from the
+service's consumer-to-secret mapping, not the shared service secret: a caller
+cannot acknowledge another consumer.
 
 | Route | Body / query | Result |
 | --- | --- | --- |
-| `POST /events` | `{"kind","entity","payload"?,"event_id"?,"idempotency_key"?}` | 201 event |
+| `POST /events` | `{"kind","entity","payload"?,"idempotency_key"}` (event ids are server-assigned) | 201 event |
 | `GET /events` | `?after=&limit=` (limit <= 1000) | 200 `{"epoch","events"}` |
 | `GET /events/tail` | `?consumer=&timeout=` (timeout <= 30s) | 200 `{"event"}`, or 204 when the wait expires |
 | `POST /events/ack` | `{"consumer","position"}` | 200 `{"consumer","position","epoch"}` |
-| `GET /healthz` | none | 200 `{"status","service","epoch"}` |
+| `GET /healthz` | none | 200 `{"status","service"}` |
 
 The tail long-polls the durable cursor and does **not** acknowledge the event;
 the consumer acknowledges once it has handled it.
@@ -103,9 +109,13 @@ list), `idempotency_key`, and optional `field_diff` (`[[field, before, after]]`)
 ## Relay service
 
 Auth is the relay's own body HMAC: `X-Relay-Signature: sha256=<hex>` over
-`idempotency_key + "\0" + body`, plus `X-Idempotency-Key`. Replaying the same
-key and body returns the first result; reusing the key with another body is
-`409 idempotency_conflict`. A missing or wrong signature is 403.
+`source_id + "\0" + idempotency_key + "\0" + body`, plus `X-Idempotency-Key`.
+The relay is bound to one configured source id at startup; the HMAC covers it,
+the record's `source_id` must equal it, and rate-limit/cursor state is keyed by
+it — never by the body. Replaying the same key and body returns the first
+result; reusing the key with another body is `409 idempotency_conflict`. A
+missing or wrong signature is 403. The record schema rejects unknown fields
+(`additionalProperties: false`) and bodies nested deeper than 8 levels.
 
 The schema is a JSON file loaded at startup:
 

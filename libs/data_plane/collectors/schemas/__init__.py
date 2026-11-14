@@ -200,13 +200,24 @@ def schema_names() -> tuple[str, ...]:
 def load_descriptor(name: str) -> SchemaDescriptor:
     if name not in schema_names():
         raise ValidationError(f"unknown collector schema {name!r}")
-    path = SCHEMA_DIR / f"{name}.json"
+    return load_descriptor_from_file(SCHEMA_DIR / f"{name}.json", name=name)
+
+
+def load_descriptor_from_file(path: str | Path, *, name: str | None = None) -> SchemaDescriptor:
+    """Load one descriptor from a mounted JSON file.
+
+    A collector Deployment mounts its schema from a ConfigMap, so the runtime
+    loader must accept a path as well as a packaged name.
+    """
+
+    path = Path(path)
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as error:
         raise ValidationError(f"collector schema {path} is unreadable: {error}") from error
     if not isinstance(raw, dict):
         raise ValidationError(f"collector schema {path} must be a JSON object")
+    descriptor_name = path.stem if name is None else name
 
     properties = raw.get("properties")
     if not isinstance(properties, dict) or not properties:
@@ -229,15 +240,19 @@ def load_descriptor(name: str) -> SchemaDescriptor:
     if not isinstance(contract, dict):
         raise ValidationError(f"collector schema {path} has no x-contract block")
 
-    for name in ("revision_field", "tombstone_field"):
-        if not isinstance(contract.get(name), str) or not contract[name].strip():
-            raise ValidationError(f"collector schema {path} has no {name}")
-    for name in ("stable_id_fields", "attachment_hash_fields"):
-        values = contract.get(name)
+    for field_name in ("revision_field", "tombstone_field"):
+        if not isinstance(contract.get(field_name), str) or not contract[
+            field_name
+        ].strip():
+            raise ValidationError(f"collector schema {path} has no {field_name}")
+    for field_name in ("stable_id_fields", "attachment_hash_fields"):
+        values = contract.get(field_name)
         if not isinstance(values, list) or not all(
             isinstance(item, str) and item.strip() for item in values
         ):
-            raise ValidationError(f"collector schema {path} has invalid {name}")
+            raise ValidationError(
+                f"collector schema {path} has invalid {field_name}"
+            )
 
     limits = contract.get("fidelity_limits")
     if not isinstance(limits, list):
@@ -253,7 +268,7 @@ def load_descriptor(name: str) -> SchemaDescriptor:
         fidelity_limits.append(FidelityLimit(field=item["field"], reason=item["reason"]))
 
     descriptor = SchemaDescriptor(
-        name=name,
+        name=descriptor_name,
         title=str(raw.get("title", "")),
         source_id=source["const"],
         properties={str(key): value for key, value in properties.items()},

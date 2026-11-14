@@ -17,7 +17,9 @@ import argparse
 import json
 import logging
 import os
+import sqlite3
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import Any, Iterable, Mapping
@@ -25,6 +27,11 @@ from typing import Any, Iterable, Mapping
 from data_plane.backup.controller import FanoutController
 from data_plane.backup.destinations import InMemoryDestination
 from data_plane.backup.generations import read_manifest
+from data_plane.approval import (
+    MAX_APPROVAL_TTL_SECONDS,
+    SignedApprovalVerifier,
+    UsedApprovalStore,
+)
 from data_plane.broker import Broker
 from data_plane.broker_journal import BrokerJournal
 from data_plane.collectors.relay import Relay
@@ -47,13 +54,23 @@ from data_plane.model import (
 from . import (
     backup_service,
     broker_service,
+    collector_service,
     common,
+    confirmation_service,
     event_service,
     portal_service,
     relay_service,
 )
 
-SERVICES = ("event", "broker", "relay", "backup", "portal")
+SERVICES = (
+    "event",
+    "broker",
+    "relay",
+    "backup",
+    "portal",
+    "confirmation",
+    "collector",
+)
 
 
 class ConfigError(Exception):
@@ -85,6 +102,33 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--portal-dir", default=_env("DATA_PLANE_PORTAL_DIR")
     )
+    parser.add_argument(
+        "--operator-token-file",
+        default=_env("DATA_PLANE_OPERATOR_TOKEN_FILE")
+        or _env("DATA_PLANE_SECRET_FILE"),
+    )
+    parser.add_argument(
+        "--operator-key-file", default=_env("DATA_PLANE_OPERATOR_KEY_FILE")
+    )
+    parser.add_argument(
+        "--approval-ttl",
+        type=int,
+        default=int(
+            _env("APPROVAL_TTL_SECONDS", str(MAX_APPROVAL_TTL_SECONDS))
+            or str(MAX_APPROVAL_TTL_SECONDS)
+        ),
+    )
+    parser.add_argument(
+        "--approval-db", default=_env("DATA_PLANE_APPROVAL_DB")
+    )
+    parser.add_argument(
+        "--source", default=_env("DATA_PLANE_SOURCE") or _env("SOURCE_ID")
+    )
+    parser.add_argument(
+        "--proxy-url",
+        default=_env("DATA_PLANE_PROXY_URL") or _env("SOURCE_PROXY_URL"),
+    )
+    parser.add_argument("--relay-url", default=_env("DATA_PLANE_RELAY_URL"))
     parser.add_argument("--dataset", action="append", dest="datasets")
     parser.add_argument("--group", action="append", dest="groups")
     parser.add_argument("--destination", action="append", dest="destinations")
@@ -111,6 +155,17 @@ def _read_secret(path: str | None) -> bytes:
     if not secret:
         raise ConfigError(f"secret file {target} is empty")
     return secret
+
+
+def _read_required_file(path: str | None, name: str) -> bytes:
+    target = Path(_required(path, name))
+    try:
+        raw = target.read_bytes().rstrip(b"\r\n")
+    except OSError as exc:
+        raise ConfigError(f"cannot read {name} file {target}: {exc.strerror}") from exc
+    if not raw:
+        raise ConfigError(f"{name} file {target} is empty")
+    return raw
 
 
 def _comma_list(value: str | None) -> tuple[str, ...]:
@@ -303,9 +358,25 @@ def _run_broker(args: argparse.Namespace) -> int:
     journal = IntentStore(db)
     event_path = db if str(db) == ":memory:" else db.with_suffix(db.suffix + ".events")
     event_log = EventLog(event_path)
+    approval_store = None
+    approval_verifier = None
     try:
         issuer = IdentityIssuer(sources, secret)
         gate = ConfirmationGate()
+        if args.operator_key_file:
+            approval_key = _read_required_file(
+                args.operator_key_file,
+                "--operator-key-file (DATA_PLANE_OPERATOR_KEY_FILE)",
+            )
+            try:
+                approval_store = UsedApprovalStore(args.approval_db or db)
+            except (OSError, sqlite3.Error) as exc:
+                raise ConfigError(
+                    f"cannot open the approval store: {exc}"
+                ) from exc
+            approval_verifier = SignedApprovalVerifier(
+                approval_key, approval_store, max_ttl=args.approval_ttl
+            )
         adapters = {
             source_id: FixtureAdapter(contract)
             for source_id, contract in sources.items()
@@ -317,12 +388,15 @@ def _run_broker(args: argparse.Namespace) -> int:
             gate,
             BrokerJournal(journal),
             JournalRecorder(event_log),
+            approval_verifier=approval_verifier,
         )
         service = broker_service.BrokerService(broker, issuer)
         common.serve(
             "broker", common.handler_for(service), port=args.port, host=args.host
         )
     finally:
+        if approval_store is not None:
+            approval_store.close()
         event_log.close()
         journal.close()
     return 0
@@ -371,12 +445,107 @@ def _run_portal(args: argparse.Namespace) -> int:
     return 0
 
 
+def _run_confirmation(args: argparse.Namespace) -> int:
+    operator_token = _read_required_file(
+        args.operator_token_file,
+        "--operator-token-file (DATA_PLANE_OPERATOR_TOKEN_FILE)",
+    )
+    operator_key = _read_required_file(
+        args.operator_key_file, "--operator-key-file (DATA_PLANE_OPERATOR_KEY_FILE)"
+    )
+    sources = _load_catalog(args.catalog)
+    db = Path(_required(args.db, "--db (DATA_PLANE_DB)"))
+    try:
+        store = UsedApprovalStore(args.approval_db or db)
+    except (OSError, sqlite3.Error) as exc:
+        raise ConfigError(f"cannot open the approval store: {exc}") from exc
+    try:
+        service = confirmation_service.ConfirmationService(
+            operator_key,
+            operator_token,
+            sources,
+            store=store,
+            max_ttl=args.approval_ttl,
+        )
+        common.serve(
+            "confirmation",
+            common.handler_for(service),
+            port=args.port,
+            host=args.host,
+        )
+    finally:
+        store.close()
+    return 0
+
+
+def _run_collector(args: argparse.Namespace) -> int:
+    secret = _read_secret(args.secret_file)
+    source = _required(
+        args.source,
+        "--source (DATA_PLANE_SOURCE)",
+    )
+    proxy_url = _required(
+        args.proxy_url,
+        "--proxy-url (DATA_PLANE_PROXY_URL)",
+    )
+    relay_url = _required(args.relay_url, "--relay-url (DATA_PLANE_RELAY_URL)")
+    try:
+        descriptor = collector_service.load_descriptor_source(
+            args.schema or source, name=source
+        )
+    except (OSError, ValueError, DataPlaneError) as exc:
+        raise ConfigError(f"cannot load collector schema: {exc}") from exc
+
+    accepted: list[dict[str, Any]] = []
+    relay = Relay(
+        secret,
+        descriptor.relay_schema(),
+        accepted.append,
+        source_id=descriptor.source_id,
+    )
+    collector = collector_service.Collector(
+        source_id=source,
+        descriptor=descriptor,
+        proxy_url=proxy_url,
+        relay=relay,
+        fetcher=collector_service.fetch_json,
+        submitter=collector_service.HttpRelaySubmitter(relay_url),
+    )
+    server = common.build_server(
+        "collector",
+        common.handler_for(
+            relay_service.RelayService(relay, max_body_bytes=args.max_body_bytes)
+        ),
+        host=args.host,
+        port=args.port,
+    )
+    thread = threading.Thread(
+        target=server.serve_forever, kwargs={"poll_interval": 0.1}, daemon=True
+    )
+    thread.start()
+    try:
+        results = collector.collect()
+        logging.getLogger("data_plane.collector").info(
+            "collected %d records from %s", len(results), descriptor.source_id
+        )
+        thread.join()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(5)
+    return 0
+
+
 _RUNNERS = {
     "event": _run_event,
     "broker": _run_broker,
     "relay": _run_relay,
     "backup": _run_backup,
     "portal": _run_portal,
+    "confirmation": _run_confirmation,
+    "collector": _run_collector,
 }
 
 

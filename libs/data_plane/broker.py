@@ -21,8 +21,10 @@ import uuid
 from dataclasses import dataclass, replace
 from typing import Any, Callable, Mapping, Protocol, runtime_checkable
 
+from .approval import ApprovalClaims, ApprovalVerifier
 from .confirmation import ConfirmationGate, FieldChange, NormalizedOperation
 from .errors import (
+    ConfirmationError,
     ConfirmationRequired,
     ContractError,
     EpochError,
@@ -151,15 +153,18 @@ class Broker:
         sources: Mapping[str, SourceContract],
         adapters: Mapping[str, SourceAdapter],
         issuer: IdentityIssuer,
-        gate: ConfirmationGate,
+        gate: ConfirmationGate | None,
         intents: IntentStore,
         events: EffectRecorder,
         clock: Clock = time.time,
+        *,
+        approval_verifier: ApprovalVerifier | None = None,
     ) -> None:
         self._sources = dict(sources)
         self._adapters = dict(adapters)
         self._issuer = issuer
         self._gate = gate
+        self._approval_verifier = approval_verifier
         self._intents = intents
         self._events = events
         self._clock = clock
@@ -249,7 +254,7 @@ class Broker:
                     f"intent {intent.intent_id} is {intent.state.value}, not awaiting confirmation"
                 )
 
-            approval = self._gate.verify(token, operation)
+            approval = self._verify_approval(token, operation)
             self._remember_approval(intent.intent_id, approval, token)
             approved = self._transition(intent, IntentState.APPROVED)
             self._intents.save(approved)
@@ -259,7 +264,7 @@ class Broker:
         self,
         claims: WorkloadClaims | str,
         request: WriteRequest,
-        token: str | None = None,
+        approval_token: str | None = None,
     ) -> dict[str, Any]:
         """Apply a proposed write once, verifying confirmation and revision.
 
@@ -271,13 +276,13 @@ class Broker:
 
         self._authorize(claims, request.source_id, request.capability)
         with self._lock:
-            return self._apply_locked(claims, request, token)
+            return self._apply_locked(claims, request, approval_token)
 
     def _apply_locked(
         self,
         claims: WorkloadClaims | str,
         request: WriteRequest,
-        token: str | None,
+        approval_token: str | None,
     ) -> dict[str, Any]:
         contract = self._contract(request.source_id)
         intent = self._intent_for(request)
@@ -297,12 +302,12 @@ class Broker:
             )
 
         if intent.requires_confirmation and intent.state is not IntentState.APPROVED:
-            if token is None:
+            if approval_token is None:
                 raise ConfirmationRequired(
                     f"intent {intent.intent_id} requires human confirmation"
                 )
-            approval = self._gate.verify(token, operation)
-            self._remember_approval(intent.intent_id, approval, token)
+            approval = self._verify_approval(approval_token, operation)
+            self._remember_approval(intent.intent_id, approval, approval_token)
             intent = self._transition(intent, IntentState.APPROVED)
             self._intents.save(intent)
 
@@ -532,14 +537,37 @@ class Broker:
             record.get(change.field) == change.after for change in operation.field_diff
         )
 
+    def _verify_approval(
+        self, token: str, operation: NormalizedOperation
+    ) -> ApprovalClaims | Any:
+        """Prefer the signed cross-pod verifier over the in-process gate.
+
+        A broker configured with ``approval_verifier`` verifies the operator's
+        signature and consumes the nonce in the shared store. The gate remains
+        for single-process tests and local runs; it is never consulted when a
+        verifier is configured, so an in-process approval cannot stand in for
+        an operator signature.
+        """
+
+        if self._approval_verifier is not None:
+            return self._approval_verifier.verify(token, operation)
+        if self._gate is None:
+            raise ConfirmationError(
+                "no approval verifier or confirmation gate is configured"
+            )
+        return self._gate.verify(token, operation)
+
     def _remember_approval(self, intent_id: str, approval: Any, token: str) -> None:
         # Durable intent rows have no approval columns yet (intents.py is owned
         # by another lane); keep the audit record in memory for the effect event.
         if len(self._approvals) >= _MAX_REMEMBERED_APPROVALS:
             self._approvals.pop(next(iter(self._approvals)))
+        approved_at = getattr(approval, "approved_at", None)
+        if approved_at is None:
+            approved_at = getattr(approval, "issued_at", None)
         self._approvals[intent_id] = {
             "approved_by": approval.approved_by,
-            "approved_at": approval.approved_at,
+            "approved_at": approved_at,
             "token_sha256": hashlib.sha256(token.encode("utf-8")).hexdigest(),
         }
 
