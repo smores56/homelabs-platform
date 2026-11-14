@@ -82,6 +82,11 @@ spec:
                   # read probe first, so a wrong endpoint or key fails there
                   # instead of half-writing a new repository.
                   restic cat config >/dev/null 2>&1 || restic init
+                  # A run killed mid-`check` leaves an exclusive lock behind, and every
+                  # later prune and check then fails on it before doing any work.
+                  # `unlock` drops only locks past the stale threshold, so it cannot
+                  # disturb a live run.
+                  restic unlock
                   # Excluded because they change under the walk and have their
                   # own dump: the live Postgres cluster and Valkey's append-only
                   # file. The comments cannot sit inside the continuation below,
@@ -93,11 +98,11 @@ spec:
                     --exclude '/data/postgres' \
                     --exclude '/data/valkey' \
                     /data
-                  restic forget --host cluster-immich \
+                  restic forget --retry-lock 10m --host cluster-immich \
                     --keep-daily 14 --keep-weekly 8 --keep-monthly 12 --prune
                   # Metadata check: a repository that cannot be read is not a
                   # backup. The bounded data read is the weekly preflight's job.
-                  restic check
+                  restic check --retry-lock 10m
               env:
                 - name: RESTIC_REPOSITORY
                   value: s3:https://385f7d47e2e8438fbda5d6f76d760434.r2.cloudflarestorage.com/restic-backup/trees/immich

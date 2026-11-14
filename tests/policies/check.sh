@@ -628,6 +628,14 @@ while IFS=: read -r app deadline; do
   else
     bad "$app restic backup does not pass --json"
   fi
+  # A run killed during `check` leaves an exclusive lock and every later prune
+  # and check fails on it — that is what turned a finished 143 GiB upload into
+  # eight minutes of container restarts.
+  if grep -Fq 'restic unlock' "$cj"; then
+    ok "$app restic clears a stale lock before its exclusive steps"
+  else
+    bad "$app restic fails on a lock left by a killed run"
+  fi
   repository="s3:https://$account_id.r2.cloudflarestorage.com/restic-backup/trees/$app"
   eq "$(yq -r '.spec.jobTemplate.spec.template.spec.containers[0].env[] | select(.name == "RESTIC_REPOSITORY") | .value' "$cj")" \
     "$repository" "$app restic writes its own prefix of the shared bucket"
