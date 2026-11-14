@@ -1,0 +1,50 @@
+# The credential contract, recorded as data rather than prose. No value is here:
+# `ntfy-auth` is projected by ESO from `ntfy-auth-sops`, a SOPS+age Secret in
+# the notify namespace (created by hand, docs/manual-steps.md step 24), because
+# no age key exists in this repository.
+#
+# users  - `<name>:<bcrypt-hash>:<role>`, comma separated. `sam` is admin and
+#          needs no ACL entry (admin is rw on everything, and ntfy rejects an
+#          ACL entry for an admin). `agent`, `publisher` and `reader` are
+#          regular users and need a real bcrypt hash even though they are
+#          token-only, because an empty hash is rejected.
+# tokens - `<user>:<token>[:<label>]`, comma separated. A token must match
+#          ^tk_[-_A-Za-z0-9]{29}$ (32 characters, `tk_` prefix).
+# access - `<user>:<topic-pattern>:<access>`, comma separated. `agent:agent:wo`,
+#          `publisher:alerts:wo`, `reader:alerts:ro`, `reader:agent:ro`.
+#
+# ACL is per user and a token authenticates as its user, so a publisher token
+# cannot subscribe and a reader token cannot publish.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ntfy-auth-contract
+  labels:
+    app.kubernetes.io/name: ntfy
+    homelabs.dev/tier: notify
+data:
+  secretName: ntfy-auth
+  sopsSecretName: ntfy-auth-sops
+  keys: users,tokens,access
+  scope: >-
+    Four users and five tokens. `sam` (admin) is the web UI login and the
+    password is the only credential a human types. `agent` is the broker's
+    `notify-token` and may publish only to `agent`, so the agent cannot page.
+    `publisher` is the host's and the relay's token and may publish only to
+    `alerts`. `reader` is the phone's and the laptop's token and may only
+    subscribe. Revocation is per token, so a lost phone is one `ntfy token
+    remove` and a Secret edit.
+  source: >-
+    Generate each token with `ntfy token generate` (or `openssl rand -hex 16`
+    prefixed with `tk_`), hash each password with
+    `htpasswd -bnBC 10 "" <password> | tr -d ':\n'`, then create the Secret
+    with `kubectl -n notify create secret generic ntfy-auth-sops --from-file=...`.
+    Never commit a value.
+  rotate: >-
+    Replace the key in the Secret, wait for the ESO refresh (1h) or delete
+    `ntfy-auth` so it is recreated, then `kubectl -n notify rollout restart
+    deployment/ntfy`. Provisioned users are immutable through the CLI, so the
+    Secret is the only path.
+  verify: >-
+    kubectl -n notify get secret ntfy-auth -o jsonpath='{.data}' | jq 'keys'
+    # expect ["access","tokens","users"]
