@@ -647,8 +647,9 @@ already exists. Do it in this order and read the `state list` diff.
    ```
 
    The zone token is duplicated in nix-config only while host units read it
-   (`alerting.nix`, `kanbei-access.nix`); the table in `docs/secrets.md` names
-   what retires each copy. The script no longer reads nix-config at all.
+   (`kanbei-access.nix`; `alerting.nix` stopped reading it when the ntfy bus
+   replaced the mail sender, #649); the table in `docs/secrets.md` names what
+   retires each copy. The script no longer reads nix-config at all.
 
 2. Back up the local state and record what it holds, before touching anything:
 
