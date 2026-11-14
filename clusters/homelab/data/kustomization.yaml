@@ -7,5 +7,5 @@ kind: Kustomization
 resources:
   - immich
   - navidrome
-  - calibre
+  - opdshelf
   - graphiti

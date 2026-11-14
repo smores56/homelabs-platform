@@ -92,7 +92,7 @@ apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: restic-egress
-  namespace: calibre
+  namespace: opdshelf
   labels:
     app.kubernetes.io/name: restic
     app.kubernetes.io/part-of: homelabs

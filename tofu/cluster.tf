@@ -18,7 +18,7 @@ locals {
     agent-hooks = "http://webhook.webhook.svc.cluster.local:8080"
     memory      = "http://memory-mcp.graphiti.svc.cluster.local:8182"
     music       = "http://navidrome.navidrome.svc.cluster.local:4533"
-    opds        = "http://calibre.calibre.svc.cluster.local:8083"
+    opds        = "http://opdshelf.opdshelf.svc.cluster.local:8083"
     photos      = "http://immich-server.immich.svc.cluster.local:2283"
   }
 

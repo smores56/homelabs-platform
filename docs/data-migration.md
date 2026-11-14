@@ -12,7 +12,7 @@ host's restic job already looks. This document is the contract between
 | --- | --- | --- | --- | --- | --- |
 | `immich` | `/var/lib/data/immich` | `/mnt/data/immich` | `immich-data` | Immich server, machine-learning, Postgres, Valkey | `ghcr.io/immich-app/immich-{server,machine-learning}:v3.0.3`, `ghcr.io/immich-app/postgres:17-vectorchord0.4.3-pgvector0.8.1`, `valkey:9` |
 | `navidrome` | `/var/lib/data/music` | `/mnt/data/music` | `navidrome-data` | Navidrome | `deluan/navidrome:0.63.2` |
-| `calibre` | `/var/lib/data/books` | `/mnt/data/books` | `calibre-data` | OPDShelf | `koalilla/opds-server` |
+| `opdshelf` | `/var/lib/data/books` | `/mnt/data/books` | `opdshelf-data` | OPDShelf | `koalilla/opds-server` |
 | `graphiti` | `/var/lib/data/graphiti` | `/mnt/data/graphiti` | `graphiti-data` | Graphiti + FalkorDB | `zepai/knowledge-graph-mcp:1.1.3-graphiti-0.31.2-standalone`, `falkordb/falkordb-server:v4.22.2` |
 
 The guest mounts the share at `/mnt/data/<share>` with a uid translation
@@ -31,7 +31,7 @@ Inside `/data` the components use subdirectories, so a namespace owns one claim:
 | `immich` | `valkey/` | Valkey AOF |
 | `immich`, `graphiti` | `db-dumps/` | the nightly dumps below |
 | `navidrome` | `navidrome/` | Navidrome database and cache index |
-| `calibre` | `.opdshelf/` | OPDShelf metadata edits, custom covers and the thumbnail cache |
+| `opdshelf` | `.opdshelf/` | OPDShelf metadata edits, custom covers and the thumbnail cache |
 | `graphiti` | `falkordb/` | FalkorDB AOF and graph |
 
 ## Static volumes, no hostPath
@@ -41,7 +41,7 @@ Inside `/data` the components use subdirectories, so a namespace owns one claim:
 - `StorageClass data-local`: `provisioner: kubernetes.io/no-provisioner`,
   `reclaimPolicy: Retain`, `volumeBindingMode: WaitForFirstConsumer`. There is no
   dynamic provisioning, so a PVC can only bind to a PV declared here.
-- One `local` PV per share (`immich-share`, `navidrome-share`, `calibre-share`,
+- One `local` PV per share (`immich-share`, `navidrome-share`, `opdshelf-share`,
   `graphiti-share`) with `local.path: /mnt/data/<share>` — a path inside the
   guest, not a host path. The `no-host-access` admission policy forbids
   `hostPath` for the data tier, so this is the only way in.
@@ -115,7 +115,7 @@ claims in four namespaces. So the cluster side is **one job per tree**
 | --- | --- | --- | --- |
 | `restic-backup` / `restic-preflight` | `immich` | `immich-data`, read-only | `restic-backup/trees/immich` |
 | `restic-backup` / `restic-preflight` | `navidrome` | `navidrome-data`, read-only | `restic-backup/trees/navidrome` |
-| `restic-backup` / `restic-preflight` | `calibre` | `calibre-data`, read-only | `restic-backup/trees/calibre` |
+| `restic-backup` / `restic-preflight` | `opdshelf` | `opdshelf-data`, read-only | `restic-backup/trees/opdshelf` |
 | `restic-backup` / `restic-preflight` | `graphiti` | `graphiti-data`, read-only | `restic-backup/trees/graphiti` |
 
 Same bucket as the host, one repository per tree under `trees/<tree>`: object
@@ -208,15 +208,17 @@ be applied at any time (a missing share just leaves the pod unstarted).
    no ingest step, so a file that lands in the share is a book. Create the
    admin password contract first (`opdshelf-admin-password-sops`, step 12),
    then add `opds` to `local.cluster_ingress` and apply; `opds.sammohr.dev`
-   replaces `calibre.sammohr.dev`. Stop the host's content server
-   (`systemctl --user stop calibre-server`).
+   replaces `calibre.sammohr.dev`; that hostname and the namespace previously
+   carried that name and were renamed here. Stop the host's content server
+   (`systemctl --user stop calibre-server`; a name it previously shared with
+   the namespace).
    The agent write path is therefore a file, not an API: the wrapper drops the
    EPUB into a host-writable folder and nothing else has to happen, so
-   `calibredb`/`fanficfare-download` lose their content-server tail in
-   nix-config. Reader delivery stays a copy to the device (the X3's stock
-   firmware has no OPDS): `https://opds.sammohr.dev/` serves KOReader, the
-   Android app and any firmware that speaks OPDS, and the same tree can be
-   copied to the microSD over USB.
+   `calibredb` (the host CLI, which previously shared the name) and
+   `fanficfare-download` lose their content-server tail in nix-config. Reader
+   delivery stays a copy to the device (the X3's stock firmware has no OPDS):
+   `https://opds.sammohr.dev/` serves KOReader, the Android app and any firmware
+   that speaks OPDS, and the same tree can be copied to the microSD over USB.
 5. **Graphiti.** Copy, do not move, the graph while the host stack still runs:
    `sudo systemctl stop memory-graphiti-mcp memory-falkordb`,
    `sudo rsync -a /var/lib/memory/falkordb/ /var/lib/data/graphiti/falkordb/`,
@@ -309,7 +311,7 @@ Everything above that needs the cluster, the tunnel or a credential:
   the first `restic-preflight` run for each tree, which decides whether that
   tree may leave the host's restic timer;
 - Cloudflare-side tunnel/DNS/Access (T7);
-- agent-facing calibre repoint and the memory wrapper cutover;
+- agent-facing OPDShelf repoint and the memory wrapper cutover;
 - CNI enforcement of the NetworkPolicies (a bare API server only stores them).
 
 ## Verification on the live cluster

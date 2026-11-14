@@ -14,7 +14,7 @@
 # If that ever prints another name, the PVs stay Pending and nothing mounts
 # rather than binding to a wrong path.
 #
-# Immich's library, Navidrome's music tree, Calibre's library and Graphiti's
+# Immich's library, Navidrome's music tree, OPDShelf's books and Graphiti's
 # graph all live here unchanged; the host's restic job still walks
 # /var/lib/data, which is the same tree through the share.
 
@@ -81,7 +81,7 @@ spec:
 apiVersion: v1
 kind: PersistentVolume
 metadata:
-  name: calibre-share
+  name: opdshelf-share
   labels:
     app.kubernetes.io/part-of: homelabs
     homelabs.dev/tier: data
@@ -96,8 +96,8 @@ spec:
   # Pre-bound: this claim is the only one that may take this share, so a
   # mistyped claim name fails to bind instead of landing on a neighbour's data.
   claimRef:
-    namespace: calibre
-    name: calibre-data
+    namespace: opdshelf
+    name: opdshelf-data
   local:
     path: /mnt/data/books
   nodeAffinity:
@@ -174,7 +174,7 @@ spec:
               values: ["cluster"]
 ---
 # The books library is also the agent's write target (SDLC #635): the same
-# /mnt/data/books tree Calibre catalogs, bound twice on purpose. Calibre's claim
+# /mnt/data/books tree OPDShelf catalogs, bound twice on purpose. Its claim
 # is its own; this one belongs to tenant-apps so nanobot can write directly, as
 # uid 1000 (host `smores`), with no staging queue. Two claims on one node-local
 # path are fine because the single node is the only reader and the guest

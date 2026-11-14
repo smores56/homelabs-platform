@@ -199,7 +199,7 @@ for file in "$rbac_dir"/*.yaml; do
 done
 
 eq "$(jq -r 'select(.kind == "ServiceAccount") | .metadata.namespace + ":" + .metadata.name' "$rbac_json" | sort | paste -sd, -)" \
-  "calibre:data-workload,graphiti:data-workload,immich:data-workload,navidrome:data-workload,tenant-apps:agent-control,tenant-apps:nanobot,tenant-apps:tenant-apps-reconciler" \
+  "graphiti:data-workload,immich:data-workload,navidrome:data-workload,opdshelf:data-workload,tenant-apps:agent-control,tenant-apps:nanobot,tenant-apps:tenant-apps-reconciler" \
   "the RBAC stage holds the tenant identities, the agent-control SA and one data-workload account per data namespace"
 eq "$(jq -r 'select(.kind != "Role" and .kind != "RoleBinding" and .kind != "ServiceAccount") | .kind' "$rbac_json" | sort -u)" \
   "" "the RBAC stage holds only identities, Roles and RoleBindings"
@@ -247,7 +247,7 @@ eq "$(jq -r 'select(.kind == "Role" and .metadata.name == "tenant-apps-reconcile
 eq "$(jq -r 'select(.kind == "ServiceAccount" and .metadata.name == "nanobot") | [.metadata.namespace, (.automountServiceAccountToken // false)] | join(":")' "$rbac_json")" \
   "tenant-apps:false" "the nanobot ServiceAccount exists in tenant-apps with no token automount"
 eq "$(jq -r 'select(.kind == "Role" and .metadata.name == "agent-debug") | .metadata.namespace' "$rbac_json" | sort | paste -sd, -)" \
-  "calibre,graphiti,immich,navidrome" "agent-debug exists in every data namespace"
+  "graphiti,immich,navidrome,opdshelf" "agent-debug exists in every data namespace"
 eq "$(jq -r 'select(.kind == "Role" and .metadata.name == "agent-debug") | [.rules[] | (.resources | join("+")) + ":" + (.verbs | sort | join("+"))] | sort | join(",")' "$rbac_json" | sort -u)" \
   "events:get+list,pods:delete" "agent-debug grants exactly events get/list and pods delete"
 eq "$(jq -r 'select(.kind == "RoleBinding" and .metadata.name == "agent-debug") | .subjects | map("\(.kind):\(.namespace):\(.name)") | join(",")' "$rbac_json" | sort -u)" \
@@ -463,7 +463,7 @@ done
 
 # The data tier is one namespace per app, so the same two rules must exist in
 # every one of them: a missing default-deny is a wide-open app.
-data_namespaces=(immich navidrome calibre graphiti)
+data_namespaces=(immich navidrome graphiti opdshelf)
 for ns in tenant-apps broker ingress "${data_namespaces[@]}"; do
   types=$(jq -r --arg ns "$ns" 'select(.metadata.namespace == $ns and .metadata.name == "default-deny") | (.spec.policyTypes // []) | sort | join(",")' "$network_json")
   eq "$types" "Egress,Ingress" "default-deny covers both directions in $ns"
@@ -501,7 +501,7 @@ while IFS=: read -r app port; do
 done <<'APPS'
 immich:2283
 navidrome:4533
-calibre:8083
+opdshelf:8083
 APPS
 
 # Exact policy sets: an added flow has to be added to this assertion too, which
@@ -512,15 +512,15 @@ eq "$(jq -s -r 'map(select(.metadata.namespace == "immich") | .metadata.name) | 
 eq "$(jq -s -r 'map(select(.metadata.namespace == "navidrome") | .metadata.name) | sort | join(",")' "$network_json")" \
   "allow-dns-egress,allow-same-namespace,default-deny,navidrome-http-from-ingress,restic-egress" \
   "navidrome keeps only default-deny, DNS, same-namespace, ingress HTTP and restic egress"
-eq "$(jq -s -r 'map(select(.metadata.namespace == "calibre") | .metadata.name) | sort | join(",")' "$network_json")" \
-  "allow-dns-egress,allow-same-namespace,calibre-http-from-ingress,default-deny,restic-egress" \
-  "calibre keeps only default-deny, DNS, same-namespace, ingress HTTP and restic egress"
+eq "$(jq -s -r 'map(select(.metadata.namespace == "opdshelf") | .metadata.name) | sort | join(",")' "$network_json")" \
+  "allow-dns-egress,allow-same-namespace,default-deny,opdshelf-http-from-ingress,restic-egress" \
+  "opdshelf keeps only default-deny, DNS, same-namespace, ingress HTTP and restic egress"
 eq "$(jq -s -r 'map(select(.metadata.namespace == "graphiti") | .metadata.name) | sort | join(",")' "$network_json")" \
   "allow-dns-egress,allow-same-namespace,default-deny,graphiti-public-https,memory-mcp-from-broker,memory-mcp-from-ingress,memory-mcp-nodeport-from-host,restic-egress" \
   "graphiti keeps only default-deny, DNS, same-namespace, Neuralwatt HTTPS, the broker, tunnel and host-tap paths to the wrapper, and restic egress"
 
 eq "$(jq -r 'select(.metadata.namespace == "ingress" and .metadata.name == "egress-data-apps-only") | [.spec.egress[] | .to[0] | "\(.namespaceSelector.matchLabels["kubernetes.io/metadata.name"]):\(.podSelector.matchLabels["app.kubernetes.io/name"])"] | sort | join(",")' "$network_json")" \
-  "calibre:calibre,graphiti:memory-mcp,immich:immich,navidrome:navidrome" \
+  "graphiti:memory-mcp,immich:immich,navidrome:navidrome,opdshelf:opdshelf" \
   "the ingress namespace reaches the four published app Services and nothing else"
 eq "$(jq -r 'select(.metadata.namespace == "ingress" and .metadata.name == "egress-tunnel-edge") | [.spec.podSelector.matchLabels["app.kubernetes.io/name"], (.spec.egress[0].ports | map("\(.protocol):\(.port)") | sort | join(","))] | join(":")' "$network_json")" \
   "cloudflared:TCP:443,TCP:7844,UDP:7844" "cloudflared reaches the Cloudflare edge on 443 and the tunnel's 7844"
@@ -560,7 +560,7 @@ eq "$(yq -r '.spec.nodeAffinity.required.nodeSelectorTerms[0].matchExpressions[0
 eq "$(yq -r '.spec.nodeAffinity.required.nodeSelectorTerms[0].matchExpressions[0].values[0]' "$pvs" | grep -v '^---$' | sort -u)" \
   "cluster" "every PV is bound to the cluster node"
 eq "$(yq -r '.spec.claimRef | [.namespace, .name] | join(":")' "$pvs" | grep -v '^---$' | sort | paste -sd, -)" \
-  "calibre:calibre-data,graphiti:graphiti-data,immich:immich-data,navidrome:navidrome-data,observability:cluster-digest-data,tenant-apps:nanobot-books" \
+  "graphiti:graphiti-data,immich:immich-data,navidrome:navidrome-data,observability:cluster-digest-data,opdshelf:opdshelf-data,tenant-apps:nanobot-books" \
   "each PV is pre-bound to exactly one claim"
 if grep -rq 'hostPath' clusters/homelab/data clusters/homelab/ingress; then
   bad "a data or ingress manifest uses hostPath"
@@ -631,7 +631,7 @@ while IFS=: read -r app deadline; do
 done <<'TREES'
 immich:3600
 navidrome:1800
-calibre:1800
+opdshelf:1800
 graphiti:1800
 TREES
 if grep -ho 'docker.io/restic/restic:0.18.1@sha256:[0-9a-f]\{64\}' \
@@ -743,7 +743,7 @@ while IFS=: read -r ns host svc port; do
 done <<'INGRESS'
 immich:photos.sammohr.dev:immich-server:2283
 navidrome:music.sammohr.dev:navidrome:4533
-calibre:opds.sammohr.dev:calibre:8083
+opdshelf:opds.sammohr.dev:opdshelf:8083
 INGRESS
 
 # ---------------------------------------------------------- broker contract

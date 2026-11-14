@@ -101,10 +101,10 @@ metadata:
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: calibre
+  name: opdshelf
   labels:
     app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tenant: calibre
+    homelabs.dev/tenant: opdshelf
     homelabs.dev/tier: data
     homelabs.dev/managed-by: platform
     # OPDShelf is a plain non-root binary (uid 1000, dropped capabilities,

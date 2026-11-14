@@ -1,4 +1,4 @@
-# The credential and restore contract for the calibre tree, recorded as data
+# The credential and restore contract for the opdshelf tree, recorded as data
 # rather than prose. No value is here: `restic-credentials` is projected by ESO
 # from `restic-backup-sops`, a SOPS+age Secret in this namespace (created by
 # hand, docs/manual-steps.md step 28), because no age key exists in this
@@ -13,20 +13,20 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: restic-contract
-  namespace: calibre
+  namespace: opdshelf
   labels:
     app.kubernetes.io/name: restic
     app.kubernetes.io/part-of: homelabs
     homelabs.dev/tier: data
 data:
-  tree: calibre
-  repository: s3:https://385f7d47e2e8438fbda5d6f76d760434.r2.cloudflarestorage.com/restic-backup/trees/calibre
+  tree: opdshelf
+  repository: s3:https://385f7d47e2e8438fbda5d6f76d760434.r2.cloudflarestorage.com/restic-backup/trees/opdshelf
   secretName: restic-credentials
   sopsSecretName: restic-backup-sops
   keys: AWS_ACCESS_KEY_ID,AWS_SECRET_ACCESS_KEY,RESTIC_PASSWORD
   source: >-
-    restic-backup-calibre.yaml, SOPS-encrypted with the operator's key, then
-    `kubectl -n calibre create secret generic restic-backup-sops
+    restic-backup-opdshelf.yaml, SOPS-encrypted with the operator's key, then
+    `kubectl -n opdshelf create secret generic restic-backup-sops
     --from-file=r2-access-key-id --from-file=r2-secret-access-key
     --from-file=restic-password`. r2-access-key-id and r2-secret-access-key are
     the host's existing R2 key (nix-config sops placeholder r2-access-key-id);
@@ -35,7 +35,7 @@ data:
     restic-backup 0 5 * * * Europe/Berlin (dumps done 03:15, host walk 03:30-03:45);
     restic-preflight 0 12 * * 0 Europe/Berlin.
   scope: >-
-    The `restic-backup` bucket, path `trees/calibre`. Object storage has no
+    The `restic-backup` bucket, path `trees/opdshelf`. Object storage has no
     per-prefix permission, so this is a naming contract, not a grant: the key can
     read every tree. The host's repository at the bucket root is never touched.
   contains: >-
@@ -47,10 +47,10 @@ data:
     neither touches the cluster nor the share):
 
       export AWS_ACCESS_KEY_ID=... AWS_SECRET_ACCESS_KEY=... AWS_DEFAULT_REGION=auto
-      export RESTIC_REPOSITORY=s3:https://385f7d47e2e8438fbda5d6f76d760434.r2.cloudflarestorage.com/restic-backup/trees/calibre
-      export RESTIC_PASSWORD="$(kubectl -n calibre get secret restic-credentials -o jsonpath='{.data.RESTIC_PASSWORD}' | base64 -d)"
-      restic snapshots --host cluster-calibre
-      restic restore latest --host cluster-calibre --target /tmp/drill --include /data
+      export RESTIC_REPOSITORY=s3:https://385f7d47e2e8438fbda5d6f76d760434.r2.cloudflarestorage.com/restic-backup/trees/opdshelf
+      export RESTIC_PASSWORD="$(kubectl -n opdshelf get secret restic-credentials -o jsonpath='{.data.RESTIC_PASSWORD}' | base64 -d)"
+      restic snapshots --host cluster-opdshelf
+      restic restore latest --host cluster-opdshelf --target /tmp/drill --include /data
       find /tmp/drill/data -name '*.epub' | head
       rm -rf /tmp/drill
 
@@ -62,4 +62,4 @@ data:
     nix-config's restic-backups-r2.service until the drill above passes; it keeps
     the local LUKS repository in all cases.
   verify: >-
-    restic snapshots --host cluster-calibre --json | jq -r '.[-1].time'
+    restic snapshots --host cluster-opdshelf --json | jq -r '.[-1].time'

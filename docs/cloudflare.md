@@ -10,7 +10,7 @@ Kanbei-critical (`docs/kanbei-critical.md`): the token can repoint a route.
 | Tunnel | Runs where | Serves | Owner |
 | --- | --- | --- | --- |
 | Host tunnel | `cloudflared` on `smortress`, declared from `nix-config` `modules/nixos/web-proxy.nix` | `ssh.sammohr.dev`, `kanbei.sammohr.dev`, and `agent`/`memory` until their cluster cutovers | human, nix-config |
-| Cluster tunnel | `cloudflared` in the `ingress` namespace (`clusters/homelab/ingress/`) | the apps whose origin moved into the cluster (`immich`, `music`, `calibre`, later `memory`, `agent`) | this repository |
+| Cluster tunnel | `cloudflared` in the `ingress` namespace (`clusters/homelab/ingress/`) | the apps whose origin moved into the cluster (`immich`, `music`, `opdshelf`, later `memory`, `agent`) | this repository |
 
 `tofu/` owns DNS, Access and notifications for **both** tunnels; it does not
 create or manage either connector. The host tunnel's DNS is the wildcard record

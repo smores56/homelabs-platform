@@ -101,7 +101,7 @@ apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: allow-same-namespace
-  namespace: calibre
+  namespace: opdshelf
   labels:
     app.kubernetes.io/part-of: homelabs
     homelabs.dev/tier: data
@@ -118,15 +118,15 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: calibre-http-from-ingress
-  namespace: calibre
+  name: opdshelf-http-from-ingress
+  namespace: opdshelf
   labels:
     app.kubernetes.io/part-of: homelabs
     homelabs.dev/tier: data
 spec:
   podSelector:
     matchLabels:
-      app.kubernetes.io/name: calibre
+      app.kubernetes.io/name: opdshelf
   policyTypes: ["Ingress"]
   ingress:
     - from:
@@ -321,10 +321,10 @@ spec:
     - to:
         - namespaceSelector:
             matchLabels:
-              kubernetes.io/metadata.name: calibre
+              kubernetes.io/metadata.name: opdshelf
           podSelector:
             matchLabels:
-              app.kubernetes.io/name: calibre
+              app.kubernetes.io/name: opdshelf
       ports:
         - protocol: TCP
           port: 8083

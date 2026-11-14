@@ -1,4 +1,4 @@
-# The permission gate for the calibre tree (SDLC #619). Weekly, and before a
+# The permission gate for the opdshelf tree (SDLC #619). Weekly, and before a
 # tree may lose its host-side backup owner: it proves, in the same pod shape as
 # `restic-backup`, that (a) every file the backup would walk is readable as uid
 # 1000, (b) the bucket prefix accepts a write (it creates the repository on the
@@ -11,7 +11,7 @@ apiVersion: batch/v1
 kind: CronJob
 metadata:
   name: restic-preflight
-  namespace: calibre
+  namespace: opdshelf
   labels:
     app.kubernetes.io/name: restic
     app.kubernetes.io/part-of: homelabs
@@ -75,7 +75,7 @@ spec:
                   done </tmp/files | head -20)
                   if [ -n "$unreadable" ]; then
                     printf 'unreadable as uid 1000:\n%s\n' "$unreadable"
-                    printf 'the calibre tree stays on the host restic timer until this list is empty\n'
+                    printf 'the opdshelf tree stays on the host restic timer until this list is empty\n'
                     exit 1
                   fi
                   printf 'read access: %s files readable as uid 1000\n' "$(wc -l </tmp/files)"
@@ -94,10 +94,10 @@ spec:
                   else
                     restic check --read-data-subset=100M
                   fi
-                  printf 'preflight: calibre is ready to be the backup owner\n'
+                  printf 'preflight: opdshelf is ready to be the backup owner\n'
               env:
                 - name: RESTIC_REPOSITORY
-                  value: s3:https://385f7d47e2e8438fbda5d6f76d760434.r2.cloudflarestorage.com/restic-backup/trees/calibre
+                  value: s3:https://385f7d47e2e8438fbda5d6f76d760434.r2.cloudflarestorage.com/restic-backup/trees/opdshelf
                 - name: AWS_DEFAULT_REGION
                   value: auto
                 - name: AWS_ACCESS_KEY_ID
@@ -145,7 +145,7 @@ spec:
           volumes:
             - name: data
               persistentVolumeClaim:
-                claimName: calibre-data
+                claimName: opdshelf-data
                 readOnly: true
             - name: contract
               configMap:

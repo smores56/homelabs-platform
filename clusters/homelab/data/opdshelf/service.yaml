@@ -1,16 +1,16 @@
 apiVersion: v1
 kind: Service
 metadata:
-  name: calibre
-  namespace: calibre
+  name: opdshelf
+  namespace: opdshelf
   labels:
-    app.kubernetes.io/name: calibre
+    app.kubernetes.io/name: opdshelf
     app.kubernetes.io/part-of: homelabs
     homelabs.dev/tier: data
 spec:
   type: ClusterIP
   selector:
-    app.kubernetes.io/name: calibre
+    app.kubernetes.io/name: opdshelf
   ports:
     - name: http
       port: 8083

@@ -1,5 +1,5 @@
-# Tree backup for the calibre share (SDLC #619): restic in the app's own
-# namespace, writing to the `restic-backup` bucket under `trees/calibre`.
+# Tree backup for the opdshelf share (SDLC #619): restic in the app's own
+# namespace, writing to the `restic-backup` bucket under `trees/opdshelf`.
 #
 # One job per tree, because a pod may mount only its own namespace's claim
 # (`data-pvc-scope`) and the four pre-bound PVs cannot be mounted together. It
@@ -22,7 +22,7 @@ apiVersion: batch/v1
 kind: CronJob
 metadata:
   name: restic-backup
-  namespace: calibre
+  namespace: opdshelf
   labels:
     app.kubernetes.io/name: restic
     app.kubernetes.io/part-of: homelabs
@@ -71,16 +71,16 @@ spec:
                   # read probe first, so a wrong endpoint or key fails there
                   # instead of half-writing a new repository.
                   restic cat config >/dev/null 2>&1 || restic init
-                  restic backup --host cluster-calibre --tag cluster \
+                  restic backup --host cluster-opdshelf --tag cluster \
                     /data
-                  restic forget --host cluster-calibre \
+                  restic forget --host cluster-opdshelf \
                     --keep-daily 14 --keep-weekly 8 --keep-monthly 12 --prune
                   # Metadata check: a repository that cannot be read is not a
                   # backup. The bounded data read is the weekly preflight's job.
                   restic check
               env:
                 - name: RESTIC_REPOSITORY
-                  value: s3:https://385f7d47e2e8438fbda5d6f76d760434.r2.cloudflarestorage.com/restic-backup/trees/calibre
+                  value: s3:https://385f7d47e2e8438fbda5d6f76d760434.r2.cloudflarestorage.com/restic-backup/trees/opdshelf
                 - name: AWS_DEFAULT_REGION
                   value: auto
                 - name: AWS_ACCESS_KEY_ID
@@ -126,7 +126,7 @@ spec:
           volumes:
             - name: data
               persistentVolumeClaim:
-                claimName: calibre-data
+                claimName: opdshelf-data
                 readOnly: true
             - name: tmp
               emptyDir:

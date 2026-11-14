@@ -13,10 +13,10 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: calibre
-  namespace: calibre
+  name: opdshelf
+  namespace: opdshelf
   labels:
-    app.kubernetes.io/name: calibre
+    app.kubernetes.io/name: opdshelf
     app.kubernetes.io/part-of: homelabs
     homelabs.dev/tier: data
 spec:
@@ -26,11 +26,11 @@ spec:
     type: Recreate
   selector:
     matchLabels:
-      app.kubernetes.io/name: calibre
+      app.kubernetes.io/name: opdshelf
   template:
     metadata:
       labels:
-        app.kubernetes.io/name: calibre
+        app.kubernetes.io/name: opdshelf
         app.kubernetes.io/part-of: homelabs
         homelabs.dev/tier: data
         homelabs.dev/managed-by: platform
@@ -97,6 +97,6 @@ spec:
       volumes:
         - name: data
           persistentVolumeClaim:
-            claimName: calibre-data
+            claimName: opdshelf-data
         - name: tmp
           emptyDir: {}

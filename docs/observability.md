@@ -176,7 +176,7 @@ names:
 
 | Role | Rules | Bound by | Effect |
 | --- | --- | --- | --- |
-| `observability-status-exporter` | `get/list/watch pods`, `get/list deployments,statefulsets` | one RoleBinding per data namespace (`immich`, `navidrome`, `calibre`, `graphiti`; `DATA_NAMESPACES` in the Deployment names the same four) | pods only in those four namespaces |
+| `observability-status-exporter` | `get/list/watch pods`, `get/list deployments,statefulsets` | one RoleBinding per data namespace (`immich`, `navidrome`, `opdshelf`, `graphiti`; `DATA_NAMESPACES` in the Deployment names the same four) | pods only in those four namespaces |
 | `observability-status-exporter-nodes` | `get/list nodes` | one ClusterRoleBinding (`status-exporter/clusterrolebinding.yaml`) | node status cluster-wide; `nodes` is cluster-scoped, so only a ClusterRoleBinding can grant it |
 
 Binding the workload role cluster-wide would hand `pods` out everywhere, which is

@@ -1,4 +1,4 @@
-# Stage 6. The data apps themselves: Immich, Navidrome, Calibre and Graphiti,
+# Stage 6. The data apps themselves: Immich, Navidrome, OPDShelf and Graphiti,
 # one directory each, each bound to its own namespace and share. Admission,
 # network and storage must exist first; the Secrets the pods reference come from
 # ESO (`platform-secrets-eso`, suspended until the operator is installed), so a

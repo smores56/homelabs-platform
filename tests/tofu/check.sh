@@ -164,7 +164,7 @@ if grep -qF 'state rm cloudflare_zero_trust_access_application.nanobot' docs/man
 else
   bad "manual steps remove the nanobot state entry first"
 fi
-if grep -qF 'kanbei.sammohr.dev' docs/manual-steps.md && grep -qF 'Service Auth' docs/manual-steps.md; then
+if grep -qF 'kanbei.sammohr.dev' docs/manual-steps.md && grep -qiF 'service auth' docs/manual-steps.md; then
   ok "manual steps cover the Kanbei route and service token"
 else
   bad "manual steps cover the Kanbei route and service token"
@@ -215,7 +215,7 @@ fi
 for pair in 'agent=http://nanobot.tenant-apps.svc.cluster.local:80' \
             'photos=http://immich-server.immich.svc.cluster.local:2283' \
             'music=http://navidrome.navidrome.svc.cluster.local:4533' \
-            'opds=http://calibre.calibre.svc.cluster.local:8083' \
+            'opds=http://opdshelf.opdshelf.svc.cluster.local:8083' \
             'memory=http://memory-mcp.graphiti.svc.cluster.local:8182'; do
   name=${pair%%=*}
   url=${pair#*=}
