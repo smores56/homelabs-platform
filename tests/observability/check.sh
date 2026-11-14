@@ -302,6 +302,15 @@ eq "$(yq -r '.spec.target.name' clusters/homelab/observability/eso/notify-relay.
   "notifyrelay-token" "the relay token is projected under the name the relay mounts"
 eq "$(yq -r '.spec.data[0].remoteRef.key' clusters/homelab/observability/eso/notify-relay.yaml)" \
   "notify-relay-sops" "the relay token comes from the SOPS Secret, never a manifest"
+# Flux's own failures are the gap this closes (SDLC #649): without a Provider and
+# an Alert, a reconcile that has been failing for a week notifies nobody.
+flux_alerts=clusters/homelab/flux-system/alerts/provider.yaml
+eq "$(yq -r 'select(.kind == "Provider") | [.spec.type, .spec.address] | join(":")' "$flux_alerts")" \
+  "generic:http://notifyrelay.observability.svc.cluster.local:8080/flux" \
+  "the Flux provider posts to the relay's /flux route"
+eq "$(yq -r 'select(.kind == "Alert") | [.spec.providerRef.name, .spec.eventSeverity, ([.spec.eventSources[].kind] | sort | join(","))] | join(":")' "$flux_alerts" | grep -v '^$')" \
+  "notifyrelay:error:GitRepository,HelmRelease,Kustomization" \
+  "the Flux alert sends error events for every reconcile source"
 if jq -e '.[] | select(.spec.egress[]? | (.to // []) == [])' "$network_json" >/dev/null; then
   bad "an observability egress rule omits its destination"
 else
