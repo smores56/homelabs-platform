@@ -34,6 +34,7 @@ tests/backup/check.sh                   # mirror script args/URLs, no network
 tests/observability/check.sh            # vector unit tests, config drift, exporter tests
 tests/digest/check.sh                   # digest builder fixtures, egress and reverse-path contract
 nix run nixpkgs#yamllint -- .
+nix run nixpkgs#actionlint -- .              # a workflow GitHub cannot parse never runs, silently
 nix run nixpkgs#shellcheck -- scripts/*.sh tests/policies/*.sh tests/tofu/*.sh \
   tests/access/*.sh tests/backup/*.sh tests/digest/*.sh tests/observability/*.sh \
   tests/agent-control/*.sh clusters/homelab/flux-system/bootstrap.sh \
