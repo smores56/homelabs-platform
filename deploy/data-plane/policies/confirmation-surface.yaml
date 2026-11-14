@@ -1,0 +1,44 @@
+# The confirmation card is reachable from the cluster tunnel (the human reader)
+# and from the broker (which accepts the approval). No agent namespace reaches
+# it. Approvals are persisted through the event service; the surface has no
+# other egress and no source credentials.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-confirmation-surface
+  namespace: data-plane
+  labels:
+    app.kubernetes.io/name: confirmation-surface
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: platform
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: confirmation-surface
+  policyTypes: ["Ingress", "Egress"]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: cloudflared
+      ports:
+        - protocol: TCP
+          port: 8080
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: event-service
+      ports:
+        - protocol: TCP
+          port: 8080
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: write-broker
+      ports:
+        - protocol: TCP
+          port: 8080

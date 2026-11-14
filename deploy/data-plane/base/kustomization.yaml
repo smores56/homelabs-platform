@@ -1,0 +1,53 @@
+# The data-plane base. Self-contained: `kustomize build base` renders everything
+# including the sibling config/ and policies/ kustomizations. Nothing here is
+# wired into clusters/**, so scripts/kustomize-build-all.sh and Flux are
+# unaffected until an operator adds a Kustomization for this path.
+#
+# file-memory is deliberately absent. It is a library
+# (libs/data_plane/memory/file_memory.py), not a service: it has no listener and
+# no durable state of its own. Each profile's memory tree is a dataset under
+# /srv/memory/{local,external} mounted by that profile's workload and backed up
+# as the memory-local / memory-external recovery groups. Running it as a service
+# would create a second writer and violate the single-writer rule.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: data-plane
+
+resources:
+  - namespace.yaml
+  - serviceaccounts.yaml
+  - rbac.yaml
+  - ../config
+  - ../policies
+  - event-service/deployment.yaml
+  - event-service/service.yaml
+  - event-service/pvc.yaml
+  - write-broker/deployment.yaml
+  - write-broker/service.yaml
+  - confirmation-surface/deployment.yaml
+  - confirmation-surface/service.yaml
+  - backup-controller/deployment.yaml
+  - backup-controller/pvc.yaml
+  - collector-relay/brave.yaml
+  - collector-relay/finance.yaml
+  - collector-relay/tuta.yaml
+  - collector-relay/immich.yaml
+  - recovery-portal/deployment.yaml
+  - recovery-portal/service.yaml
+
+# The only image reference allowed. The registry path is the documented
+# placeholder, not a live repository; the all-zero digest is the pre-publish
+# placeholder used by the webhook image. Replace the digest with the publish
+# workflow's @sha256 value before an apply. Never a tag, never `latest`.
+#
+# One image serves every subcommand (`event`, `broker`, `relay`, `backup`, and
+# the forward contracts `collector`, `confirmation`, `portal`); each Deployment
+# selects its service with `args`.
+#
+# tests/check.sh asserts this block and ../../images.yaml agree and that the
+# rendered output contains only digest-pinned references.
+images:
+  - name: data-plane
+    newName: ghcr.io/smores56/homelabs-platform/data-plane
+    digest: sha256:0000000000000000000000000000000000000000000000000000000000000000

@@ -1,0 +1,26 @@
+# The backup controller reads group-dirty events and writes one generation at a
+# time. No ingress is allowed: nothing calls it, it polls or long-polls the
+# event service. Its token talks to the API server, which is a host process in
+# k3s, so the API rule is separate and IP-based (kubernetes-api-egress.yaml).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-backup-controller
+  namespace: data-plane
+  labels:
+    app.kubernetes.io/name: backup-controller
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: platform
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: backup-controller
+  policyTypes: ["Egress"]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: event-service
+      ports:
+        - protocol: TCP
+          port: 8080

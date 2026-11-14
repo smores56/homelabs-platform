@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: recovery-portal
+  namespace: data-plane
+  labels:
+    app.kubernetes.io/name: recovery-portal
+    app.kubernetes.io/component: recovery
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: platform
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: recovery-portal
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+      protocol: TCP

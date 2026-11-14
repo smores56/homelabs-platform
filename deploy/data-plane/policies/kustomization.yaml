@@ -1,0 +1,24 @@
+# Every policy in this directory is namespaced to data-plane and selects by
+# label, so renaming a pod label breaks an allow rather than silently widening
+# one.
+#
+# Image digest policy (no manifest here can enforce it at admission, so it is a
+# review rule enforced by tests/check.sh):
+#   - the one workload image is pinned as `ghcr.io/smores56/homelabs-platform/
+#     data-plane@sha256:<64 hex>` by base/kustomization.yaml;
+#   - a tag, a floating reference and `latest` are rejected before merge;
+#   - the all-zero digest is the only placeholder and must be replaced from the
+#     publish workflow's digest output before an apply;
+#   - the same digest is recorded in images.yaml and the README table.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - default-deny.yaml
+  - dns-egress.yaml
+  - event-service.yaml
+  - write-broker.yaml
+  - confirmation-surface.yaml
+  - backup-controller.yaml
+  - collector-relay.yaml
+  - recovery-portal.yaml
+  - kubernetes-api-egress.yaml

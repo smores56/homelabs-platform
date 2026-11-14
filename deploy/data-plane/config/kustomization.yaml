@@ -1,0 +1,33 @@
+# Config is data, not code: the source catalog, recovery-group inventory and one
+# relay schema per external source. Names are stable (no hash suffix) because
+# they are referenced by exact name from Deployments; a change to a file changes
+# the ConfigMap in place, so a rollout picks it up.
+#
+# Nothing here names a real person, account, host or message. The catalog rows
+# are synthetic examples that exercise every field the contract model validates.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+generatorOptions:
+  disableNameSuffixHash: true
+  labels:
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: platform
+
+configMapGenerator:
+  - name: data-plane-config
+    files:
+      - source-catalog.json
+      - recovery-groups.json
+  - name: collector-brave-schema
+    files:
+      - schema.json=sources/brave.json
+  - name: collector-finance-schema
+    files:
+      - schema.json=sources/finance.json
+  - name: collector-tuta-schema
+    files:
+      - schema.json=sources/tuta.json
+  - name: collector-immich-schema
+    files:
+      - schema.json=sources/immich.json

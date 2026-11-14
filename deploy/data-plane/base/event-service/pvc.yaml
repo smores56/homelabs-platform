@@ -1,0 +1,22 @@
+# The SQLite file needs a durable claim, not scratch space. `local-path` is a
+# StorageClass name, never a hostPath: the provisioner owns the node-side path,
+# and PSA restricted forbids a hostPath volume in this namespace.
+#
+# One claim, one writer, `ReadWriteOnce`. A rebuilt log gets a new epoch inside
+# the same file; the claim is what makes that possible across pod restarts.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: event-service-data
+  namespace: data-plane
+  labels:
+    app.kubernetes.io/name: event-service
+    app.kubernetes.io/component: event-log
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: platform
+spec:
+  accessModes: ["ReadWriteOnce"]
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 2Gi

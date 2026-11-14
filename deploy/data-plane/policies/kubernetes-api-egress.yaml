@@ -1,0 +1,35 @@
+# The API server is not a pod (kube-apiserver runs on the host in k3s), so a
+# podSelector cannot express it. A client dials the `kubernetes` ClusterIP on
+# 443, but the packet the policy sees is the post-DNAT node address on 6443, and
+# kube-router matches destination range and port independently: the same rule
+# names both ranges on both ports.
+#
+# Only backup-controller is selected. No other pod in this tree has a token, so
+# giving any other pod API egress would be a capability with no user. The
+# ranges are the cluster's service range and the guest tap address, copied from
+# the platform's reviewed policy; a different cluster needs its own ranges.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-kubernetes-api-egress
+  namespace: data-plane
+  labels:
+    app.kubernetes.io/name: backup-controller
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: platform
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: backup-controller
+  policyTypes: ["Egress"]
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 10.43.0.0/16
+        - ipBlock:
+            cidr: 10.77.1.0/30
+      ports:
+        - protocol: TCP
+          port: 443
+        - protocol: TCP
+          port: 6443

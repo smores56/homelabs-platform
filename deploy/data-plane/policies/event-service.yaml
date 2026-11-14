@@ -1,0 +1,40 @@
+# The event log has exactly three writers and one reader:
+#   write-broker         appends intents and effects
+#   confirmation-surface records approvals and uses the same epoch
+#   backup-controller    reads cursors and appends group-dirty events
+#   every collector-relay appends its source's observations
+# Nothing else in the cluster may open the log, and the log itself opens no
+# egress: SQLite is local to its claim.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-event-service
+  namespace: data-plane
+  labels:
+    app.kubernetes.io/name: event-service
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: platform
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: event-service
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: write-broker
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: confirmation-surface
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: backup-controller
+        - podSelector:
+            matchExpressions:
+              - key: app.kubernetes.io/component
+                operator: In
+                values: ["collector-relay"]
+      ports:
+        - protocol: TCP
+          port: 8080

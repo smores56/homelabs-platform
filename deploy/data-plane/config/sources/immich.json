@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "immich.photos collector record",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["source_id", "tombstone", "asset_id", "revision", "captured_at", "checksum"],
+  "properties": {
+    "source_id": {"const": "immich.photos"},
+    "tombstone": {"type": "boolean"},
+    "asset_id": {"type": "string", "minLength": 1},
+    "revision": {"type": "string", "minLength": 1},
+    "captured_at": {"type": "string", "format": "date-time"},
+    "checksum": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "album_ids": {"type": "array", "items": {"type": "string", "minLength": 1}, "default": []}
+  },
+  "x-relay": {
+    "max_bytes": 262144,
+    "max_records_per_second": 20
+  }
+}

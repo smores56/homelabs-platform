@@ -1,0 +1,118 @@
+{
+  "schema_version": 1,
+  "sources": [
+    {
+      "source_id": "brave.history",
+      "visibility": "personal",
+      "version": 1,
+      "epoch": 1,
+      "recovery_group": "browsing",
+      "stable_id_fields": ["entry_id"],
+      "revision_field": "revision",
+      "tombstone_field": "tombstone",
+      "attachment_hash_fields": [],
+      "capabilities": [
+        {"name": "read", "effect": "read", "requires_confirmation": false, "reversible": true},
+        {"name": "search", "effect": "search", "requires_confirmation": false, "reversible": true}
+      ],
+      "authority": [
+        {"field": "url", "authority": "provider", "exportable": true, "note": "Normalized URL only."},
+        {"field": "title", "authority": "provider", "exportable": true, "note": ""}
+      ],
+      "fidelity_limits": [
+        {"field": "server_side_favicons", "reason": "Derived assets are rebuilt from the URL."}
+      ],
+      "notes": "Sample contract with synthetic rows; no personal history is present."
+    },
+    {
+      "source_id": "finance.ledger",
+      "visibility": "personal",
+      "version": 1,
+      "epoch": 1,
+      "recovery_group": "finance",
+      "stable_id_fields": ["transaction_id"],
+      "revision_field": "revision",
+      "tombstone_field": "tombstone",
+      "attachment_hash_fields": [],
+      "capabilities": [
+        {"name": "read", "effect": "read", "requires_confirmation": false, "reversible": true},
+        {"name": "search", "effect": "search", "requires_confirmation": false, "reversible": true}
+      ],
+      "authority": [
+        {"field": "amount_minor", "authority": "provider", "exportable": true, "note": "Minor units, never a float."},
+        {"field": "currency", "authority": "provider", "exportable": true, "note": "ISO 4217."}
+      ],
+      "fidelity_limits": [
+        {"field": "statement_pdf", "reason": "The provider keeps the original statement; only normalized rows are replicated."}
+      ],
+      "notes": "Sample contract with synthetic amounts and account aliases."
+    },
+    {
+      "source_id": "tuta.mail",
+      "visibility": "personal",
+      "version": 1,
+      "epoch": 1,
+      "recovery_group": "mail",
+      "stable_id_fields": ["message_id"],
+      "revision_field": "revision",
+      "tombstone_field": "tombstone",
+      "attachment_hash_fields": ["attachment_sha256"],
+      "capabilities": [
+        {"name": "read", "effect": "read", "requires_confirmation": false, "reversible": true},
+        {"name": "search", "effect": "search", "requires_confirmation": false, "reversible": true}
+      ],
+      "authority": [
+        {"field": "subject", "authority": "provider", "exportable": true, "note": "RFC 5322 decoded subject."},
+        {"field": "attachment_sha256", "authority": "provider", "exportable": true, "note": "Hash of the preserved MIME part."}
+      ],
+      "fidelity_limits": [
+        {"field": "provider_labels", "reason": "Opaque provider-side labels survive only as revisions, not as named folders."}
+      ],
+      "notes": "Sample contract; message bodies and addresses are placeholders."
+    },
+    {
+      "source_id": "immich.photos",
+      "visibility": "personal",
+      "version": 1,
+      "epoch": 1,
+      "recovery_group": "photos",
+      "stable_id_fields": ["asset_id"],
+      "revision_field": "revision",
+      "tombstone_field": "tombstone",
+      "attachment_hash_fields": ["checksum"],
+      "capabilities": [
+        {"name": "read", "effect": "read", "requires_confirmation": false, "reversible": true},
+        {"name": "search", "effect": "search", "requires_confirmation": false, "reversible": true}
+      ],
+      "authority": [
+        {"field": "checksum", "authority": "provider", "exportable": true, "note": "SHA-256 of the original asset."},
+        {"field": "album_ids", "authority": "application", "exportable": true, "note": "Application metadata; a portable export captures it."}
+      ],
+      "fidelity_limits": [
+        {"field": "face_embeddings", "reason": "Derived model output is not exported; it is rebuilt by the indexer."}
+      ],
+      "notes": "Sample contract; asset identifiers and checksums are synthetic."
+    },
+    {
+      "source_id": "books.opds",
+      "visibility": "general",
+      "version": 1,
+      "epoch": 1,
+      "recovery_group": "books",
+      "stable_id_fields": ["book_id"],
+      "revision_field": "revision",
+      "tombstone_field": "tombstone",
+      "attachment_hash_fields": ["epub_sha256"],
+      "capabilities": [
+        {"name": "read", "effect": "read", "requires_confirmation": false, "reversible": true},
+        {"name": "search", "effect": "search", "requires_confirmation": false, "reversible": true}
+      ],
+      "authority": [
+        {"field": "epub_sha256", "authority": "portable_file", "exportable": true, "note": "The EPUB file is authoritative."},
+        {"field": "title", "authority": "portable_file", "exportable": true, "note": "Embedded OPF metadata."}
+      ],
+      "fidelity_limits": [],
+      "notes": "General source: both profiles may read it; writes require the write broker."
+    }
+  ]
+}

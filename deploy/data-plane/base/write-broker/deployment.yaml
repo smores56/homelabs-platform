@@ -1,0 +1,125 @@
+# The only path from a signed workload identity to a source adapter. `Recreate`
+# because one broker process owns the adapter side of a write: two pods applying
+# the same intent concurrently would rely on provider idempotency alone. Intents
+# and effects are recorded by the event service, so the pod itself is stateless.
+#
+# The broker has no public egress: NetworkPolicy admits DNS and the event
+# service, and nothing else. Agent traffic and the confirmation surface reach it
+# as ingress only.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: write-broker
+  namespace: data-plane
+  labels:
+    app.kubernetes.io/name: write-broker
+    app.kubernetes.io/component: write-path
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: platform
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: write-broker
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: write-broker
+        app.kubernetes.io/component: write-path
+        app.kubernetes.io/part-of: homelabs
+        homelabs.dev/tier: platform
+        homelabs.dev/managed-by: platform
+    spec:
+      serviceAccountName: write-broker
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: write-broker
+          # Placeholder: pinned by digest in base/kustomization.yaml.
+          image: data-plane
+          args: ["broker"]
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          env:
+            - name: DATA_PLANE_HOST
+              value: 0.0.0.0
+            - name: DATA_PLANE_PORT
+              value: "8080"
+            - name: DATA_PLANE_CATALOG
+              value: /etc/data-plane/source-catalog.json
+            - name: EVENT_SERVICE_URL
+              value: http://event-service.data-plane.svc.cluster.local:8080
+            # The file is a contract, not a value: the profile overlay mounts
+            # the operator-provisioned Secret at this path. No Secret is created
+            # by this tree.
+            - name: DATA_PLANE_SECRET_FILE
+              value: /run/secrets/broker/identity
+            - name: DATA_PLANE_MAX_BODY_BYTES
+              value: "1048576"
+            - name: PYTHONDONTWRITEBYTECODE
+              value: "1"
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: TMPDIR
+              value: /tmp
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 2
+            failureThreshold: 30
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 30
+            timeoutSeconds: 2
+            failureThreshold: 3
+          volumeMounts:
+            - name: config
+              mountPath: /etc/data-plane
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: config
+          configMap:
+            name: data-plane-config
+            defaultMode: 288
+        - name: tmp
+          emptyDir:
+            sizeLimit: 16Mi
+      terminationGracePeriodSeconds: 20

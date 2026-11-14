@@ -1,0 +1,23 @@
+# Required-image contract for the data plane. This is the human- and CI-readable
+# copy of the kustomize `images` transformer. kustomize v5 has no include
+# mechanism for an images-only fragment, so base/kustomization.yaml carries the
+# transformer that actually rewrites the Deployments; tests/check.sh fails the
+# build if the two blocks drift.
+#
+# Placeholder registry: ghcr.io/smores56/homelabs-platform/data-plane
+# Digest variable: DATA_PLANE_IMAGE_DIGEST. Replace the all-zero `sha256:`
+# value with the digest the publish workflow prints, before any apply. No tag
+# is valid, and `latest` never is. The digest is the identity; the registry
+# path is stable.
+#
+# One image serves every service; the Deployment's `args` selects the
+# subcommand (`event`, `broker`, `relay`, `backup`, and the forward contracts
+# `collector`, `confirmation`, `portal`).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+images:
+  # DATA_PLANE_IMAGE_DIGEST
+  - name: data-plane
+    newName: ghcr.io/smores56/homelabs-platform/data-plane
+    digest: sha256:0000000000000000000000000000000000000000000000000000000000000000

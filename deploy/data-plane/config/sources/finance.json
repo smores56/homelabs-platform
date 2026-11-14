@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "finance.ledger collector record",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["source_id", "tombstone", "transaction_id", "revision", "account_alias", "amount_minor", "currency", "posted_at"],
+  "properties": {
+    "source_id": {"const": "finance.ledger"},
+    "tombstone": {"type": "boolean"},
+    "transaction_id": {"type": "string", "minLength": 1},
+    "revision": {"type": "string", "minLength": 1},
+    "account_alias": {"type": "string", "minLength": 1},
+    "amount_minor": {"type": "integer"},
+    "currency": {"type": "string", "pattern": "^[A-Z]{3}$"},
+    "posted_at": {"type": "string", "format": "date-time"}
+  },
+  "x-relay": {
+    "max_bytes": 131072,
+    "max_records_per_second": 5
+  }
+}

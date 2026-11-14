@@ -152,6 +152,17 @@ class PlanSelectionTests(unittest.TestCase):
         with self.assertRaises(RestoreError):
             plan(Selector(manifest("photos-1", group_id="photos")))
 
+    def test_every_manifest_must_be_a_generation_manifest(self) -> None:
+        with self.assertRaises(ValidationError):
+            plan_restore(
+                [{"generation_id": "gen-1"}],
+                group_id=GROUP,
+                required_destinations=REQUIRED_DESTINATIONS,
+                required_datasets=REQUIRED_DATASETS,
+                schema_version=SCHEMA_VERSION,
+                destination=DESTINATION,
+            )
+
     def test_missing_required_destination_is_rejected(self) -> None:
         with self.assertRaises(RestoreError):
             plan(Selector(manifest(destinations=(ref("nvme"),))))

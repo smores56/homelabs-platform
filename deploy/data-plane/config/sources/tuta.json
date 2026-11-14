@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "tuta.mail collector record",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["source_id", "tombstone", "message_id", "revision", "subject", "received_at"],
+  "properties": {
+    "source_id": {"const": "tuta.mail"},
+    "tombstone": {"type": "boolean"},
+    "message_id": {"type": "string", "minLength": 1},
+    "revision": {"type": "string", "minLength": 1},
+    "subject": {"type": "string"},
+    "received_at": {"type": "string", "format": "date-time"},
+    "attachment_sha256": {"type": "array", "items": {"type": "string", "pattern": "^[0-9a-f]{64}$"}, "default": []}
+  },
+  "x-relay": {
+    "max_bytes": 1048576,
+    "max_records_per_second": 5
+  }
+}

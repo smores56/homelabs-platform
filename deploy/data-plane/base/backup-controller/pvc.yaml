@@ -1,0 +1,24 @@
+# Generation manifests, not the backup payload. Restic repositories live on the
+# NVMe/HDD/R2 destinations owned by the host; this claim holds the immutable
+# generation manifests, the snapshot-request queue and the verified/complete
+# pointer that the recovery portal reads.
+#
+# `local-path` is a StorageClass name, never a hostPath. `ReadWriteOnce` is
+# honest: the controller writes and the portal reads, and both pods must be
+# co-located on the node that owns the claim. The portal mounts it read-only.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: backup-manifests
+  namespace: data-plane
+  labels:
+    app.kubernetes.io/name: backup-controller
+    app.kubernetes.io/component: backup-manifests
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: platform
+spec:
+  accessModes: ["ReadWriteOnce"]
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 5Gi

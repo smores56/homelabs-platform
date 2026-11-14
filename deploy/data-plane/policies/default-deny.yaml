@@ -1,0 +1,13 @@
+# Fail closed. Every allow in this directory is explicit and names a pod and a
+# port; a missing flow denies rather than inherits a default.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+  namespace: data-plane
+  labels:
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: platform
+spec:
+  podSelector: {}
+  policyTypes: ["Ingress", "Egress"]

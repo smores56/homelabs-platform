@@ -1,0 +1,121 @@
+# The single writer for the profile's SQLite event log. One replica and
+# `Recreate`: SQLite permits one writer per file, and a rolling update would
+# briefly run two pods against the same WAL. The claim is on its own PVC, so a
+# rescheduled pod reopens the same log and epoch.
+#
+# The pod calls no Kubernetes API. The image contract is a stdlib HTTP service
+# on :8080 with GET /healthz; the SQLite path and listen address are env, never
+# baked into an image.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: event-service
+  namespace: data-plane
+  labels:
+    app.kubernetes.io/name: event-service
+    app.kubernetes.io/component: event-log
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: platform
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: event-service
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: event-service
+        app.kubernetes.io/component: event-log
+        app.kubernetes.io/part-of: homelabs
+        homelabs.dev/tier: platform
+        homelabs.dev/managed-by: platform
+    spec:
+      serviceAccountName: event-service
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: event-service
+          # Placeholder: pinned by digest in base/kustomization.yaml.
+          image: data-plane
+          args: ["event"]
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          env:
+            - name: DATA_PLANE_HOST
+              value: 0.0.0.0
+            - name: DATA_PLANE_PORT
+              value: "8080"
+            - name: DATA_PLANE_DB
+              value: /var/lib/data-plane/events.sqlite3
+            # The file is a contract, not a value: the profile overlay mounts
+            # the operator-provisioned Secret at this path. No Secret is created
+            # by this tree.
+            - name: DATA_PLANE_SECRET_FILE
+              value: /run/secrets/event/token
+            - name: DATA_PLANE_MAX_BODY_BYTES
+              value: "1048576"
+            - name: PYTHONDONTWRITEBYTECODE
+              value: "1"
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: TMPDIR
+              value: /tmp
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 2
+            failureThreshold: 30
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 30
+            timeoutSeconds: 2
+            failureThreshold: 3
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/data-plane
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: event-service-data
+        - name: tmp
+          emptyDir:
+            sizeLimit: 16Mi
+      terminationGracePeriodSeconds: 20

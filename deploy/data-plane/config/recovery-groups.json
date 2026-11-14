@@ -1,0 +1,112 @@
+{
+  "schema_version": 1,
+  "groups": [
+    {
+      "group_id": "browsing",
+      "pool": "tank",
+      "parent_dataset": "tank/browsing",
+      "members": [
+        {"name": "catalog", "dataset": "tank/browsing/catalog", "mount": "/var/lib/data-plane/browsing", "writer": "collector-brave"},
+        {"name": "raw", "dataset": "tank/browsing/raw", "mount": "/srv/browsing", "writer": "collector-brave"}
+      ],
+      "required_config": ["/etc/data-plane/recovery-groups.json"],
+      "destination_tiers": ["nvme", "hdd", "r2"],
+      "notes": "Sample inventory; dataset names describe the intended ZFS layout."
+    },
+    {
+      "group_id": "finance",
+      "pool": "tank",
+      "parent_dataset": "tank/finance",
+      "members": [
+        {"name": "ledger", "dataset": "tank/finance/ledger", "mount": "/srv/finance", "writer": "collector-finance"},
+        {"name": "hledger", "dataset": "tank/finance/hledger", "mount": "/var/lib/data-plane/hledger", "writer": "finance-projection"}
+      ],
+      "required_config": ["/etc/data-plane/recovery-groups.json"],
+      "destination_tiers": ["nvme", "hdd", "r2"],
+      "notes": "Sample inventory; hledger projections are rebuildable but share the recovery point."
+    },
+    {
+      "group_id": "mail",
+      "pool": "tank",
+      "parent_dataset": "tank/mail",
+      "members": [
+        {"name": "messages", "dataset": "tank/mail/messages", "mount": "/srv/mail", "writer": "collector-tuta"},
+        {"name": "index", "dataset": "tank/mail/index", "mount": "/var/cache/mail-index", "writer": "mail-indexer"}
+      ],
+      "required_config": ["/etc/data-plane/recovery-groups.json"],
+      "destination_tiers": ["nvme", "hdd", "r2"],
+      "notes": "Sample inventory; full MIME and attachments are preserved."
+    },
+    {
+      "group_id": "photos",
+      "pool": "tank",
+      "parent_dataset": "tank/photos",
+      "members": [
+        {"name": "originals", "dataset": "tank/photos/originals", "mount": "/srv/photos", "writer": "immich-server"},
+        {"name": "exports", "dataset": "tank/photos/exports", "mount": "/var/lib/data-plane/immich-exports", "writer": "collector-immich"}
+      ],
+      "required_config": ["/etc/data-plane/recovery-groups.json"],
+      "destination_tiers": ["nvme", "hdd", "r2", "r2-archive"],
+      "notes": "Sample inventory; the application creates album and people metadata, so exports share the snapshot."
+    },
+    {
+      "group_id": "books",
+      "pool": "tank",
+      "parent_dataset": "tank/books",
+      "members": [
+        {"name": "library", "dataset": "tank/books/library", "mount": "/srv/books", "writer": "opdshelf"},
+        {"name": "catalog", "dataset": "tank/books/catalog", "mount": "/var/cache/books-index", "writer": "books-indexer"}
+      ],
+      "required_config": ["/etc/data-plane/recovery-groups.json"],
+      "destination_tiers": ["nvme", "hdd", "r2"],
+      "notes": "Sample inventory; portable EPUB files remain authoritative."
+    },
+    {
+      "group_id": "notes",
+      "pool": "tank",
+      "parent_dataset": "tank/notes",
+      "members": [
+        {"name": "vault", "dataset": "tank/notes/vault", "mount": "/srv/notes", "writer": "syncthing"},
+        {"name": "tasks-index", "dataset": "tank/notes/tasks-index", "mount": "/var/cache/notes-index", "writer": "notes-indexer"}
+      ],
+      "required_config": ["/etc/data-plane/recovery-groups.json"],
+      "destination_tiers": ["nvme", "hdd", "r2"],
+      "notes": "Sample inventory; Syncthing conflicts are preserved inside the vault."
+    },
+    {
+      "group_id": "memory-local",
+      "pool": "tank",
+      "parent_dataset": "tank/memory/local",
+      "members": [
+        {"name": "records", "dataset": "tank/memory/local/records", "mount": "/srv/memory/local", "writer": "local-profile"}
+      ],
+      "required_config": ["/etc/data-plane/recovery-groups.json"],
+      "destination_tiers": ["nvme", "hdd", "r2"],
+      "notes": "Sample inventory; the local profile alone mounts this tree."
+    },
+    {
+      "group_id": "memory-external",
+      "pool": "tank",
+      "parent_dataset": "tank/memory/external",
+      "members": [
+        {"name": "records", "dataset": "tank/memory/external/records", "mount": "/srv/memory/external", "writer": "external-profile"}
+      ],
+      "required_config": ["/etc/data-plane/recovery-groups.json"],
+      "destination_tiers": ["nvme", "hdd", "r2"],
+      "notes": "Sample inventory; separate dataset, key and backup domain from local memory."
+    },
+    {
+      "group_id": "data-plane-state",
+      "pool": "tank",
+      "parent_dataset": "tank/data-plane",
+      "members": [
+        {"name": "event-log", "dataset": "tank/data-plane/event-log", "mount": "/var/lib/data-plane/events", "writer": "event-service"},
+        {"name": "manifests", "dataset": "tank/data-plane/manifests", "mount": "/var/lib/data-plane/manifests", "writer": "backup-controller"},
+        {"name": "intents", "dataset": "tank/data-plane/intents", "mount": "/var/lib/data-plane/intents", "writer": "write-broker"}
+      ],
+      "required_config": ["/etc/data-plane/recovery-groups.json"],
+      "destination_tiers": ["nvme", "hdd", "r2"],
+      "notes": "Sample inventory; the event log and generation manifests are required control state."
+    }
+  ]
+}

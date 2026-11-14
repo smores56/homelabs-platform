@@ -1,0 +1,118 @@
+# The human confirmation boundary is its own Deployment, not a sidecar in the
+# broker pod. A sidecar would share the broker's process namespace, its token
+# absence is not the same as its code being unreachable, and a broker compromise
+# could signal it directly. A separate pod with a separate identity and its own
+# NetworkPolicy keeps the approval path outside agent control.
+#
+# It reads the source catalog to render a normalized operation and writes
+# approvals through the event service. It never talks to a source adapter.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: confirmation-surface
+  namespace: data-plane
+  labels:
+    app.kubernetes.io/name: confirmation-surface
+    app.kubernetes.io/component: confirmation
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: platform
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: confirmation-surface
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: confirmation-surface
+        app.kubernetes.io/component: confirmation
+        app.kubernetes.io/part-of: homelabs
+        homelabs.dev/tier: platform
+        homelabs.dev/managed-by: platform
+    spec:
+      serviceAccountName: confirmation-surface
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: confirmation-surface
+          # Placeholder: pinned by digest in base/kustomization.yaml.
+          image: data-plane
+          args: ["confirmation"]
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          env:
+            - name: DATA_PLANE_HOST
+              value: 0.0.0.0
+            - name: DATA_PLANE_PORT
+              value: "8080"
+            - name: DATA_PLANE_CATALOG
+              value: /etc/data-plane/source-catalog.json
+            # Contract only: the profile overlay mounts the operator-provisioned
+            # Secret here. No Secret is created by this tree.
+            - name: DATA_PLANE_SECRET_FILE
+              value: /run/secrets/confirmation/token
+            - name: EVENT_SERVICE_URL
+              value: http://event-service.data-plane.svc.cluster.local:8080
+            - name: APPROVAL_TTL_SECONDS
+              value: "900"
+            - name: PYTHONDONTWRITEBYTECODE
+              value: "1"
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: TMPDIR
+              value: /tmp
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 25m
+              memory: 32Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 30
+            timeoutSeconds: 2
+            failureThreshold: 3
+          volumeMounts:
+            - name: config
+              mountPath: /etc/data-plane
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: config
+          configMap:
+            name: data-plane-config
+            defaultMode: 288
+        - name: tmp
+          emptyDir:
+            sizeLimit: 8Mi
+      terminationGracePeriodSeconds: 15

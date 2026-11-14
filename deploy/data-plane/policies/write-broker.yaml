@@ -1,0 +1,52 @@
+# Agent reach into the write path. Ingress is limited to the two agent
+# identities that exist today: `tenant-apps/nanobot` (the local profile) and
+# `broker/broker` (the credential-injecting egress broker). The confirmation
+# surface is the only other caller: it submits an operator approval to the
+# broker, never a source operation.
+#
+# Egress is the event service only: the broker's intent, effect and event
+# journals are the event service's authoritative SQLite log. There is no
+# ipBlock, no 443 rule and no catch-all: this broker never reaches the public
+# internet itself.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-write-broker
+  namespace: data-plane
+  labels:
+    app.kubernetes.io/name: write-broker
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: platform
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: write-broker
+  policyTypes: ["Ingress", "Egress"]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              homelabs.dev/tier: tenant
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: nanobot
+        - namespaceSelector:
+            matchLabels:
+              homelabs.dev/tier: broker
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: broker
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: confirmation-surface
+      ports:
+        - protocol: TCP
+          port: 8080
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: event-service
+      ports:
+        - protocol: TCP
+          port: 8080

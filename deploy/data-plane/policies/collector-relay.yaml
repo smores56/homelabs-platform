@@ -1,0 +1,140 @@
+# One policy per external source. Each collector can reach exactly three
+# destinations: DNS, the event service, and its own source proxy. The proxy is
+# the only public path; the collector itself has no ipBlock and no 443 rule.
+#
+# The proxy objects are operator-provided in the existing `broker` tier, one
+# Deployment/Service per source (`<source>-proxy`, port 8443). Until a proxy
+# exists, the egress rule matches nothing and the collector fails closed rather
+# than reaching the provider directly. Ingress is absent: no Service fronts the
+# pod-local relay, so default-deny covers it.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-collector-brave
+  namespace: data-plane
+  labels:
+    app.kubernetes.io/name: collector-brave
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: platform
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: collector-brave
+  policyTypes: ["Egress"]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: event-service
+      ports:
+        - protocol: TCP
+          port: 8080
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: broker
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: brave-proxy
+      ports:
+        - protocol: TCP
+          port: 8443
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-collector-finance
+  namespace: data-plane
+  labels:
+    app.kubernetes.io/name: collector-finance
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: platform
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: collector-finance
+  policyTypes: ["Egress"]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: event-service
+      ports:
+        - protocol: TCP
+          port: 8080
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: broker
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: finance-proxy
+      ports:
+        - protocol: TCP
+          port: 8443
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-collector-tuta
+  namespace: data-plane
+  labels:
+    app.kubernetes.io/name: collector-tuta
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: platform
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: collector-tuta
+  policyTypes: ["Egress"]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: event-service
+      ports:
+        - protocol: TCP
+          port: 8080
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: broker
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: tuta-proxy
+      ports:
+        - protocol: TCP
+          port: 8443
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-collector-immich
+  namespace: data-plane
+  labels:
+    app.kubernetes.io/name: collector-immich
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: platform
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: collector-immich
+  policyTypes: ["Egress"]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: event-service
+      ports:
+        - protocol: TCP
+          port: 8080
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: broker
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: immich-proxy
+      ports:
+        - protocol: TCP
+          port: 8443

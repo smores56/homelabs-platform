@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "brave.history collector record",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["source_id", "tombstone", "entry_id", "revision", "url", "visited_at"],
+  "properties": {
+    "source_id": {"const": "brave.history"},
+    "tombstone": {"type": "boolean"},
+    "entry_id": {"type": "string", "minLength": 1},
+    "revision": {"type": "string", "minLength": 1},
+    "url": {"type": "string", "format": "uri"},
+    "title": {"type": "string"},
+    "visited_at": {"type": "string", "format": "date-time"}
+  },
+  "x-relay": {
+    "max_bytes": 262144,
+    "max_records_per_second": 10
+  }
+}

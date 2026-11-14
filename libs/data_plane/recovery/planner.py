@@ -14,6 +14,10 @@ the default ``/var/lib/<name>/<name>.db``, its live path (``sqlite_paths``).
 The online SQLite checkpoint is expected next to the live database as
 ``<path>.checkpoint`` inside the generation's dataset.
 
+Checksummed files (``content_hashes``) restore from the generation snapshot
+between the datasets and SQLite. Planning is offline, so it validates every
+declared hash structurally and leaves re-hashing to the backend after restore.
+
 Planning is always a dry run: nothing here touches a destination. Execution is
 a separate, explicitly applied call through a caller-supplied backend.
 """

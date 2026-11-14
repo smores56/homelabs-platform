@@ -1,0 +1,21 @@
+# Local overlay for a kind/minikube cluster. The base targets k3s, where
+# `local-path` is the default provisioner. kind and minikube ship `standard`
+# instead; the only change here is the claim's StorageClass, because everything
+# else (PSA, NetworkPolicy, resources) is identical and should be exercised as
+# written.
+#
+# This is not a production overlay: it does not add credentials, and it keeps
+# the digest placeholders so the same image-policy check applies.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../base
+commonAnnotations:
+  homelabs.dev/environment: local
+patches:
+  - target:
+      kind: PersistentVolumeClaim
+    patch: |-
+      - op: replace
+        path: /spec/storageClassName
+        value: standard

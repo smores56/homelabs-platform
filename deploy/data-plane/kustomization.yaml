@@ -1,0 +1,7 @@
+# Convenience entry point: `kustomize build deploy/data-plane` is the same tree
+# as `kustomize build deploy/data-plane/base`. Overlays select base directly so
+# the image transformer and the policies cannot be dropped by accident.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - base

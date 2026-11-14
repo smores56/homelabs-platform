@@ -1,0 +1,20 @@
+# The data-plane services live in one namespace, separate from the tenant and
+# data tiers: the agent reaches the write broker through an explicit
+# NetworkPolicy, never by sharing a namespace with a source replica.
+#
+# The namespace is platform-owned, so the `no-host-access` policy (bound to the
+# tenant, broker and data tiers) does not select it. PSA `restricted` is the
+# guard that still applies: every pod in this tree runs non-root, drops all
+# capabilities, uses RuntimeDefault seccomp and read-only root filesystems.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: data-plane
+  labels:
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tenant: platform
+    homelabs.dev/tier: platform
+    homelabs.dev/managed-by: platform
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted

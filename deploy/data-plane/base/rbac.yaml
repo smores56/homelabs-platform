@@ -1,0 +1,51 @@
+# The only RBAC object in the data plane. Snapshot and restore authority for
+# ZFS stays on the host (the controller writes a request file; a host unit owns
+# the pool). The controller itself only needs to see its own namespace's claims
+# and pods and to run restore Jobs there.
+#
+# Deliberately absent: every cluster-scoped resource, secrets, configmaps,
+# pods/exec, pods/attach, port-forward, and writes to Services, Deployments or
+# NetworkPolicies. There is no ClusterRole, so a compromised controller cannot
+# read another namespace, a PV, a StorageClass or a VolumeAttachment.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: backup-controller
+  namespace: data-plane
+  labels:
+    app.kubernetes.io/name: backup-controller
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: platform
+rules:
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+  # Restore Jobs are created by the controller; logs are read only to verify a
+  # restore actually completed, never to reach a shell.
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["create", "get", "list", "watch", "delete"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: backup-controller
+  namespace: data-plane
+  labels:
+    app.kubernetes.io/name: backup-controller
+    app.kubernetes.io/part-of: homelabs
+    homelabs.dev/tier: platform
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: backup-controller
+subjects:
+  - kind: ServiceAccount
+    name: backup-controller
+    namespace: data-plane
