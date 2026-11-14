@@ -20,9 +20,9 @@ locals {
     music       = "http://navidrome.navidrome.svc.cluster.local:4533"
     # The notification bus (SDLC #649). Its own namespace, so the route names
     # the Service rather than a tenant app.
-    ntfy        = "http://ntfy.notify.svc.cluster.local:8080"
-    opds        = "http://opdshelf.opdshelf.svc.cluster.local:8083"
-    photos      = "http://immich-server.immich.svc.cluster.local:2283"
+    ntfy   = "http://ntfy.notify.svc.cluster.local:8080"
+    opds   = "http://opdshelf.opdshelf.svc.cluster.local:8083"
+    photos = "http://immich-server.immich.svc.cluster.local:2283"
   }
 
   # The DNS set follows the ingress map unless explicitly pinned, so a cutover
