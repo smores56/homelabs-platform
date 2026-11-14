@@ -688,6 +688,27 @@ else
   bad "manual-steps does not name the first-upload script"
 fi
 
+# The watcher reads restic's own --json status records rather than /proc
+# counters, and reports a Job that is not uploading from its own state: a
+# deadline kill deletes the pod and the log, so silence is the failure mode it
+# has to break.
+watch=scripts/restic-progress.sh
+if [[ -x $watch ]]; then
+  ok "the progress watcher exists and is executable"
+else
+  bad "the progress watcher is missing or not executable"
+fi
+if grep -Fq '"message_type":"status"' "$watch"; then
+  ok "the progress watcher reads restic's JSON status record"
+else
+  bad "the progress watcher does not read restic's JSON status record"
+fi
+if grep -Fq "$watch" docs/manual-steps.md; then
+  ok "manual-steps names the progress watcher"
+else
+  bad "manual-steps does not name the progress watcher"
+fi
+
 # A `#` line inside a backslash continuation ends the command at the comment,
 # so the continuation is lost and the next line runs as its own command. That
 # silently turned `restic backup --host x --tag cluster \ # comment --exclude …`
