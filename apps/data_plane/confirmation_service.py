@@ -153,6 +153,10 @@ class ConfirmationService:
         operation = self._operation(body)
 
         approved_by = common.field_str(body, "approved_by")
+        if len(approved_by) > 128 or any(ord(ch) < 32 for ch in approved_by):
+            raise common.HttpError(
+                400, "validation", "approved_by must be printable and at most 128 chars"
+            )
         ttl = common.field_optional_int(body, "ttl")
         if ttl is None:
             ttl = min(self.max_ttl, DEFAULT_APPROVAL_TTL_SECONDS)
