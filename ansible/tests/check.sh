@@ -74,5 +74,164 @@ else
   ok "no shell tasks"
 fi
 
+# The rescue role is the SSH invariant: it must exist with every optional
+# path wired to an operator file, and it must fail closed when one is absent.
+for required in \
+  roles/rescue/defaults/main.yml \
+  roles/rescue/tasks/main.yml \
+  roles/rescue/handlers/main.yml \
+  roles/rescue/meta/main.yml \
+  roles/rescue/templates/rescue-sshd.conf.j2 \
+  roles/rescue/templates/cloudflared-rescue.service.j2 \
+  roles/rescue/templates/rescue-vpn.service.j2 \
+  playbooks/rescue.yml; do
+  if [[ -f $required ]]; then
+    ok "rescue file $required"
+  else
+    bad "rescue file $required"
+  fi
+done
+
+for default in \
+  'rescue_breakglass_enabled: false' \
+  'rescue_cloudflared_enabled: false' \
+  'rescue_breakglass_sudo: false' \
+  'rescue_vpn: none'; do
+  if grep -qF "$default" roles/rescue/defaults/main.yml; then
+    ok "rescue default $default"
+  else
+    bad "rescue default $default" "roles/rescue/defaults/main.yml must keep this off by default"
+  fi
+done
+
+# Every optional rescue path must assert on its operator-supplied file.
+for variable in \
+  rescue_breakglass_authorized_keys_file \
+  rescue_cloudflared_token_file \
+  rescue_tailscale_auth_key_file \
+  rescue_wireguard_config_file; do
+  if grep -qF "$variable" roles/rescue/tasks/main.yml; then
+    ok "rescue fail-closed $variable"
+  else
+    bad "rescue fail-closed $variable" "tasks/main.yml never references it"
+  fi
+done
+
+# The rescue tunnel must not reuse the data-plane tunnel or its secret root.
+if grep -qF 'rescue_data_plane_tunnel_token_file' roles/rescue/tasks/main.yml; then
+  ok "rescue tunnel token is distinct"
+else
+  bad "rescue tunnel token is distinct" "tasks/main.yml has no distinct-token assertion"
+fi
+
+# Password authentication is never enabled, in any file or template.
+output=$(grep -rniE '^[[:space:]]*PasswordAuthentication[[:space:]]+yes' \
+  --include='*.yml' --include='*.j2' . 2>/dev/null || true)
+if [[ -n $output ]]; then
+  bad "no PasswordAuthentication yes" "$output"
+else
+  ok "no PasswordAuthentication yes"
+fi
+
+# Rescue units never require k3s, ZFS, or a data-plane unit.
+output=$(grep -rnE '^(Requires|After|Wants)=.*(k3s|homelab-|data-plane|zfs)' \
+  roles/rescue/templates 2>/dev/null || true)
+if [[ -n $output ]]; then
+  bad "rescue units independent of the data plane" "$output"
+else
+  ok "rescue units independent of the data plane"
+fi
+
+# The only file lookup is the public authorized-keys file; no key or token
+# content is ever read into a task result or a debug message.
+output=$(grep -rnE "lookup\(['\"]file['\"]" roles/rescue/tasks/main.yml 2>/dev/null \
+  | grep -vF 'rescue_breakglass_authorized_keys_file' || true)
+if [[ -n $output ]]; then
+  bad "rescue reads no secret file contents" "$output"
+else
+  ok "rescue reads no secret file contents"
+fi
+
+output=$(grep -rnE 'var:[[:space:]]*rescue_.*(token|key)' \
+  roles/rescue playbooks/rescue.yml 2>/dev/null || true)
+if [[ -n $output ]]; then
+  bad "rescue prints no secret values" "$output"
+else
+  ok "rescue prints no secret values"
+fi
+
+# The rescue playbook refuses to pass without two real SSH sessions.
+if grep -qF 'rescue_verify_paths | length >= 2' playbooks/rescue.yml \
+  && grep -qF 'BatchMode=yes' playbooks/rescue.yml; then
+  ok "rescue verifies two SSH paths"
+else
+  bad "rescue verifies two SSH paths" "playbooks/rescue.yml must assert two paths and open a session through each"
+fi
+
+# Every download carries a checksum, and no unverified path remains.
+downloads=$(grep -rn 'ansible\.builtin\.get_url:' --include='*.yml' roles/ | wc -l)
+verified=$(grep -rn '^[[:space:]]*checksum:' --include='*.yml' roles/ | wc -l)
+if [[ $downloads -gt 0 && $verified -ge $downloads ]]; then
+  ok "every get_url in roles/ carries a checksum"
+else
+  bad "a get_url in roles/ has no checksum" "$downloads downloads, $verified checksums"
+fi
+
+output=$(grep -rn 'without a checksum\|sha256 | length == 0' --include='*.yml' roles/ 2>/dev/null || true)
+if [[ -n $output ]]; then
+  bad "no unverified download path" "$output"
+else
+  ok "no unverified download path"
+fi
+
+for needle in 'k3s_binary_sha256 is match' 'gvisor_sha256[item]'; do
+  if grep -rqF "$needle" --include='*.yml' roles/ playbooks/; then
+    ok "checksum guard present: $needle"
+  else
+    bad "checksum guard missing: $needle"
+  fi
+done
+
+if grep -qF 'gvisor_sha256:' roles/k3s/defaults/main.yml; then
+  ok "gVisor binaries require declared checksums"
+else
+  bad "gvisor_sha256 is not declared; an unverified download would be possible"
+fi
+
+# Kata is asserted through the runtime-rs shim and QEMU, not the Go CLI.
+if grep -rqF '/usr/bin/kata-runtime' roles/ playbooks/ 2>/dev/null; then
+  bad "the Go kata-runtime binary is referenced"
+else
+  ok "no reference to the Go kata-runtime binary"
+fi
+if grep -qF 'containerd-shim-kata-v2' roles/kata/defaults/main.yml; then
+  ok "Kata asserts the runtime-rs shim"
+else
+  bad "Kata does not assert containerd-shim-kata-v2"
+fi
+if grep -qF 'ConfigPath' roles/k3s/templates/config.toml.tmpl.j2; then
+  ok "the kata-qemu containerd handler names its QEMU configuration"
+else
+  bad "the kata-qemu handler has no ConfigPath"
+fi
+
+# Personal data is never world-readable.
+if grep -qF 'storage_personal_mode: "0750"' roles/storage/defaults/main.yml &&
+  grep -qF 'storage_public_mode: "0755"' roles/storage/defaults/main.yml; then
+  ok "dataset modes default to personal 0750 and public 0755"
+else
+  bad "storage mode defaults do not distinguish personal from public"
+fi
+if grep -qF 'recovery_inventory[item.recovery_group].visibility' roles/storage/tasks/main.yml; then
+  ok "served-tree mode is derived from recovery_inventory visibility"
+else
+  bad "served-tree mode is not derived from visibility"
+fi
+if grep -qF 'item.mode | default' roles/storage/tasks/main.yml; then
+  bad "a per-dataset mode in group_vars can still widen a personal tree"
+else
+  ok "no per-dataset mode override is applied"
+fi
+
 printf '\n%d passed, %d failed, %d skipped\n' "$pass" "$fail" "$skip"
 [[ $fail -eq 0 ]]

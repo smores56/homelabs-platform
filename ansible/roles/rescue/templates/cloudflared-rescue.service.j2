@@ -1,0 +1,37 @@
+[Unit]
+Description=Cloudflare rescue tunnel (SSH only, independent of k3s and the data plane)
+Documentation=https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/
+Wants=network-online.target
+After=network-online.target ssh.service
+# Deliberately no Requires/After on k3s, ZFS, or any homelab-* data-plane unit:
+# this tunnel exists so SSH remains reachable when those fail.
+
+[Service]
+Type=simple
+DynamicUser=yes
+StateDirectory=cloudflared-rescue
+CacheDirectory=cloudflared-rescue
+# The token never appears in the unit, argv, or logs. systemd reads the
+# operator-supplied file into the service credential directory.
+LoadCredential=rescue-token:{{ rescue_cloudflared_token_file }}
+ExecStart={{ rescue_cloudflared_binary }} --no-autoupdate tunnel run --token-file %d/rescue-token
+Restart=always
+RestartSec=5s
+TimeoutStopSec=30s
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+AmbientCapabilities=
+SystemCallArchitectures=native
+StandardOutput=journal
+StandardError=journal

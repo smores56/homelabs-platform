@@ -77,6 +77,24 @@ homelab_unattended_package_blacklist: []
 homelab_destructive_confirm: false
 
 # --------------------------------------------------------------------------
+# Rescue access
+# --------------------------------------------------------------------------
+# playbooks/rescue.yml refuses to pass until at least two independent SSH
+# paths are listed here and each authenticates from the controller. Public
+# addresses only; no secret ever belongs in this file. Example:
+# rescue_verify_paths:
+#   - name: lan
+#     host: 192.0.2.10
+#     port: 22
+#     user: migration-breakglass
+#   - name: tunnel
+#     host: ssh-rescue.sammohr.dev
+#     port: 22
+#     user: migration-breakglass
+rescue_verify_paths: []
+rescue_verify_timeout: 10
+
+# --------------------------------------------------------------------------
 # LUKS2 volumes
 # --------------------------------------------------------------------------
 # Empty by default: the luks role refuses to run on a storage host until the

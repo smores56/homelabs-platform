@@ -1,0 +1,4 @@
+# Managed by ansible/roles/rescue. Only rendered when rescue_breakglass_sudo is
+# explicitly true. The account is SSH-key-only and has no password, so sudo can
+# only work with NOPASSWD; withdraw this file after the migration window.
+{{ rescue_breakglass_user }} ALL=(ALL) NOPASSWD: ALL

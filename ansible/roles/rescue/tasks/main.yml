@@ -1,0 +1,355 @@
+---
+# Rescue access must survive a broken k3s, a broken data plane, and a failed
+# migration. Nothing here depends on those units, no secret is ever printed,
+# and every optional path fails closed when its operator-supplied file is
+# missing.
+
+- name: Require boolean rescue toggles and a supported VPN mode
+  ansible.builtin.assert:
+    that:
+      - rescue_breakglass_enabled is boolean
+      - rescue_breakglass_sudo is boolean
+      - rescue_cloudflared_enabled is boolean
+      - rescue_vpn in ['none', 'tailscale', 'wireguard']
+      - rescue_ssh_service | length > 0
+    fail_msg: "roles/rescue defaults are incomplete; see ansible/README.md"
+    quiet: true
+
+- name: Keep the SSH daemon enabled and independent of k3s and the data plane
+  ansible.builtin.systemd_service:
+    name: "{{ rescue_ssh_service }}"
+    enabled: true
+    state: started
+
+- name: Create the rescue state directory
+  ansible.builtin.file:
+    path: "{{ rescue_state_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0750"
+
+- name: Configure the migration break-glass account
+  when: rescue_breakglass_enabled | bool
+  block:
+    - name: Inspect the operator-supplied authorized-keys file
+      ansible.builtin.stat:
+        path: "{{ rescue_breakglass_authorized_keys_file }}"
+      register: rescue_breakglass_keys
+
+    - name: Fail closed when the authorized-keys file is missing
+      ansible.builtin.assert:
+        that:
+          - rescue_breakglass_keys.stat.exists
+          - rescue_breakglass_keys.stat.isreg
+          - rescue_breakglass_keys.stat.size > 0
+        fail_msg: >-
+          rescue_breakglass_enabled is true but
+          {{ rescue_breakglass_authorized_keys_file }} is missing, not a
+          regular file, or empty. Provision public keys or disable the account.
+        quiet: true
+
+    - name: Create the rescue group
+      ansible.builtin.group:
+        name: "{{ rescue_breakglass_group }}"
+        system: true
+        state: present
+
+    - name: Create the break-glass account with a locked password
+      ansible.builtin.user:
+        name: "{{ rescue_breakglass_user }}"
+        group: "{{ rescue_breakglass_group }}"
+        # Empty by default: the account never receives sudo unless the
+        # operator explicitly opts in.
+        groups: "{{ [rescue_sudo_group] if rescue_breakglass_sudo | bool else [] }}"
+        append: false
+        shell: "{{ rescue_breakglass_shell }}"
+        create_home: true
+        password_lock: true
+        state: present
+
+    - name: Install only the operator-supplied public keys
+      ansible.posix.authorized_key:
+        user: "{{ rescue_breakglass_user }}"
+        key: "{{ lookup('file', rescue_breakglass_authorized_keys_file) }}"
+        exclusive: true
+        manage_dir: true
+        state: present
+
+    - name: Grant sudo only when the operator explicitly enables it
+      ansible.builtin.template:
+        src: rescue-breakglass-sudoers.j2
+        dest: "{{ rescue_sudoers_file }}"
+        owner: root
+        group: root
+        mode: "0440"
+        validate: /usr/sbin/visudo -cf %s
+      when: rescue_breakglass_sudo | bool
+
+    - name: Allow the rescue group through SSH without weakening auth policy
+      ansible.builtin.template:
+        src: rescue-sshd.conf.j2
+        dest: "{{ rescue_ssh_dropin }}"
+        owner: root
+        group: root
+        mode: "0644"
+        validate: /usr/sbin/sshd -t -f %s
+      notify: Reload sshd after a rescue change
+
+- name: Read the break-glass account while the path is disabled
+  ansible.builtin.command:
+    argv: [getent, passwd, "{{ rescue_breakglass_user }}"]
+  register: rescue_breakglass_account
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  when: not rescue_breakglass_enabled | bool
+
+- name: Remove a disabled break-glass account from every privileged group
+  ansible.builtin.user:
+    name: "{{ rescue_breakglass_user }}"
+    groups: []
+    append: false
+    password_lock: true
+    state: present
+  when:
+    - not rescue_breakglass_enabled | bool
+    - rescue_breakglass_account is defined
+    - rescue_breakglass_account.rc | default(1) == 0
+
+- name: Withdraw any break-glass sudo grant when disabled or sudo is off
+  ansible.builtin.file:
+    path: "{{ rescue_sudoers_file }}"
+    state: absent
+  when: not (rescue_breakglass_enabled | bool and rescue_breakglass_sudo | bool)
+
+- name: Remove the rescue SSH exception when the account is disabled
+  ansible.builtin.file:
+    path: "{{ rescue_ssh_dropin }}"
+    state: absent
+  notify: Reload sshd after a rescue change
+  when: not rescue_breakglass_enabled | bool
+
+- name: Configure the independent Cloudflare rescue tunnel
+  when: rescue_cloudflared_enabled | bool
+  block:
+    - name: Inspect the rescue tunnel token file
+      ansible.builtin.stat:
+        path: "{{ rescue_cloudflared_token_file }}"
+      register: rescue_cloudflared_token
+
+    - name: Fail closed when the rescue tunnel token is missing
+      ansible.builtin.assert:
+        that:
+          - rescue_cloudflared_token.stat.exists
+          - rescue_cloudflared_token.stat.isreg
+          - rescue_cloudflared_token.stat.size > 0
+        fail_msg: >-
+          rescue_cloudflared_enabled is true but
+          {{ rescue_cloudflared_token_file }} is missing, not a regular file,
+          or empty. Provision the token or disable the tunnel.
+        quiet: true
+
+    - name: Require a root-only rescue tunnel token
+      ansible.builtin.assert:
+        that:
+          - (rescue_cloudflared_token.stat.mode | string)[-2:] == '00'
+          - rescue_cloudflared_token.stat.pw_name == 'root'
+        fail_msg: >-
+          {{ rescue_cloudflared_token_file }} must be owned by root with no
+          group or other permissions (mode 0400).
+        quiet: true
+      when: rescue_cloudflared_token.stat.exists
+
+    - name: Require a tunnel token distinct from the data-plane tunnel
+      ansible.builtin.assert:
+        that:
+          - rescue_cloudflared_token_file != rescue_data_plane_tunnel_token_file
+          - not (rescue_cloudflared_token_file.startswith(
+              (data_plane_secret_root | default('/etc/homelab/secrets')) ~ '/'))
+        fail_msg: >-
+          The rescue tunnel must not reuse the data-plane tunnel token or live
+          under the data-plane secret root.
+        quiet: true
+
+    - name: Inspect the cloudflared binary
+      ansible.builtin.stat:
+        path: "{{ rescue_cloudflared_binary }}"
+      register: rescue_cloudflared_binary_stat
+
+    - name: Fail closed when cloudflared is not installed
+      ansible.builtin.assert:
+        that:
+          - rescue_cloudflared_binary_stat.stat.exists
+          - rescue_cloudflared_binary_stat.stat.executable
+        fail_msg: "{{ rescue_cloudflared_binary }} is missing or not executable"
+        quiet: true
+
+    - name: Install the independent rescue tunnel unit
+      ansible.builtin.template:
+        src: cloudflared-rescue.service.j2
+        dest: "/etc/systemd/system/{{ rescue_cloudflared_unit }}"
+        owner: root
+        group: root
+        mode: "0644"
+      notify: Restart the rescue tunnel
+
+    - name: Enable and start the rescue tunnel
+      ansible.builtin.systemd_service:
+        name: "{{ rescue_cloudflared_unit }}"
+        enabled: true
+        state: started
+        daemon_reload: true
+      when: not ansible_check_mode
+
+- name: Inspect an installed rescue tunnel unit
+  ansible.builtin.stat:
+    path: "/etc/systemd/system/{{ rescue_cloudflared_unit }}"
+  register: rescue_cloudflared_unit_file
+  when: not rescue_cloudflared_enabled | bool
+
+- name: Disable the rescue tunnel when it is not configured
+  ansible.builtin.systemd_service:
+    name: "{{ rescue_cloudflared_unit }}"
+    enabled: false
+    state: stopped
+  when:
+    - not rescue_cloudflared_enabled | bool
+    - rescue_cloudflared_unit_file.stat.exists
+    - not ansible_check_mode
+
+- name: Remove the rescue tunnel unit when it is not configured
+  ansible.builtin.file:
+    path: "/etc/systemd/system/{{ rescue_cloudflared_unit }}"
+    state: absent
+  notify: Reload systemd after rescue unit changes
+  when: not rescue_cloudflared_enabled | bool
+
+- name: Select the VPN credential file
+  ansible.builtin.set_fact:
+    rescue_vpn_credential_file: >-
+      {{ rescue_tailscale_auth_key_file if rescue_vpn == 'tailscale'
+         else rescue_wireguard_config_file }}
+
+- name: Configure the optional rescue VPN path
+  when: rescue_vpn in ['tailscale', 'wireguard']
+  block:
+    - name: Inspect the operator-supplied VPN credential file
+      ansible.builtin.stat:
+        path: "{{ rescue_vpn_credential_file }}"
+      register: rescue_vpn_credential
+
+    - name: Fail closed when the VPN credential file is missing
+      ansible.builtin.assert:
+        that:
+          - rescue_vpn_credential.stat.exists
+          - rescue_vpn_credential.stat.isreg
+          - rescue_vpn_credential.stat.size > 0
+        fail_msg: >-
+          rescue_vpn is {{ rescue_vpn }} but
+          {{ rescue_vpn_credential_file }} is missing, not a regular file, or
+          empty. Provision it or set rescue_vpn to none.
+        quiet: true
+
+    - name: Require a root-only VPN credential file
+      ansible.builtin.assert:
+        that:
+          - (rescue_vpn_credential.stat.mode | string)[-2:] == '00'
+          - rescue_vpn_credential.stat.pw_name == 'root'
+        fail_msg: >-
+          {{ rescue_vpn_credential_file }} must be owned by root with no group
+          or other permissions.
+        quiet: true
+      when: rescue_vpn_credential.stat.exists
+
+    - name: Install the Tailscale rescue unit
+      ansible.builtin.template:
+        src: rescue-vpn.service.j2
+        dest: "/etc/systemd/system/{{ rescue_vpn_unit }}"
+        owner: root
+        group: root
+        mode: "0644"
+      notify: Restart the rescue VPN path
+      when: rescue_vpn == 'tailscale'
+
+    - name: Inspect the tailscale binary
+      ansible.builtin.stat:
+        path: "{{ rescue_tailscale_binary }}"
+      register: rescue_tailscale_binary_stat
+      when: rescue_vpn == 'tailscale'
+
+    - name: Fail closed when tailscale is not installed
+      ansible.builtin.assert:
+        that:
+          - rescue_tailscale_binary_stat.stat.exists
+          - rescue_tailscale_binary_stat.stat.executable
+        fail_msg: "{{ rescue_tailscale_binary }} is missing or not executable"
+        quiet: true
+      when: rescue_vpn == 'tailscale'
+
+    - name: Keep tailscaled enabled for the rescue unit
+      ansible.builtin.systemd_service:
+        name: tailscaled.service
+        enabled: true
+        state: started
+      when:
+        - rescue_vpn == 'tailscale'
+        - not ansible_check_mode
+
+    - name: Enable the Tailscale rescue path
+      ansible.builtin.systemd_service:
+        name: "{{ rescue_vpn_unit }}"
+        enabled: true
+        state: started
+        daemon_reload: true
+      when:
+        - rescue_vpn == 'tailscale'
+        - not ansible_check_mode
+
+    - name: Enable the WireGuard rescue interface
+      ansible.builtin.systemd_service:
+        name: "wg-quick@{{ rescue_wireguard_interface }}.service"
+        enabled: true
+        state: started
+        daemon_reload: true
+      when:
+        - rescue_vpn == 'wireguard'
+        - not ansible_check_mode
+
+- name: Inspect an installed Tailscale rescue unit
+  ansible.builtin.stat:
+    path: "/etc/systemd/system/{{ rescue_vpn_unit }}"
+  register: rescue_vpn_unit_file
+  when: rescue_vpn != 'tailscale'
+
+- name: Stop the Tailscale rescue path when it is no longer selected
+  ansible.builtin.systemd_service:
+    name: "{{ rescue_vpn_unit }}"
+    state: stopped
+  when:
+    - rescue_vpn != 'tailscale'
+    - rescue_vpn_unit_file.stat.exists
+    - not ansible_check_mode
+
+- name: Remove the Tailscale rescue unit when another path is selected
+  ansible.builtin.file:
+    path: "/etc/systemd/system/{{ rescue_vpn_unit }}"
+    state: absent
+  notify: Reload systemd after rescue unit changes
+  when: rescue_vpn != 'tailscale'
+
+- name: Inspect the WireGuard rescue enablement
+  ansible.builtin.stat:
+    path: "/etc/systemd/system/multi-user.target.wants/wg-quick@{{ rescue_wireguard_interface }}.service"
+  register: rescue_wireguard_unit_file
+  when: rescue_vpn != 'wireguard'
+
+- name: Disable the WireGuard rescue interface when it is not selected
+  ansible.builtin.systemd_service:
+    name: "wg-quick@{{ rescue_wireguard_interface }}.service"
+    enabled: false
+    state: stopped
+  when:
+    - rescue_vpn != 'wireguard'
+    - rescue_wireguard_unit_file.stat.exists
+    - not ansible_check_mode

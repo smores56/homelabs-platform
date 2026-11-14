@@ -1,0 +1,78 @@
+---
+# Prepare and prove independent SSH access before any migration phase.
+#
+#   cd ansible
+#   ansible-playbook -i inventory/hosts.yml playbooks/rescue.yml
+#
+# The first play installs the rescue role on every host: sshd stays enabled,
+# and the optional break-glass account, Cloudflare rescue tunnel, and VPN path
+# are configured only when their operator-supplied file exists. The second
+# play is the gate: it refuses to pass with fewer than two verified paths and
+# then opens a real SSH session through each one from the controller. Run it
+# again after every destructive step and before the 970 is converted.
+
+- name: Install the independent rescue access paths
+  hosts: all
+  gather_facts: true
+  roles:
+    - rescue
+
+- name: Prove both SSH paths before a destructive step
+  hosts: storage_hosts
+  gather_facts: true
+  tasks:
+    - name: Require at least two named SSH paths with a host and user
+      ansible.builtin.assert:
+        that:
+          - rescue_verify_paths | length >= 2
+          - rescue_verify_paths | map(attribute='name') | unique | length
+            == (rescue_verify_paths | length)
+          - rescue_verify_paths | selectattr('host', 'undefined') | list | length == 0
+          - rescue_verify_paths | selectattr('user', 'undefined') | list | length == 0
+        fail_msg: >-
+          Declare at least two independent rescue paths in
+          group_vars/all.yml: rescue_verify_paths, each with name, host, user,
+          and optionally port. See ansible/README.md.
+        quiet: true
+
+    - name: Prove each SSH path accepts a real authenticated session
+      ansible.builtin.command:
+        argv:
+          - ssh
+          - -o
+          - BatchMode=yes
+          - -o
+          - ConnectTimeout={{ rescue_verify_timeout }}
+          - -p
+          - "{{ item.port | default(22) }}"
+          - "{{ item.user }}@{{ item.host }}"
+          - "true"
+      loop: "{{ rescue_verify_paths }}"
+      loop_control:
+        label: "{{ item.name }}"
+      delegate_to: localhost
+      changed_when: false
+      check_mode: false
+
+    - name: Read the SSH service state on the host
+      ansible.builtin.service_facts:
+
+    - name: Require sshd to be running and enabled independently
+      ansible.builtin.assert:
+        that:
+          - ansible_facts.services['ssh.service'] is defined
+          - ansible_facts.services['ssh.service'].state == 'running'
+          - ansible_facts.services['ssh.service'].status == 'enabled'
+        fail_msg: >-
+          ssh.service is not running and enabled on {{ inventory_hostname }};
+          restore it before any destructive migration step.
+        quiet: true
+
+    - name: Report the verified rescue state
+      ansible.builtin.debug:
+        msg: >-
+          {{ item.name }} reachable at {{ item.host }}:{{ item.port | default(22) }}
+          as {{ item.user }}
+      loop: "{{ rescue_verify_paths }}"
+      loop_control:
+        label: "{{ item.name }}"

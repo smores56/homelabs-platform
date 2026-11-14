@@ -1,0 +1,38 @@
+---
+# Rescue access is deliberately independent of k3s, the data plane, and the
+# migration. Every optional path is off until the operator supplies a key or
+# token file; enabling one without its file fails the run closed.
+rescue_ssh_service: ssh
+
+# OpenSSH takes the first value it sees for a keyword. This drop-in sorts
+# before the base 99-hardening file and must therefore name every admin group
+# plus the rescue group.
+rescue_ssh_dropin: /etc/ssh/sshd_config.d/00-rescue-allowgroups.conf
+
+rescue_state_dir: /etc/homelab/rescue
+rescue_sudoers_file: /etc/sudoers.d/90-migration-breakglass
+
+rescue_breakglass_enabled: false
+rescue_breakglass_user: migration-breakglass
+rescue_breakglass_group: rescue
+rescue_breakglass_shell: /bin/bash
+rescue_breakglass_authorized_keys_file: "{{ rescue_state_dir }}/migration-breakglass.keys"
+rescue_breakglass_sudo: false
+rescue_sudo_group: sudo
+
+rescue_cloudflared_enabled: false
+rescue_cloudflared_binary: /usr/bin/cloudflared
+rescue_cloudflared_unit: cloudflared-rescue.service
+rescue_cloudflared_token_file: "{{ rescue_state_dir }}/cloudflared-rescue.token"
+# The data-plane tunnel token is a different trust path. The rescue token is
+# refused if it reuses that file or lives under the data-plane secret root.
+rescue_data_plane_tunnel_token_file: "{{ data_plane_secret_root | default('/etc/homelab/secrets') }}/cloudflared-tunnel.token"
+
+# none | tailscale | wireguard. Both VPN paths are disabled by default.
+rescue_vpn: none
+rescue_vpn_unit: rescue-vpn.service
+rescue_tailscale_binary: /usr/bin/tailscale
+rescue_tailscale_auth_key_file: "{{ rescue_state_dir }}/tailscale-auth.key"
+rescue_tailscale_hostname: "{{ inventory_hostname }}-rescue"
+rescue_wireguard_interface: wg-rescue
+rescue_wireguard_config_file: "/etc/wireguard/{{ rescue_wireguard_interface }}.conf"

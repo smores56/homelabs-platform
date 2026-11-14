@@ -1,0 +1,26 @@
+[Unit]
+Description=Tailscale rescue path (independent of k3s and the data plane)
+Wants=network-online.target
+After=network-online.target tailscaled.service
+Requires=tailscaled.service
+ConditionPathExists={{ rescue_tailscale_auth_key_file }}
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# `file:` makes tailscale read the auth key from the operator-supplied file;
+# the key itself never appears in this unit, argv, or the journal.
+ExecStart={{ rescue_tailscale_binary }} up --auth-key=file:{{ rescue_tailscale_auth_key_file }} --ssh --hostname={{ rescue_tailscale_hostname }}
+ExecStop={{ rescue_tailscale_binary }} down
+TimeoutStartSec=120
+NoNewPrivileges=yes
+ProtectSystem=full
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK

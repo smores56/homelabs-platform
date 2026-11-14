@@ -16,6 +16,7 @@ arrive from the operator or the private inventory.
 | `playbooks/site.yml` | Full convergence, role by role |
 | `playbooks/check.yml` | Inventory validation plus `site.yml` in check mode; refuses a mutating run |
 | `playbooks/recover.yml` | Clean-room storage import and verified-generation restore outline |
+| `playbooks/rescue.yml` | Applies independent rescue access, then refuses to pass until two SSH paths authenticate |
 | `roles/base` | Packages, timezone, sysctl, users, SSH, unattended-upgrades, journald |
 | `roles/luks` | LUKS2 keyfile slots and crypttab; disk initialisation only under `--tags destructive` |
 | `roles/zfs` | Pool import/create, recovery-group datasets, mount ordering |
@@ -25,6 +26,7 @@ arrive from the operator or the private inventory.
 | `roles/kata` | Kata/QEMU packages and the `kata-qemu` RuntimeClass |
 | `roles/data_plane` | Five containerised units, env files, hardening, timers |
 | `roles/recovery` | Sentinel, portal constraints, clean-room entrypoint |
+| `roles/rescue` | Independent sshd, optional break-glass account, Cloudflare rescue tunnel, optional Tailscale/WireGuard |
 
 ## Prerequisites
 
@@ -47,6 +49,21 @@ arrive from the operator or the private inventory.
   be in the `sudo` group because SSH hardening allows only `homelab_ssh_allow_groups`.
 - Collections `community.general`, `community.crypto`, and `ansible.posix` are
   supplied by the `ansible` package used below.
+- Rescue access is optional but fail-closed. When
+  `rescue_breakglass_enabled`, `rescue_cloudflared_enabled`, or
+  `rescue_vpn` is enabled, the operator must first place the corresponding
+  root-owned file under `/etc/homelab/rescue/` (authorized keys, a rescue
+  tunnel token distinct from the data-plane tunnel, or a Tailscale auth key /
+  WireGuard config). A missing, empty, or group/world-readable file stops the
+  run. No secret is stored in this tree or printed by a task.
+- The optional VPN path is `rescue_vpn: none` by default. `tailscale` reads
+  `rescue_tailscale_auth_key_file` (default
+  `/etc/homelab/rescue/tailscale-auth.key`, mode `0400`); `wireguard` reads
+  `rescue_wireguard_config_file` (default
+  `/etc/wireguard/wg-rescue.conf`, mode `0600`). Both are operator-provisioned
+  and fail closed when missing.
+- `rescue_verify_paths` in `group_vars/all.yml` names at least two independent
+  SSH endpoints; `playbooks/rescue.yml` opens a real session through each one.
 
 ## Operator sequence
 
@@ -89,6 +106,49 @@ No playbook performs a destructive disk operation without **both**
 `--tags destructive` and `-e homelab_destructive_confirm=true`. `destructive`
 covers only LUKS container creation and `zpool create`; formatting backup
 filesystems uses the same gate and never runs untagged.
+
+## Pre-migration rescue sequence
+
+Do this before any migration phase that can affect SSH, storage, k3s, or the
+data plane. The exact gate definitions and evidence are in
+`docs/migration-gates.md`.
+
+```sh
+cd ansible
+
+# 1. Declare both independent paths in group_vars/all.yml (or inventory/hosts.yml):
+#    rescue_verify_paths:
+#      - {name: lan, host: 192.0.2.10, port: 22, user: migration-breakglass}
+#      - {name: tunnel, host: ssh-rescue.sammohr.dev, port: 22, user: migration-breakglass}
+
+# 2. Install rescue access on every host. sshd is enabled and started first;
+#    the optional paths are configured only when their operator file exists.
+ansible-playbook -i inventory/hosts.yml playbooks/rescue.yml
+
+# 3. Verify the same two paths by hand from the controller. Each must open a
+#    session without a password prompt:
+ssh -o BatchMode=yes -p 22 migration-breakglass@192.0.2.10 true
+ssh -o BatchMode=yes -p 22 migration-breakglass@ssh-rescue.sammohr.dev true
+```
+
+`playbooks/rescue.yml` is itself the gate: it fails when fewer than two named
+paths are declared, when any path cannot authenticate from the controller, or
+when `ssh.service` is not running and enabled on the host. Keep the LAN path
+and the independent rescue path working at all times; a cutover, reboot, or
+970 conversion is not started while either one is unverified.
+
+The Python preflight records the same facts and refuses the `protect_old` and
+`cutover` gates without them:
+
+```sh
+cd ..
+export PYTHONPATH="$PWD/libs"
+python3 -m data_plane.migration preflight evidence.json
+```
+
+Both checks are required: Ansible proves the paths from the controller, and
+the preflight records fresh, structured evidence that `protect_old` and
+`cutover` can consume.
 
 ## What a host run produces
 

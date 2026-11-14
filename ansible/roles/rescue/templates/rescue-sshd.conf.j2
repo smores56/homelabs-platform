@@ -1,0 +1,11 @@
+# Managed by ansible/roles/rescue. Local edits are replaced on every run.
+#
+# OpenSSH uses the first obtained value for a keyword. This file sorts before
+# 99-homelab-hardening.conf, so it must name every admin group the base role
+# allows plus the break-glass group; otherwise enabling rescue would lock the
+# normal administrators out. Password authentication stays disabled in the
+# base drop-in and is never re-enabled here.
+AllowGroups {{ ((homelab_ssh_allow_groups | default(['sudo'])) + [rescue_breakglass_group]) | unique | join(' ') }}
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PubkeyAuthentication yes
