@@ -23,19 +23,45 @@
     update_cache: true
     cache_valid_time: 3600
 
-- name: Check the Kata runtime binary
+# The runtime class selects the runtime-rs shim, which then starts QEMU from its
+# config. Checking `kata-runtime` would only prove the Go CLI exists; it is not
+# on the containerd path at all.
+- name: Check the Kata shim and QEMU binary
   when: k3s_enable_kata_runtime | bool
   ansible.builtin.stat:
-    path: "{{ kata_runtime_binary }}"
-  register: kata_runtime
+    path: "{{ item }}"
+  loop:
+    - "{{ kata_runtime_binary }}"
+    - "{{ kata_vmm_binary }}"
+  register: kata_binaries
 
-- name: Require the Kata runtime binary
+- name: Require the Kata shim and QEMU binary
   when: k3s_enable_kata_runtime | bool
   ansible.builtin.assert:
     that:
-      - kata_runtime.stat.exists
-      - kata_runtime.stat.executable
-    fail_msg: "{{ kata_runtime_binary }} is missing; install the pinned kata-containers package"
+      - kata_binaries.results | rejectattr('stat.exists') | list | length == 0
+      - kata_binaries.results | rejectattr('stat.executable') | list | length == 0
+    fail_msg: >-
+      {{ kata_runtime_binary }} or {{ kata_vmm_binary }} is missing; install the
+      pinned kata-containers package and its QEMU dependency
+    quiet: true
+
+- name: Read the Kata configuration selected by the runtime class
+  when: k3s_enable_kata_runtime | bool
+  ansible.builtin.slurp:
+    src: "{{ kata_config_file }}"
+  register: kata_config
+
+- name: Require the runtime class to select QEMU from that configuration
+  when: k3s_enable_kata_runtime | bool
+  ansible.builtin.assert:
+    that:
+      - (kata_config.content | b64decode)
+        is search('path\s*=\s*"' ~ kata_vmm_binary ~ '"')
+    fail_msg: >-
+      {{ kata_config_file }} does not select {{ kata_vmm_binary }}; the
+      {{ kata_runtime_class }} handler would start a different hypervisor
+    quiet: true
 
 - name: Publish the Kata RuntimeClass on the server
   ansible.builtin.copy:

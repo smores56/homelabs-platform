@@ -1,13 +1,12 @@
 # The recovery page is the one service a human opens. Ingress is the existing
 # cluster tunnel only (`ingress/cloudflared`); no agent namespace reaches it.
-# Egress is DNS plus HTTPS to global unicast with every non-global range
-# excluded, so a download can reach R2's anycast endpoint without being
-# rewritten onto the pod network, the tap, the host LAN, the metadata address or
-# loopback. This is an address filter, not DLP: the portal streams a file the
-# account owner already owns.
 #
-# The R2 credential is not in this manifest and not in the pod: the portal
-# receives a short-lived download URL from the operator-owned restore tooling.
+# The portal has no egress at all: not DNS, not 443, not any public range. It
+# reads generation manifests from its claim and serves them; a download is the
+# browser following a pre-signed R2 URL directly, not a fetch the pod makes. The
+# R2 credential and the signed URL never enter this namespace. If a server-side
+# fetch is ever required, name the exact R2/Cloudflare endpoint as an ipBlock;
+# a general 0.0.0.0/0 rule must never come back.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -21,7 +20,7 @@ spec:
   podSelector:
     matchLabels:
       app.kubernetes.io/name: recovery-portal
-  policyTypes: ["Ingress", "Egress"]
+  policyTypes: ["Ingress"]
   ingress:
     - from:
         - namespaceSelector:
@@ -33,17 +32,3 @@ spec:
       ports:
         - protocol: TCP
           port: 8080
-  egress:
-    - to:
-        - ipBlock:
-            cidr: 0.0.0.0/0
-            except:
-              - 10.0.0.0/8
-              - 172.16.0.0/12
-              - 192.168.0.0/16
-              - 169.254.0.0/16
-              - 100.64.0.0/10
-              - 127.0.0.0/8
-      ports:
-        - protocol: TCP
-          port: 443

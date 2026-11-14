@@ -128,6 +128,8 @@ else
 fi
 
 # ------------------------------------------------------------- image policy
+# Every image must be digest-pinned. A tag (`:v1`, `:latest`) is rejected: the
+# digest is the identity, and the reference must be the one data-plane image.
 image_re='^[[:space:]]*image: ghcr\.io/smores56/homelabs-platform/data-plane@sha256:[0-9a-f]{64}$'
 if grep -Eq '^[[:space:]]*image:' "$render"; then
   if grep -E '^[[:space:]]*image:' "$render" | grep -Evq "$image_re"; then
@@ -140,10 +142,18 @@ else
   bad "no images rendered"
 fi
 
-if grep -Eq '^[[:space:]]*image:.*:latest([[:space:]]|$)' "$render"; then
-  bad "a latest tag is present"
+# No tag anywhere: the rendered references must be digests (asserted above), the
+# transformer's `newName` must carry no tag, and `latest` must not appear in any
+# data-plane image field.
+tagged=$(grep -E '^[[:space:]]*newName:' "$plane/images.yaml" "$plane/base/kustomization.yaml" |
+  grep -E ':[^/[:space:]]+$' || true)
+if [[ -n $tagged ]]; then
+  bad "a newName carries a tag"
+  printf '%s\n' "$tagged" | sed 's/^/     /'
+elif grep -rEq ':latest([[:space:]]|$)' "$plane" --include='*.yaml'; then
+  bad "a latest reference is present"
 else
-  ok "no latest tag"
+  ok "no tag and no latest reference in any image field"
 fi
 
 if grep -Eq '^[[:space:]]*image: data-plane/' "$render"; then
@@ -159,11 +169,22 @@ if [[ $names_images == "$names_base" ]]; then
 else
   bad "images.yaml and base/kustomization.yaml drifted"
 fi
-if [[ $(grep -c 'digest: sha256:0000000000000000000000000000000000000000000000000000000000000000' "$plane/images.yaml") -eq 1 &&
-  $(grep -c 'digest: sha256:0000000000000000000000000000000000000000000000000000000000000000' "$plane/base/kustomization.yaml") -eq 1 ]]; then
-  ok "both image lists carry the pre-publish digest placeholder"
+
+# Either the documented all-zero placeholder or a published 64-hex digest. The
+# point is that the field is a digest, not a tag, and that both copies agree.
+digest_re='^[[:space:]]*digest: sha256:[0-9a-f]{64}$'
+digest_images=$(grep -E "$digest_re" "$plane/images.yaml" | sed 's/.*digest:[[:space:]]*//')
+digest_base=$(grep -E "$digest_re" "$plane/base/kustomization.yaml" | sed 's/.*digest:[[:space:]]*//')
+if [[ $(grep -Ec "$digest_re" "$plane/images.yaml") -eq 1 &&
+  $(grep -Ec "$digest_re" "$plane/base/kustomization.yaml") -eq 1 ]]; then
+  ok "both image lists carry a 64-hex digest (placeholder or published)"
 else
-  bad "image digest placeholder count changed"
+  bad "an image list has no single 64-hex digest"
+fi
+if [[ -n $digest_images && $digest_images == "$digest_base" ]]; then
+  ok "images.yaml and base/kustomization.yaml carry the same digest"
+else
+  bad "the two image digests drifted"
 fi
 
 # ---------------------------------------------------------- security posture
@@ -173,7 +194,11 @@ else
   ok "no Secret objects"
 fi
 
-for pattern in 'hostPath:' 'privileged: true' 'automountServiceAccountToken: true'; do
+# No workload may reach the host directly. PSA restricted covers privilege and
+# capabilities but not every host namespace field, so the rendered tree is also
+# asserted for hostPath, hostNetwork/hostPID/hostIPC and a fixed hostPort.
+for pattern in 'hostPath:' 'privileged: true' 'hostNetwork: true' \
+  'hostPID: true' 'hostIPC: true' 'hostPort:' 'automountServiceAccountToken: true'; do
   if grep -q "$pattern" "$render"; then
     bad "forbidden field rendered: $pattern"
   else
@@ -196,11 +221,27 @@ for pattern in 'runAsNonRoot: true' 'readOnlyRootFilesystem: true' '^[[:space:]]
     bad "not every Deployment has $pattern ($count < $deployments)"
   fi
 done
-
 if [[ $(grep -c 'automountServiceAccountToken: false' "$render") -ge $deployments ]]; then
   ok "every Deployment disables token automount"
 else
   bad "a Deployment does not disable token automount"
+fi
+
+# Service links project every Service in the namespace into the environment; no
+# workload here reads them, so each pod spec turns them off.
+if [[ $(grep -c 'enableServiceLinks: false' "$render") -ge $deployments ]]; then
+  ok "every Deployment disables service links"
+else
+  bad "a Deployment leaves service links enabled"
+fi
+
+# The one projected token is mode 0400 (decimal 256).
+if ! grep -q 'serviceAccountToken' "$render"; then
+  bad "no projected service-account token is rendered"
+elif grep -B4 serviceAccountToken "$render" | grep -q "defaultMode: 256"; then
+  ok "the projected token is mounted 0400"
+else
+  bad "the projected token is not mounted 0400"
 fi
 
 if grep -q 'pod-security.kubernetes.io/enforce: restricted' "$render"; then
@@ -228,22 +269,69 @@ else
   bad "default-deny is missing"
 fi
 
+# API egress is one address, not the service range.
+if grep -q 'cidr: 10.43.0.1/32' "$render"; then
+  ok "API egress targets the apiserver endpoint"
+else
+  bad "API egress does not target 10.43.0.1/32"
+fi
+if grep -q 'cidr: 10.43.0.0/16' "$render" ||
+  grep -q 'cidr: 10.77.1.0/30' "$render"; then
+  bad "API egress still names a whole range"
+else
+  ok "API egress names no service or node range"
+fi
+
+# DNS resolves through CoreDNS only.
+if grep -q 'k8s-app: kube-dns' "$render"; then
+  ok "DNS egress selects CoreDNS pods"
+else
+  bad "DNS egress does not select kube-dns"
+fi
+
+# No pod may reach global unicast.
+if grep -q 'cidr: 0.0.0.0/0' "$render"; then
+  bad "a policy allows 0.0.0.0/0"
+else
+  ok "no policy allows 0.0.0.0/0"
+fi
+
+# The event log admits no collector.
+if grep -q 'collector-relay' "$plane/policies/event-service.yaml"; then
+  bad "event-service policy still admits collector-relay"
+else
+  ok "event-service admits no collector-relay"
+fi
+if grep -q 'EVENT_SERVICE_URL' "$plane"/base/collector-relay/*.yaml; then
+  bad "a collector still configures an event-service URL"
+else
+  ok "no collector has an event-service route"
+fi
+
 # --------------------------------------------------------------- RBAC
 if grep -q '^kind: ClusterRole$' "$render"; then
   bad "a ClusterRole is rendered; the tree needs no cluster-scoped RBAC"
 else
   ok "no ClusterRole"
 fi
-if grep -q '^  - batch$' "$render" && grep -q '^  - jobs$' "$render"; then
-  ok "backup-controller restore Job grant is present"
+
+# Restore execution is an operator action: the Role grants no Job verbs.
+if grep -Eq '^[[:space:]]*- (batch|jobs)$|resources:.*"jobs"|^[[:space:]]*resources: \[jobs\]' "$render"; then
+  bad "RBAC grants Job access"
 else
-  bad "backup-controller restore Job grant is missing"
+  ok "RBAC grants no Job access"
 fi
-if grep -q 'secrets' "$render" && grep -q 'pods/exec' "$render"; then
-  bad "RBAC mentions secrets or pods/exec"
-else
-  ok "RBAC names neither secrets nor pods/exec"
-fi
+
+# One assertion per forbidden resource: a match in the mount path or an env
+# value must not mask (or mask a pass of) the RBAC rule check.
+rbac_resources=$(grep -E '^[[:space:]]*resources:' "$render" || true)
+for resource in secrets pods/exec pods/log pods/attach; do
+  if grep -q "$resource" <<<"$rbac_resources"; then
+    bad "RBAC names $resource"
+  else
+    ok "RBAC names no $resource"
+  fi
+done
 
 # ------------------------------------------------------------- storage
 if grep -q 'storageClassName: local-path' "$render"; then

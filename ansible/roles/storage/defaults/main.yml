@@ -1,7 +1,12 @@
 ---
 storage_default_owner: root
 storage_default_group: root
-storage_default_mode: "0755"
+# Mode is derived from recovery_inventory[<group>].visibility, never from a
+# per-dataset `mode` in group_vars: personal data is group-readable only,
+# general/public data alone may be world-readable. Unknown visibility falls back
+# to the personal mode, so a typo fails closed.
+storage_personal_mode: "0750"
+storage_public_mode: "0755"
 storage_memory_mode: "0750"
 storage_backup_mode: "0700"
 storage_enforce_inventory: true

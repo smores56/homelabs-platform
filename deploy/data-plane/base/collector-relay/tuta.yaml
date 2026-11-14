@@ -1,6 +1,6 @@
 # Mail collector. Full MIME is preserved by the collector; the relay only sees
 # the schema's normalized fields and attachment hashes. Same isolation as the
-# other sources: no Service, no token, proxy-only egress plus event-service.
+# other sources: no Service, no token, proxy-only egress.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -55,11 +55,11 @@ spec:
               value: tuta
             - name: DATA_PLANE_SCHEMA
               value: /etc/data-plane-schema/schema.json
-            # Contract only: the profile overlay mounts the relay HMAC secret.
+            # Contract only: the profile overlay mounts this source's own
+            # relay HMAC secret. No shared relay secret and no event-service
+            # token is mounted on the pod.
             - name: DATA_PLANE_SECRET_FILE
-              value: /run/secrets/relay/token
-            - name: EVENT_SERVICE_URL
-              value: http://event-service.data-plane.svc.cluster.local:8080
+              value: /run/secrets/relay/tuta/token
             - name: SOURCE_PROXY_URL
               value: http://tuta-proxy.broker.svc.cluster.local:8443
             - name: DATA_PLANE_HOST

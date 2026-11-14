@@ -72,4 +72,15 @@
       - k3s_enable_gvisor_runtime is boolean
       - k3s_enable_kata_runtime is boolean
       - k3s_enable_nvidia_runtime is boolean
-    fail_msg: "Set k3s_role and pin k3s_version for {{ inventory_hostname }}"
+      # Role defaults are not loaded in this play, so presence is checked here
+      # and the value in the role. An absent checksum can never be a download.
+      - k3s_binary_sha256 is defined and k3s_binary_sha256 is match('^[0-9a-f]{64}$')
+      - not (k3s_enable_gvisor_runtime | bool) or
+        (gvisor_sha256 is defined and gvisor_binaries is defined and
+         (gvisor_sha256.keys() | sort) == (gvisor_binaries | sort) and
+         (gvisor_sha256.values() | select('match', '^[0-9a-f]{64}$') | list | length)
+         == (gvisor_binaries | length))
+      - not (k3s_enable_kata_runtime | bool) or kata_runtime_class is match('^[a-z][a-z0-9-]*$')
+    fail_msg: >-
+      Set k3s_role, pin k3s_version, and supply 64-hex checksums for k3s and
+      every enabled gVisor binary for {{ inventory_hostname }}

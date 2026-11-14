@@ -7,8 +7,10 @@
 # privileged mode and the ZFS tools out of the data-plane namespace.
 #
 # It is the only pod in this tree with an API token, and even that is a
-# short-lived projected token (one hour) mounted at the standard in-cluster path.
-# `automountServiceAccountToken` stays false on both the account and the pod.
+# short-lived projected token (one hour, mode 0400) mounted at the standard
+# in-cluster path. `automountServiceAccountToken` stays false on both the account
+# and the pod, and service links stay off so no cluster Service is projected into
+# the environment.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -37,9 +39,10 @@ spec:
     spec:
       serviceAccountName: backup-controller
       automountServiceAccountToken: false
-      # The in-cluster config discovers the API from KUBERNETES_SERVICE_HOST/PORT,
-      # which the kubelet injects as service links; token automount stays off.
-      enableServiceLinks: true
+      # In-cluster config reads KUBERNETES_SERVICE_HOST/PORT, which the kubelet
+      # injects directly. Service links only add one env var per Service in the
+      # namespace, so they stay off.
+      enableServiceLinks: false
       securityContext:
         runAsNonRoot: true
         runAsUser: 65532
@@ -132,11 +135,12 @@ spec:
           persistentVolumeClaim:
             claimName: backup-manifests
         # Same files the kubelet would automount, but with a one-hour bound
-        # token instead of the default long-lived secret. The CA comes from the
-        # namespace's standard `kube-root-ca.crt` ConfigMap.
+        # token instead of the default long-lived secret, and 0400 so only the
+        # container's own user can read it. The CA comes from the namespace's
+        # standard `kube-root-ca.crt` ConfigMap.
         - name: kube-api-access
           projected:
-            defaultMode: 420
+            defaultMode: 256
             sources:
               - serviceAccountToken:
                   expirationSeconds: 3600

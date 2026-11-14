@@ -1,7 +1,11 @@
 ---
-# Kata with QEMU/runtime-rs: the Ubuntu package ships runtime-rs and the QEMU
-# hypervisor. The collector RuntimeClass selects kata-qemu, and the containerd
-# handler is declared in roles/k3s.
-kata_runtime_binary: /usr/bin/kata-runtime
+# Kata with the runtime-rs shim and QEMU. `kata_runtime_class` (group_vars) is the
+# containerd runtime key declared in roles/k3s and the RuntimeClass handler; the
+# binary containerd execs for it is the shim, not the Go `kata-runtime` CLI.
+# `kata_config_file` must match roles/kata and roles/k3s: the two roles run in
+# separate plays, so each carries the path its own template needs.
+kata_runtime_binary: /usr/bin/containerd-shim-kata-v2
+kata_vmm_binary: /usr/bin/qemu-system-x86_64
+kata_config_file: /usr/share/defaults/kata-containers/configuration-qemu.toml
 kata_preferences_file: /etc/apt/preferences.d/90-homelab-kata.pref
 kata_manifests_dir: /var/lib/rancher/k3s/server/manifests

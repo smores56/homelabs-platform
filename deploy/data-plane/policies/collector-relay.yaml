@@ -1,12 +1,21 @@
-# One policy per external source. Each collector can reach exactly three
-# destinations: DNS, the event service, and its own source proxy. The proxy is
-# the only public path; the collector itself has no ipBlock and no 443 rule.
+# One policy per external source. Each collector can reach exactly two
+# destinations: DNS (the namespace-wide rule) and its own source proxy. The proxy
+# is the only path off the pod network; the collector itself has no ipBlock, no
+# 443 rule and no event-service route. It holds a per-source relay HMAC secret,
+# never the event-service token, and the event log accepts no collector ingress.
 #
 # The proxy objects are operator-provided in the existing `broker` tier, one
 # Deployment/Service per source (`<source>-proxy`, port 8443). Until a proxy
 # exists, the egress rule matches nothing and the collector fails closed rather
 # than reaching the provider directly. Ingress is absent: no Service fronts the
 # pod-local relay, so default-deny covers it.
+#
+# Proxy trust is explicit: the proxy terminates the provider credential, so the
+# relay's data guarantees start at the proxy's response. The relay still checks
+# the collector's HMAC, schema, size, rate, idempotency and cursor rules, but it
+# cannot re-derive what the provider sent. Only that source's Service name is
+# reachable from the pod, so one compromised proxy cannot become a general
+# egress path.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -22,13 +31,6 @@ spec:
       app.kubernetes.io/name: collector-brave
   policyTypes: ["Egress"]
   egress:
-    - to:
-        - podSelector:
-            matchLabels:
-              app.kubernetes.io/name: event-service
-      ports:
-        - protocol: TCP
-          port: 8080
     - to:
         - namespaceSelector:
             matchLabels:
@@ -56,13 +58,6 @@ spec:
   policyTypes: ["Egress"]
   egress:
     - to:
-        - podSelector:
-            matchLabels:
-              app.kubernetes.io/name: event-service
-      ports:
-        - protocol: TCP
-          port: 8080
-    - to:
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: broker
@@ -89,13 +84,6 @@ spec:
   policyTypes: ["Egress"]
   egress:
     - to:
-        - podSelector:
-            matchLabels:
-              app.kubernetes.io/name: event-service
-      ports:
-        - protocol: TCP
-          port: 8080
-    - to:
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: broker
@@ -121,13 +109,6 @@ spec:
       app.kubernetes.io/name: collector-immich
   policyTypes: ["Egress"]
   egress:
-    - to:
-        - podSelector:
-            matchLabels:
-              app.kubernetes.io/name: event-service
-      ports:
-        - protocol: TCP
-          port: 8080
     - to:
         - namespaceSelector:
             matchLabels:

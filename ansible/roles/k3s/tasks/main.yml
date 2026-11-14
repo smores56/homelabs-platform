@@ -11,6 +11,21 @@
       - k3s_role == 'server' or k3s_server_url | length > 0
     fail_msg: "Set k3s_role and a pinned k3s_version (or k3s_server_url on an agent)"
 
+# Fail closed before any download: the binary and every enabled runtime shim
+# carry a checksum or the role stops.
+- name: Require verified k3s and gVisor artifacts
+  ansible.builtin.assert:
+    that:
+      - k3s_binary_sha256 is match('^[0-9a-f]{64}$')
+      - not (k3s_enable_gvisor_runtime | bool) or
+        (gvisor_sha256.keys() | sort) == (gvisor_binaries | sort)
+      - not (k3s_enable_gvisor_runtime | bool) or
+        (gvisor_sha256.values() | select('match', '^[0-9a-f]{64}$') | list | length)
+        == (gvisor_binaries | length)
+    fail_msg: >-
+      Set k3s_binary_sha256 and gvisor_sha256 for every gvisor_binaries entry to
+      a lowercase 64-hex sha256; this role never downloads unverified binaries
+
 - name: Create the k3s configuration directories
   ansible.builtin.file:
     path: "{{ item }}"
@@ -31,16 +46,6 @@
     mode: "0755"
   when: k3s_role == 'server'
 
-- name: Install the pinned k3s binary without a checksum
-  ansible.builtin.get_url:
-    url: "{{ k3s_binary_url }}"
-    dest: "{{ k3s_binary }}"
-    owner: root
-    group: root
-    mode: "0755"
-  when: k3s_binary_sha256 | length == 0
-  notify: Restart k3s
-
 - name: Install the pinned k3s binary with its checksum
   ansible.builtin.get_url:
     url: "{{ k3s_binary_url }}"
@@ -49,7 +54,6 @@
     group: root
     mode: "0755"
     checksum: "sha256:{{ k3s_binary_sha256 }}"
-  when: k3s_binary_sha256 | length > 0
   notify: Restart k3s
 
 - name: Provide the kubectl, crictl, and ctr entry points
@@ -63,13 +67,14 @@
     - crictl
     - ctr
 
-- name: Install the gVisor runtime and shim
+- name: Install the gVisor runtime and shim with their checksums
   ansible.builtin.get_url:
     url: "{{ gvisor_base_url }}/{{ item }}"
     dest: "/usr/local/bin/{{ item }}"
     owner: root
     group: root
     mode: "0755"
+    checksum: "sha256:{{ gvisor_sha256[item] }}"
   loop: "{{ gvisor_binaries }}"
   when: k3s_enable_gvisor_runtime | bool
 

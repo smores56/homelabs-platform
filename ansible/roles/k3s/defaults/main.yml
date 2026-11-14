@@ -4,10 +4,19 @@ k3s_config_dir: /etc/rancher/k3s
 k3s_data_dir: /var/lib/rancher/k3s
 k3s_service: k3s
 k3s_binary_url: "https://github.com/k3s-io/k3s/releases/download/{{ k3s_version }}/k3s"
-# Optional supply-chain check. When set it must be a sha256sum of the binary.
+# Required: the sha256 of the pinned k3s binary. There is no unverified
+# download path; an empty or malformed value fails the role before get_url runs.
 k3s_binary_sha256: ""
 gvisor_base_url: "https://storage.googleapis.com/gvisor/releases/release/{{ gvisor_release }}/x86_64"
 gvisor_binaries:
   - runsc
   - containerd-shim-runsc-v1
+# Required when the gVisor runtime is enabled: one sha256 per binary above.
+# A missing entry is a preflight failure, not an unverified download.
+gvisor_sha256:
+  runsc: ""
+  containerd-shim-runsc-v1: ""
 k3s_manifests_dir: "{{ k3s_data_dir }}/server/manifests"
+# Must match roles/kata/defaults/main.yml: the two roles run in separate plays,
+# so each carries the path its own templates need.
+kata_config_file: /usr/share/defaults/kata-containers/configuration-qemu.toml

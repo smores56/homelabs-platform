@@ -5,8 +5,8 @@
 #
 # No Service exists on purpose. The listener is bound to the pod, reachable only
 # by the in-pod collector and the kubelet probes; NetworkPolicy denies all
-# ingress from other pods and all egress except DNS, the event service and this
-# source's proxy. No service-account token is mounted anywhere on the pod.
+# ingress from other pods and all egress except DNS and this source's proxy.
+# No service-account token is mounted anywhere on the pod.
 #
 # Credentials are not a Secret in this tree. Per the design they arrive from the
 # collector runtime's LUKS-backed host files; a profile overlay that changes that
@@ -65,11 +65,11 @@ spec:
               value: brave
             - name: DATA_PLANE_SCHEMA
               value: /etc/data-plane-schema/schema.json
-            # Contract only: the profile overlay mounts the relay HMAC secret.
+            # Contract only: the profile overlay mounts this source's own
+            # relay HMAC secret. No shared relay secret and no event-service
+            # token is mounted on the pod.
             - name: DATA_PLANE_SECRET_FILE
-              value: /run/secrets/relay/token
-            - name: EVENT_SERVICE_URL
-              value: http://event-service.data-plane.svc.cluster.local:8080
+              value: /run/secrets/relay/brave/token
             - name: SOURCE_PROXY_URL
               value: http://brave-proxy.broker.svc.cluster.local:8443
             - name: DATA_PLANE_HOST

@@ -1,6 +1,6 @@
 # Finance collector. Same shape as collector-brave: one pod, pod-local relay,
-# schema ConfigMap, no Service, no token. The proxy is the only external
-# destination; the event service is the only internal one.
+# schema ConfigMap, no Service, no token. The proxy is the only
+# destination: the relay's sink is pod-local, so it has no internal peer.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -55,11 +55,11 @@ spec:
               value: finance
             - name: DATA_PLANE_SCHEMA
               value: /etc/data-plane-schema/schema.json
-            # Contract only: the profile overlay mounts the relay HMAC secret.
+            # Contract only: the profile overlay mounts this source's own
+            # relay HMAC secret. No shared relay secret and no event-service
+            # token is mounted on the pod.
             - name: DATA_PLANE_SECRET_FILE
-              value: /run/secrets/relay/token
-            - name: EVENT_SERVICE_URL
-              value: http://event-service.data-plane.svc.cluster.local:8080
+              value: /run/secrets/relay/finance/token
             - name: SOURCE_PROXY_URL
               value: http://finance-proxy.broker.svc.cluster.local:8443
             - name: DATA_PLANE_HOST

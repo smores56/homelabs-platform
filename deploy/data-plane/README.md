@@ -27,15 +27,15 @@ outside this directory and are named under [Assumptions](#assumptions).
 
 | Service | Objects | Port | State | Identity / RBAC | Network |
 | --- | --- | --- | --- | --- | --- |
-| `event-service` | Deployment (1, Recreate), Service, PVC 2Gi | 8080 | SQLite event log | `event-service` SA, no token, no Role | ingress from write-broker, confirmation, backup, collectors; egress DNS only |
+| `event-service` | Deployment (1, Recreate), Service, PVC 2Gi | 8080 | SQLite event log | `event-service` SA, no token, no Role | ingress from write-broker, confirmation and backup only; egress DNS only |
 | `write-broker` | Deployment (1, Recreate), Service | 8080 | stateless; intents and effects in event-service | `write-broker` SA, no token, no Role | ingress from `tenant-apps/nanobot`, `broker/broker` and confirmation; egress event-service only; no public egress |
 | `confirmation-surface` | Deployment (1, Recreate), Service | 8080 | stateless; approvals in event-service | `confirmation-surface` SA, no token, no Role | ingress from `ingress/cloudflared`; egress event-service + write-broker |
-| `backup-controller` | Deployment (1, Recreate), PVC 5Gi | 8080 probe only | generation manifests + snapshot requests | `backup-controller` SA, one-hour projected token, namespaced Role | egress event-service and the k3s API; no ingress |
-| `collector-brave` | Deployment (1, Recreate) | 8080 pod-local | collector + relay in one pod | `collector-relay` SA, no token, no Role | egress event-service + `broker/brave-proxy`; no public egress |
-| `collector-finance` | Deployment (1, Recreate) | 8080 pod-local | same | same | egress event-service + `broker/finance-proxy` |
-| `collector-tuta` | Deployment (1, Recreate) | 8080 pod-local | same | same | egress event-service + `broker/tuta-proxy` |
-| `collector-immich` | Deployment (1, Recreate) | 8080 pod-local | same | same | egress event-service + `broker/immich-proxy` |
-| `recovery-portal` | Deployment (1, Recreate), Service | 8080 | reads the manifest claim | `recovery-portal` SA, no token, no Role | ingress `ingress/cloudflared`; egress DNS + R2 over 443 |
+| `backup-controller` | Deployment (1, Recreate), PVC 5Gi | 8080 probe only | generation manifests + snapshot requests | `backup-controller` SA, one-hour projected token (0400), namespaced Role (PVC/pod read only) | egress event-service and the k3s API; no ingress |
+| `collector-brave` | Deployment (1, Recreate) | 8080 pod-local | collector + relay in one pod | `collector-relay` SA, no token, no Role | egress `broker/brave-proxy` only; no public egress |
+| `collector-finance` | Deployment (1, Recreate) | 8080 pod-local | same | same | egress `broker/finance-proxy` only |
+| `collector-tuta` | Deployment (1, Recreate) | 8080 pod-local | same | same | egress `broker/tuta-proxy` only |
+| `collector-immich` | Deployment (1, Recreate) | 8080 pod-local | same | same | egress `broker/immich-proxy` only |
+| `recovery-portal` | Deployment (1, Recreate), Service | 8080 | reads the manifest claim | `recovery-portal` SA, no token, no Role | ingress `ingress/cloudflared`; no egress (a download is a redirect to a pre-signed URL) |
 | `file-memory` | **no object, by decision** | — | library | — | — |
 
 ### `file-memory` is a library, not a service
@@ -75,14 +75,18 @@ fixture broker keeps a local SQLite journal, but the deployment contract here is
 the event-service-backed broker: the base sets `EVENT_SERVICE_URL` and no local
 claim.
 
-- every service answers `GET /healthz` on `DATA_PLANE_PORT`;
+- every service answers `GET /healthz` on `DATA_PLANE_PORT`; the body is
+  `{"status": "ok", "service": ...}` only, never an epoch, a group or a
+  destination, because the probe is unauthenticated;
 - `DATA_PLANE_HOST`, `DATA_PLANE_PORT`, `DATA_PLANE_DB`, `DATA_PLANE_CATALOG`,
   `DATA_PLANE_SCHEMA`, `DATA_PLANE_MANIFEST_DIR`, `DATA_PLANE_GROUPS` and
   `DATA_PLANE_DESTINATIONS` are the configuration surface;
 - `collector-relay` selects its source with `SOURCE_ID`, its schema with
   `DATA_PLANE_SCHEMA` and its only external destination with `SOURCE_PROXY_URL`;
 - `DATA_PLANE_SECRET_FILE` names a path, not a value. The base mounts nothing
-  there; a profile overlay supplies the operator-provisioned Secret.
+  there; a profile overlay supplies the operator-provisioned Secret. Each relay
+  gets its own path (`/run/secrets/relay/<source>/token`); no relay secret is
+  shared, and no relay holds the event-service token.
 
 `images.yaml` repeats the same one-entry contract. kustomize v5 cannot include an
 images-only file, so `base/kustomization.yaml` carries the transformer and
@@ -130,9 +134,11 @@ kubectl get namespace data-plane -o jsonpath='{.metadata.labels.pod-security\.ku
 # Token posture: every Deployment must show false, including backup-controller.
 kubectl -n data-plane get deploy -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.spec.template.spec.automountServiceAccountToken}{"\n"}{end}'
 
-# RBAC ceiling. Yes: jobs/PVC/pods in data-plane. No: secrets, exec, nodes, other namespaces.
+# RBAC ceiling. Yes: PVC/pods read in data-plane. No: jobs, secrets, exec, logs,
+# nodes, other namespaces.
 kubectl auth can-i --list --namespace data-plane --as=system:serviceaccount:data-plane:backup-controller
-kubectl auth can-i create jobs --namespace data-plane --as=system:serviceaccount:data-plane:backup-controller
+kubectl auth can-i create jobs --namespace data-plane --as=system:serviceaccount:data-plane:backup-controller   # must print: no
+kubectl auth can-i get pods/log --namespace data-plane --as=system:serviceaccount:data-plane:backup-controller   # must print: no
 kubectl auth can-i get secrets --namespace data-plane --as=system:serviceaccount:data-plane:backup-controller
 kubectl auth can-i list pods --all-namespaces --as=system:serviceaccount:data-plane:backup-controller
 
@@ -171,9 +177,15 @@ kubectl -n data-plane exec deploy/collector-brave -- \
 - **Source proxies.** Each collector reaches `<source>-proxy` in the existing
   `broker` tier on 8443. The proxies are operator-supplied. Until one exists the
   egress rule matches nothing and the collector fails closed.
-- **API egress ranges.** `kubernetes-api-egress.yaml` names `10.43.0.0/16` and
-  `10.77.1.0/30`, copied from the platform's reviewed k3s policy. A different
-  cluster needs its own service and node ranges. Only `backup-controller` is
+- **Collector ingestion.** A relay has no event-service route and no
+  event-service token: the event log admits only write-broker,
+  confirmation-surface and backup-controller. The relay's sink is the pod-local
+  collector process today, so no flow is lost. When the sink becomes remote it
+  needs an explicit policy and ingress rule reviewed on its own; this base does
+  not widen the event log in anticipation.
+- **API egress range.** `kubernetes-api-egress.yaml` names only the apiserver
+  endpoint `10.43.0.1/32` on 443/6443, not the service range or a node address.
+  A different cluster needs its own endpoint address. Only `backup-controller` is
   selected; it is the only pod with a token.
 - **Image subcommands.** The published image must expose `event`, `broker`,
   `relay`, `backup`, `collector`, `confirmation` and `portal`. `run.py`

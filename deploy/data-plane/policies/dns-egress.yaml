@@ -1,6 +1,7 @@
-# The one exception every pod gets: cluster DNS. It selects the kube-system
-# namespace by its standard name label, not by a CIDR, so a renumbered service
-# network or a second resolver keeps working without widening egress.
+# The one exception every pod gets: cluster DNS. It selects the CoreDNS pods by
+# their standard `k8s-app: kube-dns` label inside kube-system, so no other pod in
+# that namespace (metrics, dashboards, any future workload) becomes a resolver
+# target. Label and port, not a CIDR.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -17,6 +18,9 @@ spec:
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
       ports:
         - protocol: UDP
           port: 53

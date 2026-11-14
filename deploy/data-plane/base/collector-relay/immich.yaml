@@ -55,11 +55,11 @@ spec:
               value: immich
             - name: DATA_PLANE_SCHEMA
               value: /etc/data-plane-schema/schema.json
-            # Contract only: the profile overlay mounts the relay HMAC secret.
+            # Contract only: the profile overlay mounts this source's own
+            # relay HMAC secret. No shared relay secret and no event-service
+            # token is mounted on the pod.
             - name: DATA_PLANE_SECRET_FILE
-              value: /run/secrets/relay/token
-            - name: EVENT_SERVICE_URL
-              value: http://event-service.data-plane.svc.cluster.local:8080
+              value: /run/secrets/relay/immich/token
             - name: SOURCE_PROXY_URL
               value: http://immich-proxy.broker.svc.cluster.local:8443
             - name: DATA_PLANE_HOST
