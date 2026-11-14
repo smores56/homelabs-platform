@@ -61,11 +61,18 @@ spec:
             - name: DATA_PLANE_CATALOG
               value: /etc/data-plane/source-catalog.json
             # Contract only: the profile overlay mounts the operator-provisioned
-            # Secret here. No Secret is created by this tree.
+            # Secret here. The operator token and signing key are separate from
+            # every workload and event token.
+            - name: DATA_PLANE_OPERATOR_TOKEN_FILE
+              value: /run/secrets/confirmation/token
+            - name: DATA_PLANE_OPERATOR_KEY_FILE
+              value: /run/secrets/confirmation/key
             - name: DATA_PLANE_SECRET_FILE
               value: /run/secrets/confirmation/token
-            - name: EVENT_SERVICE_URL
-              value: http://event-service.data-plane.svc.cluster.local:8080
+            - name: DATA_PLANE_DB
+              value: /var/lib/data-plane/approvals.sqlite
+            - name: DATA_PLANE_APPROVAL_DB
+              value: /var/lib/data-plane/approvals.sqlite
             - name: APPROVAL_TTL_SECONDS
               value: "900"
             - name: PYTHONDONTWRITEBYTECODE
@@ -105,6 +112,11 @@ spec:
             - name: config
               mountPath: /etc/data-plane
               readOnly: true
+            - name: confirmation-secrets
+              mountPath: /run/secrets/confirmation
+              readOnly: true
+            - name: approvals
+              mountPath: /var/lib/data-plane
             - name: tmp
               mountPath: /tmp
       volumes:
@@ -112,6 +124,13 @@ spec:
           configMap:
             name: data-plane-config
             defaultMode: 288
+        - name: confirmation-secrets
+          secret:
+            secretName: confirmation-surface-secrets
+            defaultMode: 256
+        - name: approvals
+          persistentVolumeClaim:
+            claimName: data-plane-approvals
         - name: tmp
           emptyDir:
             sizeLimit: 8Mi

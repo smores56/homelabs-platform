@@ -129,6 +129,9 @@ def _parser() -> argparse.ArgumentParser:
         default=_env("DATA_PLANE_PROXY_URL") or _env("SOURCE_PROXY_URL"),
     )
     parser.add_argument("--relay-url", default=_env("DATA_PLANE_RELAY_URL"))
+    parser.add_argument(
+        "--consumer-secrets-file", default=_env("DATA_PLANE_CONSUMER_SECRETS_FILE")
+    )
     parser.add_argument("--dataset", action="append", dest="datasets")
     parser.add_argument("--group", action="append", dest="groups")
     parser.add_argument("--destination", action="append", dest="destinations")
@@ -172,6 +175,28 @@ def _comma_list(value: str | None) -> tuple[str, ...]:
     if not value:
         return ()
     return tuple(item.strip() for item in value.split(",") if item.strip())
+
+
+def _load_consumer_secrets(path: str | None) -> dict[str, bytes] | None:
+    if not path:
+        return None
+    try:
+        raw = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ConfigError(f"cannot load consumer secrets: {exc}") from exc
+    if not isinstance(raw, dict) or not raw:
+        raise ConfigError("consumer secrets must be a non-empty JSON object")
+    result: dict[str, bytes] = {}
+    for name, value in raw.items():
+        if (
+            not isinstance(name, str)
+            or not name.strip()
+            or not isinstance(value, str)
+            or not value
+        ):
+            raise ConfigError("each consumer secret must name a non-empty string")
+        result[name] = value.encode("utf-8")
+    return result
 
 
 def _source_contract(raw: Mapping[str, Any]) -> SourceContract:
@@ -320,7 +345,10 @@ def _run_event(args: argparse.Namespace) -> int:
     log = EventLog(_required(args.db, "--db (DATA_PLANE_DB)"))
     try:
         service = event_service.EventService(
-            log, _read_secret(args.secret_file), max_body_bytes=args.max_body_bytes
+            log,
+            _read_secret(args.secret_file),
+            consumer_secrets=_load_consumer_secrets(args.consumer_secrets_file),
+            max_body_bytes=args.max_body_bytes,
         )
         common.serve(
             "event", common.handler_for(service), port=args.port, host=args.host
@@ -345,7 +373,13 @@ def _run_relay(args: argparse.Namespace) -> int:
         accepted.append(record)
 
     service = relay_service.RelayService(
-        Relay(secret, schema, sink), max_body_bytes=args.max_body_bytes
+        Relay(
+            secret,
+            schema,
+            sink,
+            source_id=_required(args.source, "--source (DATA_PLANE_SOURCE)"),
+        ),
+        max_body_bytes=args.max_body_bytes,
     )
     common.serve("relay", common.handler_for(service), port=args.port, host=args.host)
     return 0

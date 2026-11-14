@@ -1,0 +1,25 @@
+# Control-state volume shared by the write broker and the confirmation
+# surface. The broker keeps its intent journal here and both pods consume the
+# same single-use approval nonces, so an approval issued on the surface cannot
+# be replayed on the broker. RWO is sufficient: both pods run on the single
+# worker and the directory is small.
+#
+# The recovery-group inventory classifies this state as `data-plane-state`; the
+# host backup unit snapshots the dataset version of the same paths. This PVC is
+# only the in-cluster working copy.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: data-plane-approvals
+  namespace: data-plane
+  labels:
+    app.kubernetes.io/name: data-plane-state
+    app.kubernetes.io/component: control-state
+    homelabs.dev/tier: platform
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 1Gi

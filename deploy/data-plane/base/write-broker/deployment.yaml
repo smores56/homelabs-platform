@@ -67,6 +67,12 @@ spec:
             # by this tree.
             - name: DATA_PLANE_SECRET_FILE
               value: /run/secrets/broker/identity
+            - name: DATA_PLANE_DB
+              value: /var/lib/data-plane/broker.sqlite
+            - name: DATA_PLANE_OPERATOR_KEY_FILE
+              value: /run/secrets/broker/operator-key
+            - name: DATA_PLANE_APPROVAL_DB
+              value: /var/lib/data-plane/approvals.sqlite
             - name: DATA_PLANE_MAX_BODY_BYTES
               value: "1048576"
             - name: PYTHONDONTWRITEBYTECODE
@@ -112,6 +118,11 @@ spec:
             - name: config
               mountPath: /etc/data-plane
               readOnly: true
+            - name: broker-secrets
+              mountPath: /run/secrets/broker
+              readOnly: true
+            - name: data
+              mountPath: /var/lib/data-plane
             - name: tmp
               mountPath: /tmp
       volumes:
@@ -119,6 +130,13 @@ spec:
           configMap:
             name: data-plane-config
             defaultMode: 288
+        - name: broker-secrets
+          secret:
+            secretName: write-broker-secrets
+            defaultMode: 256
+        - name: data
+          persistentVolumeClaim:
+            claimName: data-plane-approvals
         - name: tmp
           emptyDir:
             sizeLimit: 16Mi

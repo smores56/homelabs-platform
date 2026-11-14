@@ -61,7 +61,7 @@ spec:
               containerPort: 8080
               protocol: TCP
           env:
-            - name: SOURCE_ID
+            - name: DATA_PLANE_SOURCE
               value: brave
             - name: DATA_PLANE_SCHEMA
               value: /etc/data-plane-schema/schema.json
@@ -70,12 +70,14 @@ spec:
             # token is mounted on the pod.
             - name: DATA_PLANE_SECRET_FILE
               value: /run/secrets/relay/brave/token
-            - name: SOURCE_PROXY_URL
+            - name: DATA_PLANE_PROXY_URL
               value: http://brave-proxy.broker.svc.cluster.local:8443
             - name: DATA_PLANE_HOST
               value: 0.0.0.0
             - name: DATA_PLANE_PORT
               value: "8080"
+            - name: DATA_PLANE_RELAY_URL
+              value: http://127.0.0.1:8080/ingest
             - name: PYTHONDONTWRITEBYTECODE
               value: "1"
             - name: PYTHONUNBUFFERED
@@ -113,6 +115,9 @@ spec:
             - name: schema
               mountPath: /etc/data-plane-schema
               readOnly: true
+            - name: relay-secrets
+              mountPath: /run/secrets/relay/brave
+              readOnly: true
             - name: tmp
               mountPath: /tmp
       volumes:
@@ -120,6 +125,10 @@ spec:
           configMap:
             name: collector-brave-schema
             defaultMode: 288
+        - name: relay-secrets
+          secret:
+            secretName: relay-brave
+            defaultMode: 256
         - name: tmp
           emptyDir:
             sizeLimit: 8Mi

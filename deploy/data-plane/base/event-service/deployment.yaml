@@ -65,6 +65,8 @@ spec:
             # by this tree.
             - name: DATA_PLANE_SECRET_FILE
               value: /run/secrets/event/token
+            - name: DATA_PLANE_CONSUMER_SECRETS_FILE
+              value: /run/secrets/event/consumers.json
             - name: DATA_PLANE_MAX_BODY_BYTES
               value: "1048576"
             - name: PYTHONDONTWRITEBYTECODE
@@ -109,12 +111,19 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /var/lib/data-plane
+            - name: event-secrets
+              mountPath: /run/secrets/event
+              readOnly: true
             - name: tmp
               mountPath: /tmp
       volumes:
         - name: data
           persistentVolumeClaim:
             claimName: event-service-data
+        - name: event-secrets
+          secret:
+            secretName: event-service-secrets
+            defaultMode: 288
         - name: tmp
           emptyDir:
             sizeLimit: 16Mi

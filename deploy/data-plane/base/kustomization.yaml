@@ -23,6 +23,7 @@ resources:
   - event-service/deployment.yaml
   - event-service/service.yaml
   - event-service/pvc.yaml
+  - approvals-pvc.yaml
   - write-broker/deployment.yaml
   - write-broker/service.yaml
   - confirmation-surface/deployment.yaml
