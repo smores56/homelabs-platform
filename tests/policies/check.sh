@@ -629,8 +629,8 @@ while IFS=: read -r app deadline; do
     "clusters/homelab/platform/secrets/eso/restic-backup-$app.yaml" | grep -v '^$')" \
     "$app:restic-credentials:AWS_ACCESS_KEY_ID" "$app projects restic-credentials into its own namespace"
 done <<'TREES'
-immich:3600
-navidrome:1800
+immich:21600
+navidrome:14400
 opdshelf:1800
 graphiti:1800
 TREES
@@ -640,6 +640,44 @@ if grep -ho 'docker.io/restic/restic:0.18.1@sha256:[0-9a-f]\{64\}' \
   ok "every restic job pins the image digest"
 else
   bad "every restic job pins the image digest"
+fi
+
+# ------------------------------------------------------- restic first upload
+# The deadlines above are sized for the first upload because that is the only
+# run that reads the whole tree; a nightly incremental is minutes. A deadline
+# that only fits an incremental kills the first attempt with `DeadlineExceeded`,
+# which deletes the pod and the only copy of its log.
+#
+# `kubectl create job --from=cronjob` has no deadline flag, so the Job it makes
+# keeps the template's value and inherits that failure — whichever number the
+# template happens to hold. The script is therefore the sanctioned first-upload
+# path, and it has to read the deadline back from the API: an override that
+# silently did not apply looks exactly like a healthy upload until the Job dies.
+first=scripts/restic-first-backup.sh
+if [[ -x $first ]]; then
+  ok "the first-upload script exists and is executable"
+else
+  bad "the first-upload script is missing or not executable"
+fi
+if grep -Fq "jsonpath='{.spec.activeDeadlineSeconds}'" "$first"; then
+  ok "the first-upload script reads the applied deadline back from the API"
+else
+  bad "the first-upload script trusts its own patch instead of reading it back"
+fi
+if grep -Fq 'lastSuccessfulTime' "$first"; then
+  ok "the first-upload script refuses a tree that already succeeded"
+else
+  bad "the first-upload script would re-upload a tree that already succeeded"
+fi
+if grep -Fq 'create job --from=cronjob/restic-backup' docs/manual-steps.md; then
+  bad "manual-steps teaches the first upload through the deadline-blind create job"
+else
+  ok "manual-steps does not teach the first upload through create job"
+fi
+if grep -Fq "$first" docs/manual-steps.md; then
+  ok "manual-steps names the first-upload script"
+else
+  bad "manual-steps does not name the first-upload script"
 fi
 
 # A `#` line inside a backslash continuation ends the command at the comment,

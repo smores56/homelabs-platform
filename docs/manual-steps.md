@@ -1522,13 +1522,30 @@ until the new drill below passes.
    (`sudo chown -R smores:users /var/lib/data/<tree>` from the host, which is the
    uid 1000 mapping). Do not `chmod -R` a live database directory.
 
-3. Run one backup and confirm the snapshot exists:
+3. Run the first upload with the script, not with `kubectl create job`. The
+   first run reads the whole tree and takes hours on `immich` and `navidrome`,
+   while `create job` has no deadline flag: the Job it clones keeps the
+   CronJob's `activeDeadlineSeconds`, dies `DeadlineExceeded` part-way through,
+   and is deleted with its pod — so there is no log to explain it. The script
+   patches the deadline onto the Job and reads it back from the API before it
+   lets the upload run:
 
    ```sh
-   kubectl -n immich create job --from=cronjob/restic-backup "restic-$(date +%s)"
-   kubectl -n immich logs job/<name>
+   scripts/restic-first-backup.sh --tree navidrome
+   scripts/restic-first-backup.sh --tree immich
+   kubectl -n immich get job <name> -o jsonpath='{.spec.activeDeadlineSeconds}{"\n"}'
+   kubectl -n immich logs -f job/<name>
    kubectl -n immich get cronjob restic-backup -o jsonpath='{.status.lastSuccessfulTime}{"\n"}'
    ```
+
+   Start one tree at a time: the repository lock is per tree, but a second
+   upload of the same tree re-reads everything from byte 0. An interrupted
+   first upload is safe to repeat — restic skips blobs the repository already
+   holds — but never run `forget --prune` before the first snapshot exists, or
+   the uploaded packs it does not reference yet are collected. Start right after
+   a nightly run (05:00 Europe/Berlin): `concurrencyPolicy: Forbid` covers only
+   the Jobs the CronJob creates, so a nightly run that begins while a first
+   upload is alive walks the same tree a second time.
 
 4. Run the drill from a workstation. The exact commands are the `drill` key of
    the tree's `restic-contract` ConfigMap, and the preflight prints the same text

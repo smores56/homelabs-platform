@@ -13,6 +13,13 @@
 # drill in `restic-contract` passes, so both may run: they write different
 # repositories.
 #
+# Deadline: six hours, sized for the first upload and not for a nightly
+# incremental, which is minutes. The first job reads the whole tree — ~154 GB at
+# the 13 MB/s measured on 2026-11-14 is ~3.3 h — and a deadline that only fits an
+# incremental kills it `DeadlineExceeded`, which deletes the pod before anyone
+# reads its log. A slow night still fits in six hours; a hung run cannot hold the
+# repository past it.
+#
 # Excluded: the live Postgres cluster, which changes under the walk; Valkey's append-only file, same reason
 #
 # Retention matches the host's (`--keep-daily 14 --keep-weekly 8
@@ -37,7 +44,7 @@ spec:
   jobTemplate:
     spec:
       backoffLimit: 2
-      activeDeadlineSeconds: 3600
+      activeDeadlineSeconds: 21600
       ttlSecondsAfterFinished: 172800
       template:
         metadata:
