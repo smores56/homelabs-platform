@@ -82,5 +82,7 @@ find /var/lib/data -maxdepth 2 -name '.stfolder' -printf '%h\n' 2>/dev/null \
   >"$OUT/syncthing-folders.txt" || true
 
 chmod -R go-rwx "$OUT"
+# The operator reads the result as `smores`; hand the scratch tree back.
+chown -R smores:users "$OUT" 2>/dev/null || true
 echo "done: $OUT"
 echo "no credential contents were read"
